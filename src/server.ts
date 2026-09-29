@@ -85,10 +85,19 @@ const MIME: Record<string, string> = {
 function staticServer(root: string): Server {
   const abs = path.resolve(root);
   return createServer((req, res) => {
-    const urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
+    let urlPath: string;
+    try {
+      urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
+    } catch {
+      // A malformed percent-escape would otherwise throw and take the server down.
+      res.writeHead(400, { 'content-type': 'text/plain' }).end('bad request');
+      return;
+    }
     let file = path.join(abs, urlPath);
-    // Contain traversal: anything resolving outside root is a 403.
-    if (!file.startsWith(abs)) {
+    // Contain traversal: anything resolving outside root is a 403. The `+ sep` guard
+    // keeps a sibling whose name shares the root's prefix (…/app-x vs …/app) out; the
+    // root directory itself (file === abs) is allowed.
+    if (file !== abs && !file.startsWith(abs + path.sep)) {
       res.writeHead(403).end('forbidden');
       return;
     }
