@@ -1,0 +1,21 @@
+# Node / build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Capture working dirs (proof frames + manifest.json + issues.json) and raw
+# walkthrough recordings. Only the assembled MP4 under demos/ is committed.
+.captures/
+*.webm
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
+
+# Gas City rig runtime state (kept out of what npm/GitHub consumers see)
+.beads/*
+!.beads/identity.toml
+.gc/

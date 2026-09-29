@@ -1,0 +1,68 @@
+{
+  "name": "@zookanalytics/sprintshow",
+  "version": "0.1.0",
+  "description": "Auto-generate a quick, unpolished demo video of what an AI agent just did — the agent equivalent of a sprint demo. A demo-script DSL + linter, on-screen captions, TTS voiceover and ffmpeg assembly, over a Playwright browser drive.",
+  "keywords": [
+    "demo",
+    "demo-video",
+    "screencast",
+    "walkthrough",
+    "playwright",
+    "ffmpeg",
+    "tts",
+    "captions",
+    "ai-agents",
+    "mcp",
+    "sprint-demo"
+  ],
+  "license": "AGPL-3.0-only",
+  "author": "Zook Analytics",
+  "homepage": "https://github.com/zookanalytics/sprintshow#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zookanalytics/sprintshow.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zookanalytics/sprintshow/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "bin": {
+    "sprintshow": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "demos/*.md",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/cli.js', 0o755)\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "lint:demo": "node src/cli.ts lint",
+    "provision:ffmpeg": "node node_modules/ffmpeg-static/install.js",
+    "provision:browser": "playwright install chromium-headless-shell",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "playwright": "^1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

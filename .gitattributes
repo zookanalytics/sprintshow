@@ -1,0 +1,4 @@
+# Demo videos are stored via git-LFS: a small pointer goes in git history, the bytes
+# go to LFS storage. Requires git-lfs on the machine that COMMITS a video:
+#   git lfs install     # once per machine
+*.mp4 filter=lfs diff=lfs merge=lfs -text
