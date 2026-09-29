@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sprint Board</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f1115;
+        --panel: #171a21;
+        --line: #262b36;
+        --fg: #e7e9ee;
+        --muted: #9aa3b2;
+        --accent: #6ad08a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: radial-gradient(1200px 600px at 70% -10%, #1a2030, var(--bg));
+        color: var(--fg);
+        font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        display: flex;
+        justify-content: center;
+        padding: 48px 20px;
+      }
+      main { width: 100%; max-width: 640px; }
+      .eyebrow { color: var(--accent); font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; }
+      h1 { margin: 6px 0 2px; font-size: 30px; }
+      .sub { color: var(--muted); margin: 0 0 24px; }
+      #board { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+      .add-row { display: flex; gap: 10px; }
+      #new-task {
+        flex: 1; background: #0d0f14; border: 1px solid var(--line); color: var(--fg);
+        border-radius: 9px; padding: 12px 14px; font-size: 15px; outline: none;
+      }
+      #new-task:focus { border-color: var(--accent); }
+      #add {
+        background: var(--accent); color: #08130c; border: 0; border-radius: 9px;
+        padding: 0 18px; font-size: 15px; font-weight: 700; cursor: pointer;
+      }
+      #add:active { transform: translateY(1px); }
+      #empty-hint { color: var(--muted); text-align: center; padding: 28px 0 8px; font-style: italic; }
+      #tasks { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+      .task {
+        display: flex; align-items: center; gap: 12px; background: #10131a;
+        border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+        transition: opacity 0.2s ease, border-color 0.2s ease;
+      }
+      .task .title { flex: 1; }
+      .task.done { opacity: 0.55; border-color: #1f6b3d; }
+      .task.done .title { text-decoration: line-through; color: var(--muted); }
+      .done-btn {
+        background: transparent; border: 1px solid var(--line); color: var(--muted);
+        border-radius: 7px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+      }
+      .task.done .done-btn { border-color: var(--accent); color: var(--accent); }
+      #summary { margin-top: 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
+      #summary b { color: var(--fg); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">sprint board</div>
+      <h1>What shipped this sprint</h1>
+      <p class="sub">A tiny board so the demo engine has something real to drive.</p>
+
+      <section id="board">
+        <div class="add-row">
+          <input id="new-task" type="text" placeholder="Add a task…" autocomplete="off" />
+          <button id="add">Add</button>
+        </div>
+        <div id="empty-hint">No tasks yet — add one to get started.</div>
+        <ul id="tasks"></ul>
+        <div id="summary"><b>0</b> tasks · <b>0</b> done</div>
+      </section>
+    </main>
+
+    <script>
+      const tasksEl = document.getElementById('tasks');
+      const emptyEl = document.getElementById('empty-hint');
+      const summaryEl = document.getElementById('summary');
+      const input = document.getElementById('new-task');
+
+      function refresh() {
+        const all = tasksEl.querySelectorAll('.task');
+        const done = tasksEl.querySelectorAll('.task.done');
+        emptyEl.style.display = all.length ? 'none' : 'block';
+        summaryEl.innerHTML = `<b>${all.length}</b> task${all.length === 1 ? '' : 's'} · <b>${done.length}</b> done`;
+      }
+
+      function addTask(title) {
+        const t = (title || '').trim();
+        if (!t) return;
+        const li = document.createElement('li');
+        li.className = 'task';
+        const span = document.createElement('span');
+        span.className = 'title';
+        span.textContent = t;
+        const btn = document.createElement('button');
+        btn.className = 'done-btn';
+        btn.textContent = 'Done';
+        btn.addEventListener('click', () => {
+          li.classList.toggle('done');
+          btn.textContent = li.classList.contains('done') ? 'Undo' : 'Done';
+          refresh();
+        });
+        li.append(span, btn);
+        tasksEl.appendChild(li);
+        input.value = '';
+        refresh();
+      }
+
+      document.getElementById('add').addEventListener('click', () => addTask(input.value));
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') addTask(input.value);
+      });
+      refresh();
+    </script>
+  </body>
+</html>

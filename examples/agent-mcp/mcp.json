@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--headless",
+        "--isolated",
+        "--viewport-size", "1280,900",
+        "--output-dir", ".captures/agent-run"
+      ]
+    }
+  }
+}
