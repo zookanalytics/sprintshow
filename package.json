@@ -52,7 +52,7 @@
     "build": "tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/cli.js', 0o755)\"",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test \"test/**/*.test.ts\"",
-    "lint:demo": "node src/cli.ts lint",
+    "lint:demo": "node src/cli.ts lint demos/sample.md",
     "provision:ffmpeg": "node node_modules/ffmpeg-static/install.js",
     "provision:browser": "playwright install chromium-headless-shell",
     "prepublishOnly": "npm run build"
