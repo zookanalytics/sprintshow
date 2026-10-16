@@ -1,7 +1,7 @@
 // Browser-driving primitives shared by the capture drivers: the synthetic pointer and
 // its human-paced glide helpers, the action runner that executes a parsed directive, the
 // assertion evaluator that checks a `_Prove:_` / `_Fail if:_` contract against the live
-// DOM, and the step runner that puts the two together for one demo step.
+// DOM, and the step runner that runs one demo step's actions and then checks its proof.
 //
 // The pointer is a DOM element the engine moves, so a click or a keystroke reads on
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
