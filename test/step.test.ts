@@ -4,13 +4,14 @@
 // A step's actions run first, then its proof is checked against the live page: a
 // `_Prove:_` assertion must hold within PROVE_TIMEOUT, a `_Fail if:_` assertion that
 // matches overrides it, and a step with neither records a manual proof. These tests pin
-// that against a real page, and pin that proof mode reports its steps through the runner.
+// that against a real page, and pin that proof mode and the screenshot capture report the
+// same script's steps alike.
 //
 // They need a headless Chromium and skip without one (see browser-fixture.ts).
 
-import { test, after } from 'node:test';
+import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { parseDemoScript } from '../src/demo-script.ts';
@@ -53,78 +54,86 @@ const SCRIPT = `# Demo: Step runner
    _Prove:_ the list reads well
 `;
 
-test('runStep: actions run first, a held proof passes, a matching fail-if fails it, no assertion is manual', { skip }, async () => {
-  const site = await serveSite({ 'index.html': APP });
-  const page = await browser!.newPage();
-  try {
-    await page.goto(joinUrl(site.baseUrl, '/'));
-    const demo = parseDemoScript(SCRIPT);
-    const lines: string[] = [];
-    const results = [];
-    for (const step of demo.steps) results.push(await runStep(page, site.baseUrl, step, demo.steps.length, false, (m) => lines.push(m)));
+// Each test drives a page and a site of its own, so they run side by side.
+describe('the step runner', { concurrency: true, skip }, () => {
+  test('runStep: actions run first, a held proof passes, a matching fail-if fails it, no assertion is manual', async () => {
+    const site = await serveSite({ 'index.html': APP });
+    const page = await browser!.newPage();
+    try {
+      await page.goto(joinUrl(site.baseUrl, '/'));
+      const demo = parseDemoScript(SCRIPT);
+      const lines: string[] = [];
+      const results = [];
+      for (const step of demo.steps) results.push(await runStep(page, site.baseUrl, step, demo.steps.length, false, (m) => lines.push(m)));
 
-    assert.deepEqual(results, [
-      { proved: true, manual: false, reason: '' },
-      { proved: false, manual: false, reason: '_Fail if:_ condition matched: `count .item >= 1`' },
-      { proved: true, manual: true, reason: '' },
-    ]);
-    assert.deepEqual(lines, [
-      'step 1/3: An action runs before the proof is checked',
-      '  ✓ proof held',
-      'step 2/3: A matching fail-if overrides a proof that held',
-      '  ✗ _Fail if:_ condition matched: `count .item >= 1`',
-      'step 3/3: A step with no machine assertion records a manual proof',
-      '  ✓ (manual — no machine assertion)',
-    ]);
-  } finally {
-    await page.close();
-    await site.close();
-  }
-});
+      assert.deepEqual(results, [
+        { proved: true, manual: false, reason: '' },
+        { proved: false, manual: false, reason: '_Fail if:_ condition matched: `count .item >= 1`' },
+        { proved: true, manual: true, reason: '' },
+      ]);
+      assert.deepEqual(lines, [
+        'step 1/3: An action runs before the proof is checked',
+        '  ✓ proof held',
+        'step 2/3: A matching fail-if overrides a proof that held',
+        '  ✗ _Fail if:_ condition matched: `count .item >= 1`',
+        'step 3/3: A step with no machine assertion records a manual proof',
+        '  ✓ (manual — no machine assertion)',
+      ]);
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
 
-test('runStep: a proof that never holds fails the step once PROVE_TIMEOUT has passed', { skip }, async () => {
-  const site = await serveSite({ 'index.html': APP });
-  const page = await browser!.newPage();
-  try {
-    await page.goto(joinUrl(site.baseUrl, '/'));
-    const [step] = parseDemoScript(`# Demo: X\n\n**Start:** \`/\`\n\n## Steps\n\n1. **Nothing adds an item**\n   _Prove:_ an item is listed — \`count .item >= 1\`\n`).steps;
-    const lines: string[] = [];
-    const t0 = Date.now();
-    const result = await runStep(page, site.baseUrl, step, 1, false, (m) => lines.push(m));
-    assert.ok(Date.now() - t0 >= PROVE_TIMEOUT, 'the assertion is polled for the whole timeout');
-    assert.deepEqual(result, { proved: false, manual: false, reason: '_Prove:_ did not hold: `count .item >= 1`' });
-    assert.equal(lines.at(-1), '  ✗ _Prove:_ did not hold: `count .item >= 1`');
-  } finally {
-    await page.close();
-    await site.close();
-  }
-});
+  test('runStep: a proof that never holds fails the step once PROVE_TIMEOUT has passed', async () => {
+    const site = await serveSite({ 'index.html': APP });
+    const page = await browser!.newPage();
+    try {
+      await page.goto(joinUrl(site.baseUrl, '/'));
+      const [step] = parseDemoScript(`# Demo: X\n\n**Start:** \`/\`\n\n## Steps\n\n1. **Nothing adds an item**\n   _Prove:_ an item is listed — \`count .item >= 1\`\n`).steps;
+      const lines: string[] = [];
+      const t0 = Date.now();
+      const result = await runStep(page, site.baseUrl, step, 1, false, (m) => lines.push(m));
+      assert.ok(Date.now() - t0 >= PROVE_TIMEOUT, 'the assertion is polled for the whole timeout');
+      assert.deepEqual(result, { proved: false, manual: false, reason: '_Prove:_ did not hold: `count .item >= 1`' });
+      assert.equal(lines.at(-1), '  ✗ _Prove:_ did not hold: `count .item >= 1`');
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
 
-test('proof mode reports each step through the runner, and keeps the runner reason in issues.json', { skip }, async () => {
-  const { dir, cleanup } = scratchDir();
-  try {
-    writeFiles(dir, { 'site/index.html': APP, 'demo.md': SCRIPT });
-    const ffmpeg = stubFfmpeg(dir);
-    const res = await runCli(['run', path.join(dir, 'demo.md'), '--mode', 'proof', '--serve-dir', path.join(dir, 'site'), '--no-narrate', '-o', path.join(dir, 'out.mp4')], {
-      cwd: dir,
-      env: { ...process.env, FFMPEG_BIN: ffmpeg, OPENAI_API_KEY: '' },
-    });
+  test('proof mode and the screenshot capture report the same steps alike, through the runner', async () => {
+    const { dir, cleanup } = scratchDir();
+    try {
+      writeFiles(dir, { 'site/index.html': APP, 'demo.md': SCRIPT });
+      const ffmpeg = stubFfmpeg(dir);
+      const common = [path.join(dir, 'demo.md'), '--serve-dir', path.join(dir, 'site')];
+      const env = { ...process.env, FFMPEG_BIN: ffmpeg, OPENAI_API_KEY: '' };
+      const proof = await runCli(['run', ...common, '--mode', 'proof', '--no-narrate', '-o', path.join(dir, 'out.mp4')], { cwd: dir, env });
+      const shot = await runCli(['screenshot', ...common, '-o', path.join(dir, 'out.png')], { cwd: dir, env });
 
-    assert.equal(res.code, 1, `a failed proof fails the run\n${res.stdout}${res.stderr}`);
-    assert.deepEqual(stepLines(res.stdout), [
-      'step 1/3: An action runs before the proof is checked',
-      '  ✓ proof held',
-      'step 2/3: A matching fail-if overrides a proof that held',
-      '  ✗ _Fail if:_ condition matched: `count .item >= 1`',
-      'step 3/3: A step with no machine assertion records a manual proof',
-      '  ✓ (manual — no machine assertion)',
-    ]);
-    const [kept] = readdirSync(path.join(dir, '.captures'));
-    const issues = JSON.parse(readFileSync(path.join(dir, '.captures', kept, 'issues.json'), 'utf8'));
-    assert.equal(issues.length, 1);
-    assert.equal(issues[0].step, 2);
-    assert.ok(issues[0].description.endsWith(' — _Fail if:_ condition matched: `count .item >= 1`'), issues[0].description);
-  } finally {
-    cleanup();
-  }
+      const expected = [
+        'step 1/3: An action runs before the proof is checked',
+        '  ✓ proof held',
+        'step 2/3: A matching fail-if overrides a proof that held',
+        '  ✗ _Fail if:_ condition matched: `count .item >= 1`',
+        'step 3/3: A step with no machine assertion records a manual proof',
+        '  ✓ (manual — no machine assertion)',
+      ];
+      assert.equal(proof.code, 1, `a failed proof fails the run\n${proof.stdout}${proof.stderr}`);
+      assert.deepEqual(stepLines(proof.stdout), expected);
+      assert.equal(shot.code, 3, `a failed proof still saves the screenshot\n${shot.stdout}${shot.stderr}`);
+      assert.deepEqual(stepLines(shot.stdout), expected);
+      assert.ok(existsSync(path.join(dir, 'out.png')));
+
+      const [kept] = readdirSync(path.join(dir, '.captures'));
+      const issues = JSON.parse(readFileSync(path.join(dir, '.captures', kept, 'issues.json'), 'utf8'));
+      assert.equal(issues.length, 1);
+      assert.equal(issues[0].step, 2);
+      assert.ok(issues[0].description.endsWith(' — _Fail if:_ condition matched: `count .item >= 1`'), issues[0].description);
+    } finally {
+      cleanup();
+    }
+  });
 });

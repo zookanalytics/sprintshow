@@ -21,13 +21,17 @@ something against the live page (`visible`, `count`, `text`, …), so what the v
 is verified behaviour rather than a screen tour — demos are for communicating to people,
 and the checks keep them honest.
 
-Two capture modes come out of one script:
+One script drives each capture:
 
-- **walkthrough** (default) — one continuous recorded take, driven at a human pace with a
-  synthetic cursor and live on-screen captions. The watchable, library/marketing cut.
-- **proof** — one screenshot per step, each with its assertion checked and its caption
-  burned in. Deterministic and frame-exact; the shape an agent produces when it drives the
-  browser itself.
+- **walkthrough** (the `run` default) — one continuous recorded take, driven at a human
+  pace with a synthetic cursor and live on-screen captions. The watchable,
+  library/marketing cut.
+- **proof** (`run --mode proof`) — one screenshot per step, each with its assertion checked
+  and its caption burned in. Deterministic and frame-exact; the shape an agent produces when
+  it drives the browser itself.
+- **screenshot** (`sprintshow screenshot`) — the steps run and each proof is checked as in
+  proof mode, and the state the last step leaves is saved as one PNG. It draws no caption
+  and needs neither ffmpeg nor a narration key.
 
 ## Install
 
@@ -41,10 +45,10 @@ Prerequisites, fetched on demand rather than assumed:
 - **A Chromium build** — `npx playwright install chromium-headless-shell` (add
   `--with-deps` on a bare host). The engine prints this exact command if the browser is
   missing. A host-provided browser is used when present.
-- **ffmpeg** — a host `ffmpeg` on `PATH` (set `FFMPEG_BIN` to point at one) is used when
-  present. Otherwise `ffmpeg-static` provides it, but npm ≥ 12 blocks its install script,
-  so fetch the binary once: `npm run provision:ffmpeg` (or, for this package's own tests,
-  it is fetched the same way).
+- **ffmpeg**, for video (a screenshot runs without it) — a host `ffmpeg` on `PATH` (set
+  `FFMPEG_BIN` to point at one) is used when present. Otherwise `ffmpeg-static` provides
+  it, but npm ≥ 12 blocks its install script, so fetch the binary once:
+  `npm run provision:ffmpeg` (or, for this package's own tests, it is fetched the same way).
 
 ## Run a demo
 
@@ -83,6 +87,28 @@ exactly as the driver will and reports what the driver would silently ignore:
 ```bash
 sprintshow lint demo.md          # --strict makes warnings non-zero
 ```
+
+## Capture a screenshot
+
+`sprintshow screenshot` drives a script's steps and checks each step's proof as proof mode
+does, then saves the state the last step leaves as one PNG. It draws no caption, pointer or
+card, and it needs neither ffmpeg nor a narration key.
+
+```bash
+# the sample board after the sample's steps, at 2x so its text stays sharp in a PR comment
+sprintshow screenshot demos/sample.md --serve-dir examples/sample-app --selector '#board' --scale 2 -o board.png
+```
+
+It takes the server options `run` takes (`--base-url`, `--serve`, `--serve-dir`, `--port`,
+`--cwd`), and `-o` names the PNG. It captures the viewport unless told otherwise.
+`--full-page` captures the whole scrollable page, and `--selector <css>` captures one
+element, its first match, once that element is visible. `--scale <n>` sets the device scale
+factor. `--transparent` leaves out the page's default white background, so on a page that
+paints no background of its own, an element with rounded corners keeps transparent corners.
+
+The exit code says what was saved. It is 0 when the PNG is saved and every proof held, and 3
+when the PNG is saved but a step's proof failed, because the capture still shows what
+failed. It is 1 when no PNG is saved.
 
 ## Demo-script format
 
@@ -135,6 +161,11 @@ const result = await captureProof({
   outputPath: 'out.mp4',
 });
 ```
+
+`captureScreenshot` takes the same kind of page and saves one PNG in place of the MP4.
+`runDemo` and `runScreenshot` bring up the server and the browser themselves, as the CLI
+does. A custom driver that runs its steps through `runStep` checks each proof as the
+built-in captures do.
 
 ## The agent / MCP path
 

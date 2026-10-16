@@ -1,7 +1,7 @@
-// The one-command orchestrator behind `sprintshow run`: bring up the server, drive the
-// demo in the chosen mode, tear the server down. The two drivers own the browser
-// (walkthrough needs a recorded context; proof takes a plain page), so this layer only
-// wires the server seam to them.
+// The one-command orchestrators behind `sprintshow run` and `sprintshow screenshot`:
+// bring up the server, drive the demo, tear the server down. The walkthrough driver
+// opens its own recorded context. The proof and screenshot drivers take a plain page,
+// which this layer launches a browser for.
 
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -11,6 +11,7 @@ import { parseDemoScript, outputSlug, type Demo } from './demo-script.ts';
 import { ensureServer, type ServeOptions } from './server.ts';
 import { captureProof, type CaptureResult } from './capture.ts';
 import { captureWalkthrough } from './walkthrough.ts';
+import { captureScreenshot, AREA_CONFLICT, type ScreenshotResult } from './screenshot.ts';
 import { chromiumLaunchArgs, VIEWPORT } from './browser.ts';
 
 export type CaptureMode = 'proof' | 'walkthrough';
@@ -75,6 +76,59 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
         noNarrate: opts.noNarrate,
         musicPath: opts.musicPath,
         keep: opts.keep,
+        log,
+      });
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  } finally {
+    await server.stop();
+  }
+}
+
+export interface RunScreenshotOptions extends ServeOptions {
+  /** Path to a demo-script markdown file, or the parsed demo. */
+  script: string | Demo;
+  /** The PNG path. */
+  outputPath: string;
+  /** Capture the whole scrollable page instead of the viewport. */
+  fullPage?: boolean;
+  /** Capture one element, the selector's first match, once it is visible. */
+  selector?: string | null;
+  /** Device scale factor (default 1): PNG pixels per CSS pixel along each axis. At 2, text stays sharp in a PNG shown at half its size. */
+  scale?: number;
+  /** Leave out the page's default white background. */
+  transparent?: boolean;
+  log?: (m: string) => void;
+}
+
+/**
+ * Bring up the server, drive the demo's steps in a fresh headless page at `scale`, save
+ * the state the last step leaves as a PNG, and tear the server down. A failed proof
+ * still saves the PNG and is counted in `failures`.
+ */
+export async function runScreenshot(opts: RunScreenshotOptions): Promise<ScreenshotResult> {
+  const log = opts.log ?? ((m: string) => console.log(m));
+  const scale = opts.scale ?? 1;
+  // Checked before a server or a browser is spent on a capture that cannot happen.
+  if (!(Number.isFinite(scale) && scale > 0)) throw new Error(`screenshot: the scale must be a positive number (got ${opts.scale})`);
+  if (opts.fullPage && opts.selector) throw new Error(AREA_CONFLICT);
+  const { demo } = loadDemo(opts.script);
+  log(`demo: "${demo.title}" — ${demo.steps.length} steps · screenshot`);
+
+  const server = await ensureServer(opts);
+  try {
+    const browser = await chromium.launch({ headless: true, args: chromiumLaunchArgs() });
+    try {
+      const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: scale });
+      return await captureScreenshot({
+        page,
+        baseUrl: server.baseUrl,
+        demo,
+        outputPath: opts.outputPath,
+        fullPage: opts.fullPage,
+        selector: opts.selector,
+        transparent: opts.transparent,
         log,
       });
     } finally {
