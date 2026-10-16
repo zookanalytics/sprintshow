@@ -29,6 +29,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
+      # The browser-backed tests skip on a host with no Chromium, so CI provisions one.
+      - run: npm run provision:browser -- --with-deps
       - run: npm run typecheck
       - run: npm run lint:demo
       - run: npm test
