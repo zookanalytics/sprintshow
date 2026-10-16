@@ -6,16 +6,19 @@
 //                tear it down on exit (the generalization of a pinned `npm run dev`);
 //   • serve-dir  serve a static directory with a built-in file server, so a demo of a
 //                plain static app — and this package's own sample — runs with no external
-//                process at all.
+//                process at all. It listens on a free port unless one is named, so
+//                captures running side by side on one host each get their own server.
 //
 // The start URL in the demo script is always just a path (+ query); the origin comes
 // from whichever of these is in effect.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+/** The port a `serve` command is polled on when no port is named. */
 export const DEFAULT_PORT = 5173;
 
 export interface ServeOptions {
@@ -25,7 +28,11 @@ export interface ServeOptions {
   serve?: string | null;
   /** Directory to serve with the built-in static file server. */
   serveDir?: string | null;
-  /** Port for `serve` / `serveDir` (default 5173). */
+  /**
+   * Port for `serve` / `serveDir`. A `serve` command binds the port it chooses, so it is
+   * polled on DEFAULT_PORT unless this names another. `serveDir` listens on a free port
+   * the system assigns unless this names one.
+   */
   port?: number;
   /** Working directory for the `serve` command (default: process cwd). */
   cwd?: string;
@@ -117,7 +124,6 @@ function staticServer(root: string): Server {
  */
 export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
   const log = opts.log ?? ((m: string) => console.log(m));
-  const port = opts.port ?? DEFAULT_PORT;
 
   if (opts.baseUrl) {
     const baseUrl = opts.baseUrl.replace(/\/$/, '');
@@ -127,13 +133,23 @@ export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
 
   if (opts.serveDir) {
     const server = staticServer(opts.serveDir);
-    await new Promise<void>((resolve) => server.listen(port, resolve));
-    const baseUrl = `http://localhost:${port}`;
+    // Port 0 asks the system for a free one. A named port that is taken rejects the
+    // start, instead of raising an 'error' event nothing handles.
+    await new Promise<void>((resolve, reject) => {
+      const fail = (e: Error): void => reject(new Error(`server: cannot serve ${opts.serveDir}: ${e.message}`));
+      server.once('error', fail);
+      server.listen(opts.port ?? 0, () => {
+        server.off('error', fail);
+        resolve();
+      });
+    });
+    const baseUrl = `http://localhost:${(server.address() as AddressInfo).port}`;
     log(`server: serving ${path.resolve(opts.serveDir)} at ${baseUrl}`);
     return { baseUrl, stop: () => new Promise<void>((resolve) => server.close(() => resolve())) };
   }
 
   if (opts.serve) {
+    const port = opts.port ?? DEFAULT_PORT;
     const baseUrl = `http://localhost:${port}`;
     const ready = baseUrl + (opts.readyPath ?? '/');
     if (await serverUp(ready)) {

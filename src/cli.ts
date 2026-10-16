@@ -24,7 +24,8 @@ run options:
   --base-url <url>            Drive against a server already running.
   --serve "<command>"         Spawn a dev-server command, wait for it, then tear it down.
   --serve-dir <dir>           Serve a static directory with the built-in file server.
-  --port <n>                  Port for --serve / --serve-dir (default 5173).
+  --port <n>                  Port for --serve (default 5173) or --serve-dir (default: a
+                              free port the system assigns).
   --cwd <dir>                 Working directory for --serve.
   -o, --output <file.mp4>     Output path (default demos/<script-name>.mp4).
   --music <file>              Mix a background-music bed under the narration.
