@@ -1,14 +1,15 @@
-// Browser-driving primitives shared by both capture modes: the synthetic pointer and
-// its human-paced glide helpers, the action runner that executes a parsed directive, and
-// the assertion evaluator that checks a `_Prove:_` / `_Fail if:_` contract against the
-// live DOM.
+// Browser-driving primitives shared by the capture drivers: the synthetic pointer and
+// its human-paced glide helpers, the action runner that executes a parsed directive, the
+// assertion evaluator that checks a `_Prove:_` / `_Fail if:_` contract against the live
+// DOM, and the step runner that puts the two together for one demo step.
 //
 // The pointer is a DOM element the engine moves, so a click or a keystroke reads on
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
-// The still-frame path skips it and drives the page directly, for speed and determinism.
+// The still-frame and screenshot paths skip it and drive the page directly, for speed and
+// determinism.
 
 import type { Page } from 'playwright';
-import type { Assertion, DemoAction } from './demo-script.ts';
+import type { Assertion, DemoAction, DemoStep } from './demo-script.ts';
 
 export const VIEWPORT = { width: 1280, height: 900 };
 export const ACTION_TIMEOUT = 15000; // per waitFor/waitForText/click/type
@@ -201,4 +202,42 @@ export async function awaitAssertion(page: Page, a: Assertion, timeoutMs: number
     if (Date.now() >= deadline) return false;
     await sleep(POLL_MS);
   }
+}
+
+/** What one step's proof came to. */
+export interface StepProof {
+  /** The step's `_Prove:_` held and its `_Fail if:_` did not match. A step with neither records a manual proof. */
+  proved: boolean;
+  /** The step carries no machine assertion, so nothing about it was checked against the page. */
+  manual: boolean;
+  /** Why the proof failed, or '' when it held. */
+  reason: string;
+}
+
+/**
+ * Run one demo step: execute its actions, then check its proof against the live page.
+ * Every capture drives its steps through here, so a proof means the same thing in a
+ * video and in a screenshot. The step and its result are logged in the form every
+ * capture prints.
+ */
+export async function runStep(page: Page, base: string, step: DemoStep, total: number, humanize: boolean, log: (m: string) => void): Promise<StepProof> {
+  log(`step ${step.index}/${total}: ${step.narration}`);
+  for (const act of step.actions) await runAction(page, base, act, humanize, log);
+
+  // A prove-assertion must become true; a failIf-assertion becoming true overrides it.
+  let proved = true;
+  let reason = '';
+  if (step.prove?.assertion) {
+    proved = await awaitAssertion(page, step.prove.assertion, PROVE_TIMEOUT);
+    if (!proved) reason = `_Prove:_ did not hold: \`${step.prove.assertion.raw}\``;
+  }
+  if (proved && step.failIf?.assertion) {
+    if (await checkAssertion(page, step.failIf.assertion)) {
+      proved = false;
+      reason = `_Fail if:_ condition matched: \`${step.failIf.assertion.raw}\``;
+    }
+  }
+  const manual = !step.prove?.assertion && !step.failIf?.assertion;
+  log(proved ? (manual ? '  ✓ (manual — no machine assertion)' : '  ✓ proof held') : `  ✗ ${reason}`);
+  return { proved, manual, reason };
 }

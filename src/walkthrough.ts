@@ -15,16 +15,7 @@ import { chromium, type Browser } from 'playwright';
 
 import { parseDemoScript, outputSlug, type Demo, type DemoStep } from './demo-script.ts';
 import { requireFfmpeg, run, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
-import {
-  installPointer,
-  runAction,
-  awaitAssertion,
-  checkAssertion,
-  joinUrl,
-  chromiumLaunchArgs,
-  VIEWPORT,
-  PROVE_TIMEOUT,
-} from './browser.ts';
+import { installPointer, runStep, joinUrl, chromiumLaunchArgs, VIEWPORT } from './browser.ts';
 import { showCaption, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
 import type { CaptureResult } from './capture.ts';
 
@@ -56,24 +47,8 @@ interface SegMark {
 }
 
 async function walkStep(page: import('playwright').Page, base: string, step: DemoStep, total: number, log: (m: string) => void): Promise<boolean> {
-  log(`step ${step.index}/${total}: ${step.narration}`);
   await showCaption(page, step.index, total, step.narration, false);
-  for (const act of step.actions) await runAction(page, base, act, true, log);
-
-  let proved = true;
-  let reason = '';
-  if (step.prove?.assertion) {
-    proved = await awaitAssertion(page, step.prove.assertion, PROVE_TIMEOUT);
-    if (!proved) reason = `_Prove:_ did not hold: \`${step.prove.assertion.raw}\``;
-  }
-  if (proved && step.failIf?.assertion) {
-    if (await checkAssertion(page, step.failIf.assertion)) {
-      proved = false;
-      reason = `_Fail if:_ condition matched: \`${step.failIf.assertion.raw}\``;
-    }
-  }
-  const manual = !step.prove?.assertion && !step.failIf?.assertion;
-  log(proved ? (manual ? '  ✓ (manual — no machine assertion)' : '  ✓ proof held') : `  ✗ ${reason}`);
+  const { proved } = await runStep(page, base, step, total, true, log);
   if (!proved) {
     await showCaption(page, step.index, total, step.narration, true);
     await page.waitForTimeout(FAIL_HOLD_MS);

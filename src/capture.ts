@@ -13,7 +13,7 @@ import type { Page } from 'playwright';
 
 import { parseDemoScript, slugify, outputSlug, type Demo, type DemoStep } from './demo-script.ts';
 import { assembleVideo, type Frame, type Manifest } from './assemble.ts';
-import { runAction, awaitAssertion, checkAssertion, joinUrl, PROVE_TIMEOUT, VIEWPORT } from './browser.ts';
+import { runStep, joinUrl, VIEWPORT } from './browser.ts';
 import { showCaption, removeCaption, coverInnerHtml, scrutinyInnerHtml, cardDocument } from './overlay.ts';
 
 const BRAND = 'sprintshow · proof';
@@ -52,24 +52,7 @@ interface StepResult {
 }
 
 async function proofStep(page: Page, base: string, step: DemoStep, total: number, capturesDir: string, log: (m: string) => void): Promise<StepResult> {
-  log(`step ${step.index}/${total}: ${step.narration}`);
-  for (const act of step.actions) await runAction(page, base, act, false, log);
-
-  // A prove-assertion must become true; a failIf-assertion becoming true overrides it.
-  let proved = true;
-  let reason = '';
-  if (step.prove?.assertion) {
-    proved = await awaitAssertion(page, step.prove.assertion, PROVE_TIMEOUT);
-    if (!proved) reason = `_Prove:_ did not hold: \`${step.prove.assertion.raw}\``;
-  }
-  if (proved && step.failIf?.assertion) {
-    if (await checkAssertion(page, step.failIf.assertion)) {
-      proved = false;
-      reason = `_Fail if:_ condition matched: \`${step.failIf.assertion.raw}\``;
-    }
-  }
-  const manual = !step.prove?.assertion && !step.failIf?.assertion;
-  log(proved ? (manual ? '  ✓ (manual — no machine assertion)' : '  ✓ proof held') : `  ✗ ${reason}`);
+  const { proved, manual, reason } = await runStep(page, base, step, total, false, log);
 
   const file = `${String(step.index).padStart(2, '0')}-${slugify(step.narration).slice(0, 40)}.png`;
   await showCaption(page, step.index, total, step.narration, !proved);
