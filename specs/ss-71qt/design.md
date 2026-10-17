@@ -74,8 +74,10 @@ The surface opens before the first step:
    - `INPUTRC=/dev/null`, so the user's key bindings do not change what a key does.
    - `BASH_SILENCE_DEPRECATION_WARNING=1`, so macOS's bash prints no notice at start.
    - `LANG` names a UTF-8 locale when the environment names no locale.
-   - `PROMPT_COMMAND` is removed, and so are the variables that describe another terminal,
-     such as `COLUMNS`, `LINES`, `TMUX` and `TERM_PROGRAM`.
+   - The variables that would change the prompt, the line editing, or what bash runs at
+     start are removed: `PROMPT_COMMAND`, `PS0`, `PS2`, `SHELLOPTS`, `BASHOPTS`, `BASH_ENV`
+     and `ENV`. So are the variables that describe another terminal, such as `COLUMNS`,
+     `LINES`, `TMUX` and `TERM_PROGRAM`.
 3. What the pty prints is handed to xterm in the order it arrived, batched while a hand-off
    is in flight. What a step types goes to xterm's own input. xterm encodes each key for
    the terminal's current modes, an arrow key in application cursor-key mode for one, and
@@ -112,8 +114,8 @@ finished command reported.
 | `waitForScreen <matcher>` | Waits up to 15 s for the screen's text to match. |
 | `wait <ms>` | Pauses, as in a page script. |
 
-In the walkthrough, `run` and `press` type at the pace a page script's typing uses, and
-pause briefly after each key, so a viewer sees each one land.
+In the walkthrough, `run` and `press` type at the pace a page script's typing uses, pause
+between keys, and hold a beat once they are done, so a viewer sees each one land.
 
 ### How a proof reads terminal state
 

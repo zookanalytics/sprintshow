@@ -1,7 +1,7 @@
 {
   "name": "@zookanalytics/sprintshow",
   "version": "0.1.0",
-  "description": "Auto-generate a quick, unpolished demo video of what an AI agent just did — the agent equivalent of a sprint demo. A demo-script DSL + linter, on-screen captions, TTS voiceover and ffmpeg assembly, over a Playwright browser drive.",
+  "description": "Auto-generate a quick, unpolished demo video of what an AI agent just did — the agent equivalent of a sprint demo. A demo-script DSL + linter, on-screen captions, TTS voiceover and ffmpeg assembly, over a Playwright browser drive or a terminal session.",
   "keywords": [
     "demo",
     "demo-video",
@@ -13,7 +13,10 @@
     "captions",
     "ai-agents",
     "mcp",
-    "sprint-demo"
+    "sprint-demo",
+    "terminal",
+    "tui",
+    "xterm"
   ],
   "license": "AGPL-3.0-only",
   "author": "Zook Analytics",
