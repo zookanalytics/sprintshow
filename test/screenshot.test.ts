@@ -4,7 +4,8 @@
 // The capture drives a demo script's steps through the step runner, then saves the state
 // the last step leaves as one PNG, with nothing of the engine's drawn into it. The
 // command exits 0 when every proof held, 3 when the PNG is saved but a proof failed, and
-// 1 when no PNG is saved, and it runs with no ffmpeg reachable.
+// 1 when no PNG is saved, and it runs with no ffmpeg reachable. A capture that fails once
+// the steps have run says how many of their proofs failed.
 //
 // They need a headless Chromium and skip without one (see browser-fixture.ts).
 
@@ -118,6 +119,18 @@ const CARD = `# Demo: Rounded card
    _Prove:_ the card shows — \`visible .card\`
 `;
 
+/** The card page again, with a step that fails at once: its fail-if matches, so no proof is polled. */
+const CARD_FAILS = `# Demo: Rounded card, failing
+
+**Start:** \`/card.html\`
+
+## Steps
+
+1. **The card shows, and the step is made to fail**
+   \`waitFor .card\`
+   _Fail if:_ the card shows — \`visible .card\`
+`;
+
 /** The environment of a host with no ffmpeg anywhere and no narration key: PATH holds nothing, FFMPEG_BIN names no file. */
 function noFfmpegEnv(dir: string): NodeJS.ProcessEnv {
   const { OPENAI_API_KEY: _key, FFMPEG_BIN: _bin, ...rest } = process.env;
@@ -202,6 +215,19 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
     }
   });
 
+  test('a selector that never shows saves nothing, and with every proof held the error counts no failures', async () => {
+    const site = await serveSite({ 'card.html': CARD_HTML });
+    const page = await browser!.newPage();
+    try {
+      const png = path.join(site.dir, 'x.png');
+      await assert.rejects(captureScreenshot({ page, baseUrl: site.baseUrl, demo: CARD, outputPath: png, selector: '#missing', log: quiet }), { message: /^screenshot: no visible `#missing` to capture: / });
+      assert.equal(existsSync(png), false);
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
+
   test('sprintshow screenshot saves the sample board at --scale 2 and exits 0, with no ffmpeg reachable', async () => {
     let base = { width: 0, height: 0 };
     await captureSample({ selector: '#board' }, async (_page, png) => {
@@ -268,6 +294,21 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
       const noOutput = await runCli(['screenshot', SAMPLE, '--serve-dir', SAMPLE_APP]);
       assert.equal(noOutput.code, 1);
       assert.match(noOutput.stderr, /an output path \(-o <file\.png>\) is required/);
+      assert.equal(existsSync(png), false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('sprintshow screenshot exits 1 when the selector never shows, and its error counts the steps whose proof failed', async () => {
+    const { dir, cleanup } = scratchDir();
+    try {
+      writeFiles(dir, { 'site/card.html': CARD_HTML, 'fails.md': CARD_FAILS });
+      const png = path.join(dir, 'x.png');
+      const res = await runCli(['screenshot', path.join(dir, 'fails.md'), '--serve-dir', path.join(dir, 'site'), '--selector', '#missing', '-o', png]);
+      assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
+      assert.ok(stepLines(res.stdout).includes('  ✗ _Fail if:_ condition matched: `visible .card`'));
+      assert.match(res.stderr, /screenshot: no visible `#missing` to capture \(1 step\(s\) failed their proof\): /);
       assert.equal(existsSync(png), false);
     } finally {
       cleanup();

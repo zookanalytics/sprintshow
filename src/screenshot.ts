@@ -54,7 +54,8 @@ export const AREA_CONFLICT = 'screenshot: capture the full page or one element, 
 /**
  * Drive `demo` against `page`, checking each step's proof, then save the state the last
  * step leaves as a PNG at `outputPath`. Throws, saving nothing, when the page cannot be
- * driven or the selector never becomes visible.
+ * driven, the selector never becomes visible, or the PNG cannot be written. An error
+ * raised once the steps have run counts the steps whose proof failed.
  */
 export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise<ScreenshotResult> {
   if (opts.fullPage && opts.selector) throw new Error(AREA_CONFLICT);
@@ -71,19 +72,27 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
     if (!proved) failures++;
   }
 
+  // A step whose proof failed is the likeliest reason the page lacks what the capture
+  // needs, so a capture that fails says how many did. Each one's ✗ line is in the log.
+  const failed = failures > 0 ? ` (${failures} step(s) failed their proof)` : '';
+  const attempt = async (what: string, act: () => Promise<unknown>): Promise<void> => {
+    try {
+      await act();
+    } catch (e) {
+      throw new Error(`screenshot: ${what}${failed}: ${(e as Error).message.split('\n')[0]}`);
+    }
+  };
+
   const shot = { path: opts.outputPath, type: 'png' as const, omitBackground: Boolean(opts.transparent), timeout: ACTION_TIMEOUT };
   if (selector) {
     const el = page.locator(selector).first();
-    try {
-      await el.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT });
-    } catch (e) {
-      throw new Error(`screenshot: no visible \`${selector}\` to capture: ${(e as Error).message.split('\n')[0]}`);
-    }
+    await attempt(`no visible \`${selector}\` to capture`, () => el.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT }));
     log(`screenshot: capturing \`${selector}\` → ${path.basename(opts.outputPath)}`);
-    await el.screenshot(shot);
+    await attempt(`could not capture \`${selector}\``, () => el.screenshot(shot));
   } else {
-    log(`screenshot: capturing the ${opts.fullPage ? 'full page' : 'viewport'} → ${path.basename(opts.outputPath)}`);
-    await page.screenshot({ ...shot, fullPage: Boolean(opts.fullPage) });
+    const area = opts.fullPage ? 'the full page' : 'the viewport';
+    log(`screenshot: capturing ${area} → ${path.basename(opts.outputPath)}`);
+    await attempt(`could not capture ${area}`, () => page.screenshot({ ...shot, fullPage: Boolean(opts.fullPage) }));
   }
   return { outputPath: opts.outputPath, failures };
 }
