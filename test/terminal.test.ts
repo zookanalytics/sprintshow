@@ -289,6 +289,28 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     }
   });
 
+  test('--full-page starts the window at the first line of the session when the shell cleared the screen below its scrollback', async () => {
+    // The printf homes the cursor and erases the screen but keeps the scrollback, as
+    // `tput clear` does, so the cursor is not on the bottom row when the window grows.
+    const md = `# Demo: Cleared\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **Lines, then a cleared screen**\n   \`run seq 1 30\`\n   \`run printf '\\033[H\\033[2J'\`\n   _Prove:_ the prompt is back on the top row — \`row 1 ~ /^\\$$/\`\n`;
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage();
+    try {
+      const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: path.join(dir, 'cleared.png'), fullPage: true, log: quiet });
+      assert.equal(res.failures, 0);
+      const { drawn, slider } = await page.evaluate(() => ({
+        drawn: [...document.querySelectorAll('.xterm-rows > div')].map((row) => (row.textContent ?? '').trimEnd()),
+        slider: getComputedStyle(document.querySelector('.xterm .scrollbar.vertical .slider') as Element).backgroundColor,
+      }));
+      // `$ seq 1 30` and the lines the clear left in the scrollback, then the prompt it moved to the top.
+      assert.deepEqual(drawn, ['$ seq 1 30', ...Array.from({ length: 22 }, (_, i) => String(i + 1)), '$']);
+      assert.equal(slider, 'rgba(0, 0, 0, 0)', 'the scrollbar xterm shows once the window scrolls draws nothing');
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
   test('the shell, and a program it still runs, end when the capture is done', async () => {
     const md = `# Demo: Hold\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **A program that never exits**\n   \`run node hold.mjs\`\n   _Prove:_ it holds the screen — \`screen ~ "held"\`\n`;
     const { dir, cleanup } = scratchDir();

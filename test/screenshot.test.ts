@@ -26,7 +26,6 @@ const SAMPLE = path.join(REPO, 'demos', 'sample.md');
 const SAMPLE_APP = path.join(REPO, 'examples', 'sample-app');
 const quiet = (): void => {};
 
-
 /**
  * How many pixels of two same-size PNGs differ by more than `tolerance` in any channel.
  * Chromium's anti-aliasing of a rounded edge can vary by a level between two captures

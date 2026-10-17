@@ -97,9 +97,11 @@ const THEME = {
   brightMagenta: '#d99cf0',
   brightCyan: '#7fd3dd',
   brightWhite: '#ffffff',
-  scrollbarSliderBackground: 'transparent',
-  scrollbarSliderHoverBackground: 'transparent',
-  scrollbarSliderActiveBackground: 'transparent',
+  // xterm refuses a colour name that draws transparent, such as `transparent`, and falls
+  // back to its grey slider; a hex colour with zero alpha is taken as written.
+  scrollbarSliderBackground: '#00000000',
+  scrollbarSliderHoverBackground: '#00000000',
+  scrollbarSliderActiveBackground: '#00000000',
 };
 
 const PAGE_CSS =
@@ -275,6 +277,10 @@ function installTerminal(o: InstallOptions): void {
         }
       }
       if (last + 1 !== term.rows) term.resize(term.cols, last + 1);
+      // A taller terminal takes its new rows from the scrollback only while the cursor is
+      // on the bottom row. Below a cleared screen it adds blank rows instead, so the window
+      // is scrolled to the buffer's first line, where the session starts either way.
+      term.scrollToTop();
       return last + 1;
     },
     painted: () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
