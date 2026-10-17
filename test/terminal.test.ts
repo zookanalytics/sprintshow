@@ -8,14 +8,16 @@
 // encodes each key for the terminal's cursor-key mode, that a full-screen program's
 // alternate screen, cursor addressing and colours are drawn as it sent them, and that
 // quitting it restores the shell's screen. They pin the captures: the still is the
-// terminal window with transparent corners, `--full-page` holds the whole session, the
-// shell and what it ran end with the capture, and a terminal script refuses a server, a
-// selector, or a directory that does not exist before a browser is spent.
+// terminal window with transparent corners, `--full-page` holds the whole session, and a
+// terminal script refuses a server, a selector, or a directory that does not exist before
+// a browser is spent. The shell and every program it still runs end before the capture
+// returns, even a program that handles SIGHUP.
 //
 // They need a headless Chromium and skip without one (see browser-fixture.ts).
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
@@ -80,12 +82,27 @@ async function cellCentre(page: Page, size: { cols: number; rows: number }, row:
   );
 }
 
-/** A program that holds the alternate screen, records its pid, and runs until it is killed. */
+/**
+ * `node hold.mjs <name> [hup] [screen]`: a program that records its pid in `<name>.pid` and
+ * runs until it is killed. With `hup` it handles SIGHUP and carries on, and with `screen`
+ * it holds the alternate screen.
+ */
 const HOLD = `import { writeFileSync } from 'node:fs';
-writeFileSync('held.pid', String(process.pid));
-process.stdout.write('\\x1b[?1049h\\x1b[Hheld');
+const [name, ...flags] = process.argv.slice(2);
+if (flags.includes('hup')) process.on('SIGHUP', () => {});
+writeFileSync(name + '.pid', String(process.pid));
+if (flags.includes('screen')) process.stdout.write('\\x1b[?1049h\\x1b[Hheld');
 setInterval(() => {}, 1000);
 `;
+
+/**
+ * Whether a process is still running. A zombie is not: it has exited, and only waits for
+ * its parent to collect its status, which for an orphan is init's to do in its own time.
+ */
+function running(pid: number): boolean {
+  const stat = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim();
+  return stat !== '' && !stat.startsWith('Z');
+}
 
 /** A program that prints, in hex, the bytes each key sends, in application cursor-key mode with \`app\`. */
 const KEYS = `const app = process.argv[2] === 'app';
@@ -311,27 +328,37 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     }
   });
 
-  test('the shell, and a program it still runs, end when the capture is done', async () => {
-    const md = `# Demo: Hold\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **A program that never exits**\n   \`run node hold.mjs\`\n   _Prove:_ it holds the screen — \`screen ~ "held"\`\n`;
+  test('the shell, and every program it still runs, end before the capture returns, even one that handles SIGHUP', async () => {
+    const md = `# Demo: Hold
+
+**Terminal:** 40x10
+
+## Steps
+
+1. **A background job that handles SIGHUP**
+   \`run echo $$ > shell.pid\`
+   \`run node hold.mjs job hup & until [ -s job.pid ]; do sleep 0.1; done\`
+
+2. **A full-screen program that handles SIGHUP**
+   \`run node hold.mjs tui hup screen\`
+   _Prove:_ it holds the screen — \`screen ~ "held"\`
+`;
     const { dir, cleanup } = scratchDir();
     const page = await browser!.newPage();
+    const names = ['shell', 'job', 'tui'];
+    const pidOf = (name: string): number => Number(existsSync(path.join(dir, `${name}.pid`)) ? readFileSync(path.join(dir, `${name}.pid`), 'utf8') : 0);
     try {
       writeFiles(dir, { 'hold.mjs': HOLD });
       const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: path.join(dir, 'held.png'), log: quiet });
       assert.equal(res.failures, 0);
-      const pid = Number(readFileSync(path.join(dir, 'held.pid'), 'utf8'));
-      const alive = (): boolean => {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch {
-          return false;
-        }
-      };
-      const deadline = Date.now() + 5000;
-      while (alive() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
-      assert.equal(alive(), false, `the program (pid ${pid}) outlived the capture`);
+      for (const name of names) {
+        const pid = pidOf(name);
+        assert.ok(pid > 1, `${name}.pid holds a pid`);
+        assert.equal(running(pid), false, `the ${name} (pid ${pid}) outlived the capture`);
+      }
     } finally {
+      // Nothing the capture left running outlives the test.
+      for (const pid of names.map(pidOf)) if (pid > 1 && running(pid)) process.kill(pid, 'SIGKILL');
       await page.close();
       cleanup();
     }

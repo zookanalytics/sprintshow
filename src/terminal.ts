@@ -16,9 +16,11 @@
 //
 // specs/ss-71qt/design.md records why the surface is built this way.
 
-import { readFileSync, statSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import type { IPty } from '@lydell/node-pty';
 import type { Page } from 'playwright';
 
@@ -71,7 +73,7 @@ const SCROLLBACK = 1000;
 const QUIET_MS = 120;
 /** A program that never goes quiet, such as a spinner, is framed after this long. */
 const SETTLE_CAP_MS = 2000;
-/** How long the shell has to exit after SIGHUP, and again after SIGKILL. */
+/** How long the shell's session has to end after SIGHUP, and again after SIGKILL. */
 const KILL_GRACE_MS = 2000;
 
 /** The xterm theme: the engine's card colours, with an ANSI palette in the same key. */
@@ -357,7 +359,10 @@ export interface TerminalOptions {
 export interface TerminalSession {
   /** Wait until the terminal has drawn everything the shell has printed. */
   settle(): Promise<void>;
-  /** End the shell: SIGHUP, which it passes on to its jobs, then SIGKILL if it lingers. */
+  /**
+   * End the shell and every job it runs (see endSession). Resolves once they have all
+   * exited, or once SIGKILL's grace has passed.
+   */
   close(): Promise<void>;
 }
 
@@ -368,7 +373,91 @@ const bound = new WeakSet<Page>();
 const inputs = new WeakMap<Page, (data: string) => void>();
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-const within = (p: Promise<void>, ms: number): Promise<boolean> => Promise.race([p.then(() => true), sleep(ms).then(() => false)]);
+const execFileP = promisify(execFile);
+
+/** Check `done` every 25 ms until it holds or `ms` has passed. Resolves whether it held. */
+async function until(done: () => boolean, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (done()) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(25);
+  }
+}
+
+/**
+ * The process groups of the session the shell leads: the shell's own, and one for each job
+ * it started, which holds whatever that job started in turn. They are read while the shell
+ * runs, which keeps each id in use by this session.
+ *
+ * Linux lists the session by its id, in /proc. A macOS process listing shows no session
+ * id, so there the session is read as the processes whose controlling terminal is the
+ * shell's, which are the session's for as long as the shell runs.
+ */
+async function sessionGroups(shell: number): Promise<number[]> {
+  const groups = new Set([shell]);
+  if (process.platform === 'linux') {
+    for (const pid of readdirSync('/proc')) {
+      if (!/^\d+$/.test(pid)) continue;
+      let stat: string;
+      try {
+        stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      } catch {
+        continue; // it exited while the list was read
+      }
+      // `pid (comm) state ppid pgrp session …`, where comm can hold spaces and parentheses.
+      const [, , pgrp, session] = stat.slice(stat.lastIndexOf(')') + 2).split(' ').map(Number);
+      if (session === shell) groups.add(pgrp);
+    }
+  } else {
+    const { stdout } = await execFileP('ps', ['-A', '-o', 'pid=,pgid=,tty='], { timeout: KILL_GRACE_MS });
+    const procs = stdout.trim().split('\n').map((line) => line.trim().split(/\s+/));
+    const tty = procs.find(([pid]) => Number(pid) === shell)?.[2];
+    if (tty && !tty.startsWith('?')) for (const [, pgid, t] of procs) if (t === tty) groups.add(Number(pgid));
+  }
+  // Never 0 or 1: kill(-0) signals the engine's own group, and kill(-1) every process it may signal.
+  return [...groups].filter((g) => Number.isSafeInteger(g) && g > 1);
+}
+
+/** Whether a process group still holds a process the engine may signal. */
+function groupRuns(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * End the session the shell leads, the shell and every job it runs. Each of its process
+ * groups gets SIGHUP. Any of them still running KILL_GRACE_MS later gets SIGKILL, whether
+ * that is the shell or a job that outlived it, such as a program that handles SIGHUP.
+ *
+ * The groups are read before the hang-up, because once the shell has exited nothing ties
+ * its jobs to the terminal, and SIGHUP is what makes it exit. `shellExited` reports
+ * whether node-pty has seen the shell exit.
+ */
+async function endSession(shell: number, shellExited: () => boolean, log: (m: string) => void): Promise<void> {
+  const groups = await sessionGroups(shell).catch((e: Error) => {
+    log(`terminal: could not list the shell's jobs, so only the shell is ended: ${e.message.split('\n')[0]}`);
+    return [shell];
+  });
+  const signal = (targets: number[], sig: NodeJS.Signals): void => {
+    for (const g of targets) {
+      try {
+        process.kill(-g, sig);
+      } catch {
+        /* the group has ended */
+      }
+    }
+  };
+  const ended = (): boolean => shellExited() && !groups.some(groupRuns);
+  signal(groups, 'SIGHUP');
+  if (await until(ended, KILL_GRACE_MS)) return;
+  signal(groups.filter(groupRuns), 'SIGKILL');
+  await until(ended, KILL_GRACE_MS);
+}
 
 /**
  * Write the terminal page into `page`, start bash in a pty of the script's size, and wait
@@ -415,8 +504,6 @@ export async function openTerminal(page: Page, o: TerminalOptions): Promise<Term
   let detached = false;
   let lastOutput = Date.now();
   let exit: { status: number; told: boolean } | null = null;
-  let markExited: () => void = () => {};
-  const exited = new Promise<void>((resolve) => (markExited = resolve));
   const pump = (): void => {
     if (pumping || detached) return;
     pumping = (async () => {
@@ -449,7 +536,6 @@ export async function openTerminal(page: Page, o: TerminalOptions): Promise<Term
   });
   child.onExit(({ exitCode, signal }) => {
     exit = { status: signal ? 128 + signal : exitCode, told: false };
-    markExited();
     pump();
   });
   inputs.set(page, (data) => {
@@ -461,21 +547,9 @@ export async function openTerminal(page: Page, o: TerminalOptions): Promise<Term
     closing ??= (async () => {
       inputs.delete(page);
       detached = true;
-      if (!exit) {
-        try {
-          child.kill('SIGHUP');
-        } catch {
-          /* already gone */
-        }
-        if (!(await within(exited, KILL_GRACE_MS))) {
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            /* already gone */
-          }
-          await within(exited, KILL_GRACE_MS);
-        }
-      }
+      // A shell that has exited leads no session, so nothing ties a job it left running
+      // to this terminal any more, and there is nothing to end.
+      if (!exit) await endSession(child.pid, () => exit !== null, o.log);
       await pumping;
     })();
     return closing;

@@ -89,8 +89,18 @@ Before a still is taken, the surface settles: the pty's output has been handed o
 parsed, and xterm has drawn it. The session ends once the capture no longer shows the
 terminal, and on any error. For a still and for proof mode, that is after the last step.
 The walkthrough films its closing card over the terminal, so it ends the session after the
-card. The shell gets SIGHUP, which it passes on to its jobs, and SIGKILL if it has not
-exited within two seconds.
+card.
+
+Ending the session ends the shell and every job it runs. Each of the session's process
+groups gets SIGHUP: the shell's own, and one for each job, which holds whatever that job
+started. Any group still running two seconds later gets SIGKILL, whether it is the shell
+or a job that outlived it, such as a program that handles SIGHUP. The capture returns
+once they have exited. The groups are read before the hang-up, while the shell leads the
+session, because once the shell exits nothing ties its jobs to the terminal. On Linux the
+engine lists the session by its id. A macOS process listing shows no session id, so there
+it reads the processes whose controlling terminal is the shell's. The engine reads the
+session only while the shell leads it, so a job still running after a script exits the
+shell itself is left running.
 
 The shell is bash. A shell reports each command's end and exit status only through a
 prompt the engine writes, and bash is on every macOS and mainstream Linux host. The marks
