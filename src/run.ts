@@ -5,7 +5,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { chromium } from 'playwright';
+import { chromium, type BrowserContextOptions, type Page } from 'playwright';
 
 import { parseDemoScript, outputSlug, type Demo } from './demo-script.ts';
 import { ensureServer, type ServeOptions } from './server.ts';
@@ -43,6 +43,16 @@ function slugName(title: string): string {
   return title.replace(/[^A-Za-z0-9._-]+/g, '-');
 }
 
+/** Launch a headless Chromium, hand `use` a new page made with `pageOpts`, and close the browser once `use` settles. */
+async function withHeadlessPage<T>(pageOpts: BrowserContextOptions, use: (page: Page) => Promise<T>): Promise<T> {
+  const browser = await chromium.launch({ headless: true, args: chromiumLaunchArgs() });
+  try {
+    return await use(await browser.newPage(pageOpts));
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
 export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
   const { demo, name } = loadDemo(opts.script);
@@ -65,10 +75,8 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
       });
     }
 
-    const browser = await chromium.launch({ headless: true, args: chromiumLaunchArgs() });
-    try {
-      const page = await browser.newPage({ viewport: VIEWPORT });
-      return await captureProof({
+    return await withHeadlessPage({ viewport: VIEWPORT }, (page) =>
+      captureProof({
         page,
         baseUrl: server.baseUrl,
         demo,
@@ -77,10 +85,8 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
         musicPath: opts.musicPath,
         keep: opts.keep,
         log,
-      });
-    } finally {
-      await browser.close().catch(() => {});
-    }
+      }),
+    );
   } finally {
     await server.stop();
   }
@@ -118,10 +124,8 @@ export async function runScreenshot(opts: RunScreenshotOptions): Promise<Screens
 
   const server = await ensureServer(opts);
   try {
-    const browser = await chromium.launch({ headless: true, args: chromiumLaunchArgs() });
-    try {
-      const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: scale });
-      return await captureScreenshot({
+    return await withHeadlessPage({ viewport: VIEWPORT, deviceScaleFactor: scale }, (page) =>
+      captureScreenshot({
         page,
         baseUrl: server.baseUrl,
         demo,
@@ -130,10 +134,8 @@ export async function runScreenshot(opts: RunScreenshotOptions): Promise<Screens
         selector: opts.selector,
         transparent: opts.transparent,
         log,
-      });
-    } finally {
-      await browser.close().catch(() => {});
-    }
+      }),
+    );
   } finally {
     await server.stop();
   }
