@@ -29,9 +29,9 @@ export interface ServeOptions {
   /** Directory to serve with the built-in static file server. */
   serveDir?: string | null;
   /**
-   * Port for `serve` / `serveDir`. A `serve` command binds the port it chooses, so it is
-   * polled on DEFAULT_PORT unless this names another. `serveDir` listens on a free port
-   * the system assigns unless this names one.
+   * Port for `serve` / `serveDir`, a whole number from 1 to 65535. A `serve` command binds
+   * the port it chooses, so it is polled on DEFAULT_PORT unless this names another.
+   * `serveDir` listens on a free port the system assigns unless this names one.
    */
   port?: number;
   /** Working directory for the `serve` command (default: process cwd). */
@@ -120,10 +120,16 @@ function staticServer(root: string): Server {
 
 /**
  * Bring up the server the demo runs against and return a handle. Throws when none of
- * base-url / serve / serve-dir is given, since the driver has nowhere to point.
+ * base-url / serve / serve-dir is given, since the driver has nowhere to point, and
+ * when the port named is not one a server can listen on.
  */
 export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
   const log = opts.log ?? ((m: string) => console.log(m));
+  // Checked before anything is served or spawned. Past this point a bad port reaches
+  // listen(), or a `serve` command is spawned and its readiness URL polled for 30s.
+  if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 1 && opts.port <= 65535)) {
+    throw new Error(`server: the port must be a whole number from 1 to 65535 (got ${opts.port})`);
+  }
 
   if (opts.baseUrl) {
     const baseUrl = opts.baseUrl.replace(/\/$/, '');

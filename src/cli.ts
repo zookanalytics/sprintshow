@@ -10,6 +10,7 @@ import { assembleVideo, type AssembleResult } from './assemble.ts';
 import { lintCli } from './lint.ts';
 import { outputSlug } from './demo-script.ts';
 import type { CaptureResult } from './capture.ts';
+import type { ServeOptions } from './server.ts';
 
 const HELP = `sprintshow — auto-generate a quick, unpolished demo video of what your app (or agent) just did.
 
@@ -89,6 +90,17 @@ function takeValue(flag: string, v: string | undefined): string {
   return v;
 }
 
+/** The server options from the flags `run` and `screenshot` share. The server checks the port. */
+function serveOptions(flags: Parsed['flags']): ServeOptions {
+  return {
+    baseUrl: (flags['base-url'] as string) ?? null,
+    serve: (flags.serve as string) ?? null,
+    serveDir: (flags['serve-dir'] as string) ?? null,
+    port: flags.port === undefined ? undefined : Number(flags.port),
+    cwd: flags.cwd as string | undefined,
+  };
+}
+
 function reportRun(res: CaptureResult): void {
   const kind = res.narrated ? 'narrated' : 'silent';
   const music = res.music ? ' + music bed' : '';
@@ -117,11 +129,7 @@ async function runCommand(rest: string[]): Promise<number> {
   const res = await runDemo({
     script,
     mode,
-    baseUrl: (flags['base-url'] as string) ?? null,
-    serve: (flags.serve as string) ?? null,
-    serveDir: (flags['serve-dir'] as string) ?? null,
-    port: flags.port ? Number(flags.port) : undefined,
-    cwd: flags.cwd as string | undefined,
+    ...serveOptions(flags),
     outputPath: flags.output as string | undefined,
     musicPath: (flags.music as string) ?? null,
     noNarrate: Boolean(flags['no-narrate']),
@@ -144,11 +152,7 @@ async function screenshotCommand(rest: string[]): Promise<number> {
   const res = await runScreenshot({
     script,
     outputPath: path.resolve(output),
-    baseUrl: (flags['base-url'] as string) ?? null,
-    serve: (flags.serve as string) ?? null,
-    serveDir: (flags['serve-dir'] as string) ?? null,
-    port: flags.port ? Number(flags.port) : undefined,
-    cwd: flags.cwd as string | undefined,
+    ...serveOptions(flags),
     fullPage: Boolean(flags['full-page']),
     selector: (flags.selector as string) ?? null,
     scale: flags.scale === undefined ? undefined : Number(flags.scale),

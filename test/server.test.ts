@@ -3,11 +3,12 @@
 //
 // With no port named it listens on one the system assigns, so two captures on one host
 // each get a server of their own. A named port that is taken fails the start with an
-// error the caller can report.
+// error the caller can report, and a port no server can listen on is refused before
+// anything is served or spawned.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -60,6 +61,18 @@ test('serve-dir on a named port serves on that port', async () => {
     } finally {
       await s.stop();
     }
+  });
+});
+
+test('a port that is not a whole number from 1 to 65535 is refused before anything is served or spawned', async () => {
+  await withSite(async (dir) => {
+    const marker = path.join(dir, 'spawned');
+    for (const port of [Number.NaN, 0, -1, 80.5, 65536]) {
+      const message = `server: the port must be a whole number from 1 to 65535 (got ${port})`;
+      await assert.rejects(ensureServer({ serveDir: dir, port, log: quiet }), { message });
+      await assert.rejects(ensureServer({ serve: `touch ${JSON.stringify(marker)}`, port, log: quiet }), { message });
+    }
+    assert.equal(existsSync(marker), false, 'no serve command was spawned');
   });
 });
 
