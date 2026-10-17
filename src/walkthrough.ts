@@ -6,7 +6,8 @@
 //
 // It still checks each step's `_Prove:_` / `_Fail if:_` assertion, so a failed proof
 // shows on screen (a red caption badge) and in the result, rather than being papered
-// over by a nice-looking video.
+// over by a nice-looking video. A terminal script is filmed the same way, in the engine's
+// terminal, with its typing paced for a viewer.
 
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,7 +16,7 @@ import { chromium, type Browser } from 'playwright';
 
 import { parseDemoScript, outputSlug, type Demo, type DemoStep } from './demo-script.ts';
 import { requireFfmpeg, run, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
-import { installPointer, runStep, joinUrl, chromiumLaunchArgs, VIEWPORT } from './browser.ts';
+import { installPointer, runStep, openSurface, chromiumLaunchArgs, VIEWPORT, type Surface } from './browser.ts';
 import { showCaption, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
 import type { CaptureResult } from './capture.ts';
 
@@ -27,8 +28,10 @@ const TAIL_MS = 1600; // a beat at the end when there is no scrutiny card
 export interface CaptureWalkthroughOptions {
   /** Reuse a browser (left open). Omit to launch and close one. */
   browser?: Browser;
-  /** Origin the start path is joined onto. */
-  baseUrl: string;
+  /** Origin a page script's start path is joined onto. A terminal script needs none. */
+  baseUrl?: string;
+  /** The directory a terminal script's shell starts in (default: the working directory). */
+  cwd?: string;
   demo: Demo | string;
   outputPath: string;
   noNarrate?: boolean;
@@ -81,15 +84,16 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
   const at = (): number => Date.now() - t0;
   let failures = 0;
   let webmPath: string | null = null;
+  let surface: Surface | null = null;
 
   try {
-    await page.goto(joinUrl(opts.baseUrl, demo.start), { waitUntil: 'load' });
+    surface = await openSurface(page, demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, backdrop: true, log });
     marks.push({ narration: demo.title, at: at() });
     await showCardOverlay(page, coverInnerHtml(BRAND, demo.title, demo.description, `${demo.steps.length} steps`), COVER_MS);
 
     for (const step of demo.steps) {
       marks.push({ narration: step.narration, at: at() });
-      const proved = await walkStep(page, opts.baseUrl, step, demo.steps.length, log);
+      const proved = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
       if (!proved) failures++;
     }
 
@@ -97,6 +101,8 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
     if (demo.scrutiny.length) await showCardOverlay(page, scrutinyInnerHtml(demo.scrutiny), Math.min(14000, Math.max(6000, demo.scrutiny.length * 2500)));
     else await page.waitForTimeout(TAIL_MS);
   } finally {
+    // The closing card is filmed over the surface, so the surface ends here, after it.
+    await surface?.close();
     // Closing the context is what flushes the .webm; the path resolves after.
     const video = page.video();
     await context.close();

@@ -5,11 +5,12 @@
 // it the browser-backed tests skip and name that command. Any other launch failure
 // fails them, so a broken browser never passes as a missing one.
 
+import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { chromium, type Browser } from 'playwright';
+import { chromium, type Browser, type Page } from 'playwright';
 
 import { chromiumLaunchArgs } from '../src/browser.ts';
 import { ensureServer } from '../src/server.ts';
@@ -97,4 +98,36 @@ export function runCli(args: string[], opts: { cwd?: string; env?: NodeJS.Proces
 /** The lines a capture prints for its steps: each step's header and its result. */
 export function stepLines(output: string): string[] {
   return output.split('\n').filter((l) => /^step \d+\/\d+: /.test(l) || /^ {2}[✓✗] /.test(l));
+}
+
+/** Width and height from a PNG's IHDR chunk. */
+export function pngSize(file: string): { width: number; height: number } {
+  const b = readFileSync(file);
+  assert.equal(b.subarray(1, 4).toString('latin1'), 'PNG', `${file} is not a PNG`);
+  return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
+}
+
+/** A PNG's RGBA pixels, decoded by the browser. */
+export async function rgba(page: Page, png: Buffer): Promise<{ width: number; data: Buffer }> {
+  const { width, b64 } = await page.evaluate(async (src) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${src}`;
+    await img.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const g = canvas.getContext('2d') as CanvasRenderingContext2D;
+    g.drawImage(img, 0, 0);
+    const data = g.getImageData(0, 0, img.width, img.height).data;
+    let bin = '';
+    for (let i = 0; i < data.length; i += 0x8000) bin += String.fromCharCode(...data.subarray(i, i + 0x8000));
+    return { width: img.width, b64: btoa(bin) };
+  }, png.toString('base64'));
+  return { width, data: Buffer.from(b64, 'base64') };
+}
+
+/** The alpha of the pixel at (x, y) of a PNG file. */
+export async function alphaAt(page: Page, file: string, x: number, y: number): Promise<number> {
+  const { width, data } = await rgba(page, readFileSync(file));
+  return data[(y * width + x) * 4 + 3];
 }

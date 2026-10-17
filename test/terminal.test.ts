@@ -1,0 +1,415 @@
+// Tests for the terminal surface (src/terminal.ts): a script that declares `**Terminal:**`
+// drives bash in a pty, attached to xterm.js in a page the engine writes, through the
+// step runner the page captures use.
+//
+// They pin what a proof reads: `run` waits for its command and reports its exit status,
+// no `exit` assertion holds while a command runs, the screen joins a row the terminal
+// wrapped, and rows and the cursor count from the top or the bottom. They pin that xterm
+// encodes each key for the terminal's cursor-key mode, that a full-screen program's
+// alternate screen, cursor addressing and colours are drawn as it sent them, and that
+// quitting it restores the shell's screen. They pin the captures: the still is the
+// terminal window with transparent corners, `--full-page` holds the whole session, the
+// shell and what it ran end with the capture, and a terminal script refuses a server, a
+// selector, or a directory that does not exist before a browser is spent.
+//
+// They need a headless Chromium and skip without one (see browser-fixture.ts).
+
+import { test, describe, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import type { Page } from 'playwright';
+
+import { parseDemoScript, parseAssertion, type Assertion, type Demo } from '../src/demo-script.ts';
+import { openSurface, runStep, runAction, checkAssertion, awaitAssertion, VIEWPORT, type StepProof } from '../src/browser.ts';
+import { captureScreenshot } from '../src/screenshot.ts';
+import { TERMINAL_WINDOW } from '../src/terminal.ts';
+import { launchBrowser, scratchDir, writeFiles, runCli, stepLines, stubFfmpeg, pngSize, rgba, alphaAt, REPO } from './browser-fixture.ts';
+
+const { browser, skip } = await launchBrowser();
+after(() => browser?.close());
+
+const SAMPLE = path.join(REPO, 'demos', 'terminal.md');
+const SAMPLE_CLI = path.join(REPO, 'examples', 'sample-cli');
+const quiet = (): void => {};
+
+/** A terminal assertion, parsed as a terminal script's `_Prove:_` line parses it. */
+function parseAssertionFor(code: string): Assertion {
+  const a = parseAssertion(code, 'terminal');
+  assert.ok(a, `\`${code}\` is not a terminal assertion`);
+  return a;
+}
+
+/** Bring `md`'s terminal up in a fresh page, hand it to `use`, then end the session and close the page. */
+async function withTerminal(md: string, cwd: string, use: (page: Page, demo: Demo, lines: string[]) => Promise<void>): Promise<void> {
+  const page = await browser!.newPage({ viewport: VIEWPORT });
+  const demo = parseDemoScript(md);
+  const lines: string[] = [];
+  const surface = await openSurface(page, demo, { cwd, log: (m) => lines.push(m) });
+  try {
+    await use(page, demo, lines);
+  } finally {
+    await surface.close();
+    await page.close();
+  }
+}
+
+/** Run every step of `demo` through the step runner, logging into `lines`. */
+async function runSteps(page: Page, demo: Demo, lines: string[]): Promise<StepProof[]> {
+  const results: StepProof[] = [];
+  for (const step of demo.steps) results.push(await runStep(page, '', step, demo.steps.length, false, (m) => lines.push(m)));
+  return results;
+}
+
+/** One RGB pixel of a PNG, as `#rrggbb`. */
+async function pixel(page: Page, png: Buffer, x: number, y: number): Promise<string> {
+  const { width, data } = await rgba(page, png);
+  const i = (Math.round(y) * width + Math.round(x)) * 4;
+  return `#${[data[i], data[i + 1], data[i + 2]].map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** The centre of the cell at a 1-based row and column of a cols x rows terminal, in CSS pixels from its window's corner. */
+async function cellCentre(page: Page, size: { cols: number; rows: number }, row: number, col: number): Promise<{ x: number; y: number }> {
+  return page.evaluate(
+    ({ size, row, col, win }) => {
+      const w = (document.querySelector(win) as HTMLElement).getBoundingClientRect();
+      const s = (document.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect();
+      return { x: s.left - w.left + ((col - 0.5) * s.width) / size.cols, y: s.top - w.top + ((row - 0.5) * s.height) / size.rows };
+    },
+    { size, row, col, win: TERMINAL_WINDOW },
+  );
+}
+
+/** A program that holds the alternate screen, records its pid, and runs until it is killed. */
+const HOLD = `import { writeFileSync } from 'node:fs';
+writeFileSync('held.pid', String(process.pid));
+process.stdout.write('\\x1b[?1049h\\x1b[Hheld');
+setInterval(() => {}, 1000);
+`;
+
+/** A program that prints, in hex, the bytes each key sends, in application cursor-key mode with \`app\`. */
+const KEYS = `const app = process.argv[2] === 'app';
+process.stdin.setRawMode(true);
+process.stdout.write('\\x1b[?1049h\\x1b[H' + (app ? '\\x1b[?1h' : '') + 'ready\\r\\n');
+process.stdin.on('data', (b) => {
+  if (b.toString() === 'q') {
+    process.stdout.write('\\x1b[?1l\\x1b[?1049l');
+    process.exit(0);
+  }
+  process.stdout.write('[' + [...b].map((x) => x.toString(16).padStart(2, '0')).join(' ') + ']\\r\\n');
+});
+`;
+
+// Each test drives a page, a session or a process of its own, so they run side by side.
+describe('the terminal surface', { concurrency: true, skip }, () => {
+  test('run waits for each command and logs its exit status, which exit assertions read', async () => {
+    const md = `# Demo: Exit status
+
+**Terminal:** 60x12
+
+## Steps
+
+1. **A command that succeeds**
+   \`run echo hello\`
+   _Prove:_ it printed — \`screen ~ /^hello$/\`
+   _Fail if:_ it failed — \`exit > 0\`
+
+2. **A command that fails**
+   \`run false\`
+   _Prove:_ the shell reports its status — \`exit == 1\`
+
+3. **A status a subshell exits with**
+   \`run (exit 3)\`
+   _Prove:_ the status is 3 — \`exit == 3\`
+`;
+    const { dir, cleanup } = scratchDir();
+    try {
+      await withTerminal(md, dir, async (page, demo, lines) => {
+        assert.equal(await checkAssertion(page, parseAssertionFor('exit == 0')), false, 'no status holds before the first command');
+        const results = await runSteps(page, demo, lines);
+        assert.deepEqual(
+          results.map((r) => r.proved),
+          [true, true, true],
+          lines.join('\n'),
+        );
+        assert.deepEqual(
+          lines.filter((l) => l.startsWith('  · ')),
+          ['  · `echo hello` exited 0', '  · `false` exited 1', '  · `(exit 3)` exited 3'],
+        );
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('no exit assertion holds while a command runs, and one holds once it finishes', async () => {
+    const md = `# Demo: Running\n\n**Terminal:** 60x12\n\n## Steps\n\n1. **s**\n   \`run true\`\n`;
+    const { dir, cleanup } = scratchDir();
+    try {
+      await withTerminal(md, dir, async (page) => {
+        const exitZero = parseAssertionFor('exit == 0');
+        await runAction(page, '', { verb: 'run', target: 'true', raw: 'run true' }, false, quiet);
+        assert.equal(await checkAssertion(page, exitZero), true);
+        await runAction(page, '', { verb: 'press', target: '"sleep 1" Enter', keys: [{ text: 'sleep 1' }, { key: 'Enter' }], raw: 'press "sleep 1" Enter' }, false, quiet);
+        assert.equal(await checkAssertion(page, exitZero), false, 'the sleep is still running');
+        assert.equal(await awaitAssertion(page, exitZero, 5000), true, 'the sleep finished with status 0');
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('the screen joins a row the terminal wrapped; rows and the cursor count from either edge', async () => {
+    const md = `# Demo: Wrap
+
+**Terminal:** 20x6
+
+## Steps
+
+1. **A line longer than the terminal is wide**
+   \`run echo abcdefghijklmnopqrstuvwxyz\`
+   _Prove:_ it reads as one line though it wrapped — \`screen ~ /^abcdefghijklmnopqrstuvwxyz$/\`
+`;
+    const { dir, cleanup } = scratchDir();
+    try {
+      await withTerminal(md, dir, async (page, demo, lines) => {
+        assert.deepEqual(await runSteps(page, demo, lines), [{ proved: true, manual: false, reason: '' }], lines.join('\n'));
+        // `$ echo abc…z` takes rows 1 and 2, its output rows 3 and 4, and the prompt row 5.
+        for (const [a, holds] of [
+          ['row 3 ~ /^abcdefghijklmnopqrst$/', true],
+          ['row 4 ~ /^uvwxyz$/', true],
+          ['row 5 ~ /^\\$$/', true],
+          ['row -2 ~ /^\\$$/', true],
+          ['row -1 ~ /^$/', true],
+          ['row 7 ~ /^$/', false],
+          ['cursor 5 3', true],
+          ['cursor -2 3', true],
+          ['cursor 5 2', false],
+        ] as const) {
+          assert.equal(await checkAssertion(page, parseAssertionFor(a)), holds, a);
+        }
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("keys reach a program encoded for the terminal's cursor-key mode", async () => {
+    const md = `# Demo: Keys\n\n**Terminal:** 60x12\n\n## Steps\n\n1. **s**\n   \`run true\`\n`;
+    const { dir, cleanup } = scratchDir();
+    try {
+      writeFiles(dir, { 'keys.mjs': KEYS });
+      await withTerminal(md, dir, async (page) => {
+        const press = (key: string) => runAction(page, '', { verb: 'press', target: key, keys: [{ key }], raw: `press ${key}` }, false, quiet);
+        const run = (command: string) => runAction(page, '', { verb: 'run', target: command, raw: `run ${command}` }, false, quiet);
+        await run('node keys.mjs');
+        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "ready"'), 5000), true);
+        await press('ArrowUp');
+        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "[1b 5b 41]"'), 5000), true, 'normal mode sends ESC [ A');
+        await press('q');
+        assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), 5000), true);
+        await run('node keys.mjs app');
+        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "ready"'), 5000), true);
+        await press('ArrowUp');
+        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "[1b 4f 41]"'), 5000), true, 'application mode sends ESC O A');
+        await press('q');
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a full-screen program's alternate screen, cursor and colours are drawn as sent, and quitting restores the shell", async () => {
+    const md = `# Demo: Board
+
+**Terminal:** 100x30
+
+## Steps
+
+1. **The board opens**
+   \`run node board.mjs\`
+   _Prove:_ its frame is along the top — \`row 1 ~ /^┌─ Sprint board ─+┐$/\`
+
+2. **Down one task**
+   \`press ArrowDown\`
+   _Prove:_ the cursor is in the second checkbox — \`cursor 4 6\`
+`;
+    await withTerminal(md, SAMPLE_CLI, async (page, demo, lines) => {
+      assert.deepEqual(
+        (await runSteps(page, demo, lines)).map((r) => r.proved),
+        [true, true],
+        lines.join('\n'),
+      );
+      assert.ok(lines.includes('  · `node board.mjs` took over the screen'), 'run settles once the board holds the alternate screen');
+      assert.equal(await checkAssertion(page, parseAssertionFor('row -1 ~ /1 of 3 done$/')), true, 'the status bar is on the bottom row');
+
+      // The board paints the selected row in 24-bit colour, the status bar in colour 24 of
+      // the 256, and leaves the rest on the terminal's background.
+      const png = await page.locator(TERMINAL_WINDOW).screenshot();
+      const at = async (row: number, col: number): Promise<string> => {
+        const c = await cellCentre(page, { cols: 100, rows: 30 }, row, col);
+        return pixel(page, png, c.x, c.y);
+      };
+      assert.equal(await at(4, 40), '#263854', 'the selected row');
+      assert.equal(await at(30, 60), '#005f87', 'the status bar');
+      assert.equal(await at(3, 40), '#0f1115', 'an unlit row');
+
+      await runAction(page, '', { verb: 'press', target: 'q', keys: [{ key: 'q' }], raw: 'press q' }, false, quiet);
+      assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), 5000), true);
+      assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ "Sprint board"')), false, 'the alternate screen is gone');
+      assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^\\$ node board\\.mjs$/')), true, 'the shell screen is back');
+      assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^1 of 3 done$/')), true);
+    });
+  });
+
+  test('--full-page holds the whole session in the window; the default holds the screen', async () => {
+    const md = `# Demo: Long\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **Fifty lines**\n   \`run seq 1 50\`\n   _Prove:_ the last is on screen — \`screen ~ /^50$/\`\n`;
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage();
+    try {
+      const shot = async (fullPage: boolean): Promise<{ rows: number; first: string | null; height: number }> => {
+        const out = path.join(dir, fullPage ? 'full.png' : 'screen.png');
+        await captureScreenshot({ page, demo: md, cwd: dir, outputPath: out, fullPage, log: quiet });
+        const { rows, first } = await page.evaluate(() => {
+          const t = (window as unknown as { __ss_term: { cursor(): { rows: number }; row(n: number): string | null } }).__ss_term;
+          return { rows: t.cursor().rows, first: t.row(1) };
+        });
+        return { rows, first, height: pngSize(out).height };
+      };
+      const screen = await shot(false);
+      const full = await shot(true);
+      assert.equal(screen.rows, 10);
+      // `$ seq 1 50`, the fifty lines, and the prompt after them.
+      assert.equal(full.rows, 52);
+      assert.equal(full.first, '$ seq 1 50');
+      assert.ok(full.height > screen.height * 4, `${full.height} is not the whole session against ${screen.height}`);
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test('the shell, and a program it still runs, end when the capture is done', async () => {
+    const md = `# Demo: Hold\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **A program that never exits**\n   \`run node hold.mjs\`\n   _Prove:_ it holds the screen — \`screen ~ "held"\`\n`;
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage();
+    try {
+      writeFiles(dir, { 'hold.mjs': HOLD });
+      const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: path.join(dir, 'held.png'), log: quiet });
+      assert.equal(res.failures, 0);
+      const pid = Number(readFileSync(path.join(dir, 'held.pid'), 'utf8'));
+      const alive = (): boolean => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const deadline = Date.now() + 5000;
+      while (alive() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+      assert.equal(alive(), false, `the program (pid ${pid}) outlived the capture`);
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test('sprintshow screenshot saves the sample terminal window at --scale 2 with transparent corners, and exits 0', async () => {
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage();
+    try {
+      const one = path.join(dir, 'one.png');
+      const two = path.join(dir, 'two.png');
+      const full = path.join(dir, 'full.png');
+      const [a, b, c] = await Promise.all([
+        runCli(['screenshot', SAMPLE, '--cwd', SAMPLE_CLI, '-o', one]),
+        runCli(['screenshot', SAMPLE, '--cwd', SAMPLE_CLI, '--scale', '2', '-o', two]),
+        runCli(['screenshot', SAMPLE, '--cwd', SAMPLE_CLI, '--full-page', '-o', full]),
+      ]);
+      for (const res of [a, b, c]) {
+        assert.equal(res.code, 0, `${res.stdout}${res.stderr}`);
+        assert.deepEqual(
+          stepLines(res.stdout).filter((l) => l.startsWith('  ')),
+          Array(6).fill('  ✓ proof held'),
+        );
+      }
+      assert.match(a.stdout, /screenshot: capturing the terminal window → one\.png/);
+      assert.match(c.stdout, /screenshot: capturing the whole terminal session → full\.png/);
+      const [s1, s2, sf] = [pngSize(one), pngSize(two), pngSize(full)];
+      assert.equal(s2.width, s1.width * 2);
+      assert.ok(Math.abs(s2.height - s1.height * 2) <= 2, `height ${s2.height} is not twice ${s1.height}`);
+      assert.equal(sf.width, s1.width);
+      assert.ok(sf.height < s1.height, 'the sample session is shorter than its screen, and the whole session is drawn tight');
+      assert.equal(await alphaAt(page, one, 0, 0), 0, 'the corner is transparent');
+      assert.equal(await alphaAt(page, one, Math.floor(s1.width / 2), Math.floor(s1.height / 2)), 255, 'the window is opaque');
+      assert.equal(readFileSync(path.join(SAMPLE_CLI, 'tasks.md'), 'utf8').split('\n')[1], '- [ ] Write the README', 'the board saved nothing');
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test('proof mode and the walkthrough film a terminal script through the runner, as the screenshot reports it', async () => {
+    const { dir, cleanup } = scratchDir();
+    try {
+      writeFiles(dir, {
+        'demo.md': `# Demo: Two commands\n\n**Terminal:** 60x12\n\n## Steps\n\n1. **One**\n   \`run echo one\`\n   _Prove:_ it printed — \`screen ~ /^one$/\`\n\n2. **Two fails**\n   \`run false\`\n   _Fail if:_ it failed — \`exit > 0\`\n`,
+      });
+      const env = { ...process.env, FFMPEG_BIN: stubFfmpeg(dir), OPENAI_API_KEY: '' };
+      const common = [path.join(dir, 'demo.md'), '--cwd', dir];
+      const [proof, walk, shot] = await Promise.all([
+        runCli(['run', ...common, '--mode', 'proof', '--no-narrate', '-o', path.join(dir, 'proof.mp4')], { cwd: dir, env }),
+        runCli(['run', ...common, '--no-narrate', '-o', path.join(dir, 'walk.mp4')], { cwd: dir, env }),
+        runCli(['screenshot', ...common, '-o', path.join(dir, 'shot.png')], { cwd: dir, env }),
+      ]);
+      const expected = ['step 1/2: One', '  ✓ proof held', 'step 2/2: Two fails', '  ✗ _Fail if:_ condition matched: `exit > 0`'];
+      for (const res of [proof, walk, shot]) {
+        assert.equal(res.code, 3, `a failed proof still saves the output\n${res.stdout}${res.stderr}`);
+        assert.deepEqual(stepLines(res.stdout), expected);
+      }
+      for (const out of ['proof.mp4', 'walk.mp4', 'shot.png']) assert.ok(existsSync(path.join(dir, out)), out);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('a terminal script refuses a server, a selector, or a missing directory before anything starts', async () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    const png = path.join(dir, 'x.png');
+    const cases: [string[], RegExp][] = [
+      [['--serve-dir', dir], /terminal: a terminal script runs in the engine's own terminal and takes no server/],
+      [['--base-url', 'http://localhost:1'], /takes no server/],
+      [['--port', '4000'], /takes no server/],
+      [['--selector', '#board'], /screenshot: a terminal script captures its terminal window; --selector picks an element of a page script/],
+      [['--cwd', path.join(dir, 'missing')], /terminal: the shell cannot start in .*missing, which is not a directory/],
+    ];
+    const results = await Promise.all(cases.map(([flags]) => runCli(['screenshot', SAMPLE, ...flags, '-o', png])));
+    results.forEach((res, i) => {
+      assert.equal(res.code, 1, `${cases[i][0].join(' ')}\n${res.stdout}${res.stderr}`);
+      assert.match(res.stderr, cases[i][1]);
+      assert.doesNotMatch(res.stdout, /terminal: bash in/, 'no shell was started');
+    });
+    const run = await runCli(['run', SAMPLE, '--serve-dir', dir, '-o', path.join(dir, 'x.mp4')]);
+    assert.equal(run.code, 1);
+    assert.match(run.stderr, /takes no server/);
+    assert.equal(existsSync(png), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('a capture whose shell cannot start fails with a reason and saves nothing', { skip }, async () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    const png = path.join(dir, 'x.png');
+    const res = await runCli(['screenshot', SAMPLE, '--cwd', SAMPLE_CLI, '-o', png], { env: { ...process.env, PATH: path.join(dir, 'empty') } });
+    assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
+    assert.match(res.stderr, /terminal: bash exited with status \d+ before its first prompt; a terminal script needs bash on PATH/);
+    assert.equal(existsSync(png), false);
+  } finally {
+    cleanup();
+  }
+});

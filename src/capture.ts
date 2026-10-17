@@ -5,7 +5,8 @@
 //
 // It accepts a ready page (the Playwright seed-test bootstrap: the caller authenticates
 // or arms the app, then hands the page in), so it owns neither the browser nor the
-// server — the caller does.
+// server — the caller does. A terminal script needs neither: the driver opens the
+// engine's terminal in the page, and ends its shell once the steps are done.
 
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
@@ -13,7 +14,7 @@ import type { Page } from 'playwright';
 
 import { parseDemoScript, slugify, outputSlug, type Demo, type DemoStep } from './demo-script.ts';
 import { assembleVideo, type Frame, type Manifest } from './assemble.ts';
-import { runStep, joinUrl, VIEWPORT } from './browser.ts';
+import { runStep, openSurface, VIEWPORT, type Surface } from './browser.ts';
 import { showCaption, removeCaption, coverInnerHtml, scrutinyInnerHtml, cardDocument } from './overlay.ts';
 
 const BRAND = 'sprintshow · proof';
@@ -21,8 +22,10 @@ const BRAND = 'sprintshow · proof';
 export interface CaptureProofOptions {
   /** A ready page — already authenticated / on the right origin if the demo needs it. */
   page: Page;
-  /** Origin the start path is joined onto. */
-  baseUrl: string;
+  /** Origin a page script's start path is joined onto. A terminal script needs none. */
+  baseUrl?: string;
+  /** The directory a terminal script's shell starts in (default: the working directory). */
+  cwd?: string;
   /** The parsed demo, or a markdown string to parse. */
   demo: Demo | string;
   /** Final mp4 path. */
@@ -51,8 +54,9 @@ interface StepResult {
   issue: { severity: 'error'; step: number; description: string; screenshot: string } | null;
 }
 
-async function proofStep(page: Page, base: string, step: DemoStep, total: number, capturesDir: string, log: (m: string) => void): Promise<StepResult> {
+async function proofStep(page: Page, base: string, step: DemoStep, total: number, capturesDir: string, surface: Surface, log: (m: string) => void): Promise<StepResult> {
   const { proved, manual, reason } = await runStep(page, base, step, total, false, log);
+  await surface.settle();
 
   const file = `${String(step.index).padStart(2, '0')}-${slugify(step.narration).slice(0, 40)}.png`;
   await showCaption(page, step.index, total, step.narration, !proved);
@@ -107,14 +111,19 @@ export async function captureProof(opts: CaptureProofOptions): Promise<CaptureRe
   mkdirSync(path.dirname(path.resolve(opts.outputPath)), { recursive: true });
 
   await page.setViewportSize(VIEWPORT).catch(() => {});
-  await page.goto(joinUrl(baseUrl, demo.start), { waitUntil: 'load' });
+  const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, backdrop: true, log });
 
   const frames: Frame[] = [];
   const issues: NonNullable<StepResult['issue']>[] = [];
-  for (const step of demo.steps) {
-    const { frame, issue } = await proofStep(page, baseUrl, step, demo.steps.length, capturesDir, log);
-    frames.push(frame);
-    if (issue) issues.push(issue);
+  try {
+    for (const step of demo.steps) {
+      const { frame, issue } = await proofStep(page, baseUrl ?? '', step, demo.steps.length, capturesDir, surface, log);
+      frames.push(frame);
+      if (issue) issues.push(issue);
+    }
+  } finally {
+    // The cards below replace the page, so the surface is done once the steps are.
+    await surface.close();
   }
   const failures = issues.length;
 
