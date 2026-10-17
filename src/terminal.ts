@@ -62,7 +62,8 @@ const FOREIGN_TERMINAL_VARS = [
 /** Variables that would change the session's prompt, its line editing, or what bash runs at start. */
 const SHELL_STATE_VARS = ['PROMPT_COMMAND', 'PS0', 'PS2', 'SHELLOPTS', 'BASHOPTS', 'BASH_ENV', 'ENV'];
 
-const FONT_SIZES = { max: 24, min: 8 };
+/** The font sizes the terminal is drawn at: the largest at which the window fits the stage. */
+const FONT_SIZES = { max: 24, min: 1 };
 /** The stage the window is fitted to: the viewport less a margin all round and the caption bar's band at the bottom. */
 const STAGE = { margin: 24, band: 72 };
 const WINDOW = { titlebar: 32, padX: 14, padY: 12 };
@@ -192,17 +193,20 @@ interface InstallOptions {
 
 /**
  * Runs in the page: create the terminal, fit its font to the stage, keep the state the
- * prompt's marks report, and expose `window.__ss_term`.
+ * prompt's marks report, and expose `window.__ss_term`. Returns whether the window fits
+ * the stage, which it does at some font size for every size the parser accepts at the
+ * drivers' viewport.
  *
  * A screen is what the terminal displays now: the last `rows` lines of the buffer on the
  * normal screen, or the alternate screen while a full-screen program holds it.
  */
-function installTerminal(o: InstallOptions): void {
+function installTerminal(o: InstallOptions): boolean {
   const w = window as unknown as Record<string, any>;
   const term = new w.Terminal({ cols: o.cols, rows: o.rows, fontFamily: o.fontFamily, fontSize: o.fontSizes.max, scrollback: o.scrollback, cursorBlink: false, theme: o.theme });
   term.open(document.getElementById('ss-terminal'));
 
-  // The largest font at which the window fits the stage.
+  // The largest font at which the window fits the stage. The window grows with the font,
+  // so the first size down that fits is the largest.
   const fits = (): boolean => {
     const box = (term.element.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect();
     const width = box.width + 2 * o.window.padX;
@@ -288,6 +292,7 @@ function installTerminal(o: InstallOptions): void {
     painted: () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
   };
   w.__ss_term = api;
+  return fits();
 }
 
 /**
@@ -485,7 +490,10 @@ export async function openTerminal(page: Page, o: TerminalOptions): Promise<Term
     theme: THEME,
     inputBinding: INPUT_BINDING,
   };
-  await page.evaluate(installTerminal, install);
+  if (!(await page.evaluate(installTerminal, install))) {
+    const [width, height] = await page.evaluate(() => [innerWidth, innerHeight]);
+    throw new Error(`terminal: a ${o.spec.cols}x${o.spec.rows} terminal does not fit a ${width}x${height} page even at ${FONT_SIZES.min} px`);
+  }
 
   let child: IPty;
   try {

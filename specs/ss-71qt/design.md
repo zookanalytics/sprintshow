@@ -165,10 +165,13 @@ not the demo's.
 ### Framing the captures
 
 The terminal page draws a window: a title bar with the demo's title, and the terminal
-below it in a dark theme that matches the engine's cards. The font size is the largest
-from 24 px down to 8 px that fits the declared size in the stage. The stage is the
-viewport less a margin and the band the caption bar takes, so one script shows the same
-text size in a still and in a video.
+below it in a dark theme that matches the engine's cards. The font size is the largest,
+from 24 px down, at which the window fits the stage. The stage is the viewport less a
+margin and the band the caption bar takes, so one script shows the same text size in a
+still and in a video. Every size the parser accepts fits the drivers' 1280x900 viewport
+whole, with no column or row outside a video frame or under its caption bar, and the
+largest sizes draw at a few pixels. A page too small to fit a terminal even at 1 px
+refuses it before its shell starts.
 
 - **The still.** `sprintshow screenshot` captures the window, not the viewport. The page
   paints nothing around the window, and a terminal capture always leaves out the default

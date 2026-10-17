@@ -177,9 +177,11 @@ A matcher is as in a page script's `text` assertion, and a `/regex/` is tested w
 **Captures.** `sprintshow screenshot` saves the terminal window, title bar included, with
 its rounded corners transparent. `--full-page` captures the whole session instead of the
 screen: one row for each line it holds, scrollback included. `--selector` is for page
-scripts. The videos show the window on a dark backdrop, above the caption bar. Once a
-capture is done, the shell and every program it still runs are ended, and a program that
-ignores SIGHUP is killed.
+scripts. The videos show the window on a dark backdrop, above the caption bar. Every
+capture draws the window at the largest font size, up to 24 px, at which it fits a video
+frame above the caption bar, so a very wide or tall terminal draws small. Once a capture
+is done, the shell and every program it still runs are ended, and a program that ignores
+SIGHUP is killed.
 `specs/ss-71qt/design.md` records why the surface is built this way.
 
 ## Exit codes

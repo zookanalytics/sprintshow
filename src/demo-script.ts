@@ -128,8 +128,9 @@ export interface TerminalSpec {
 
 /** The terminal a `**Terminal:**` line with no size gets. */
 export const DEFAULT_TERMINAL: TerminalSpec = { cols: 100, rows: 30 };
-const TERMINAL_COLS = { min: 20, max: 300 };
-const TERMINAL_ROWS = { min: 5, max: 100 };
+/** The columns and rows a `**Terminal:**` size may name. Every size in range is drawn whole in a capture. */
+export const TERMINAL_COLS = { min: 20, max: 300 };
+export const TERMINAL_ROWS = { min: 5, max: 100 };
 
 /** A `_Prove:_` / `_Fail if:_` contract line: human prose plus an optional machine assertion. */
 export interface Contract {

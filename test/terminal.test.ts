@@ -10,8 +10,9 @@
 // quitting it restores the shell's screen. They pin the captures: the still is the
 // terminal window with transparent corners, `--full-page` holds the whole session, and a
 // terminal script refuses a server, a selector, or a directory that does not exist before
-// a browser is spent. The shell and every program it still runs end before the capture
-// returns, even a program that handles SIGHUP.
+// a browser is spent. A video frame shows every cell of a terminal at each limit of the
+// sizes the parser accepts, clear of the caption bar. The shell and every program it
+// still runs end before the capture returns, even a program that handles SIGHUP.
 //
 // They need a headless Chromium and skip without one (see browser-fixture.ts).
 
@@ -22,8 +23,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { parseDemoScript, parseAssertion, type Assertion, type Demo } from '../src/demo-script.ts';
-import { openSurface, runStep, runAction, checkAssertion, awaitAssertion, VIEWPORT, type StepProof } from '../src/browser.ts';
+import { parseDemoScript, parseAssertion, TERMINAL_COLS, TERMINAL_ROWS, type Assertion, type Demo } from '../src/demo-script.ts';
+import { openSurface, runStep, runAction, checkAssertion, awaitAssertion, VIEWPORT, type StepProof, type Surface } from '../src/browser.ts';
+import { showCaption } from '../src/overlay.ts';
 import { captureScreenshot } from '../src/screenshot.ts';
 import { TERMINAL_WINDOW } from '../src/terminal.ts';
 import { launchBrowser, scratchDir, writeFiles, runCli, stepLines, stubFfmpeg, pngSize, rgba, alphaAt, REPO } from './browser-fixture.ts';
@@ -103,6 +105,44 @@ function running(pid: number): boolean {
   const stat = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim();
   return stat !== '' && !stat.startsWith('Z');
 }
+
+/** A full-screen program that hides the cursor, paints its screen's corner cells in CORNERS' colours, and holds. */
+const PAINT_CORNERS = `const [cols, rows] = [process.stdout.columns, process.stdout.rows];
+const cell = (row, col, rgb) => '\\x1b[' + row + ';' + col + 'H\\x1b[48;2;' + rgb + 'm \\x1b[0m';
+process.stdout.write('\\x1b[?1049h\\x1b[?25l' + cell(1, 1, '255;0;0') + cell(1, cols, '0;255;0') + cell(rows, 1, '0;0;255') + cell(rows, cols, '255;255;0'));
+setInterval(() => {}, 1000);
+`;
+
+/** The corner cells PAINT_CORNERS paints, each at a 1-based row and column from the top left, or from the bottom right when negative. */
+const CORNERS: { row: number; col: number; colour: string }[] = [
+  { row: 1, col: 1, colour: '#ff0000' },
+  { row: 1, col: -1, colour: '#00ff00' },
+  { row: -1, col: 1, colour: '#0000ff' },
+  { row: -1, col: -1, colour: '#ffff00' },
+];
+
+/**
+ * Where xterm drew the cell whose background is `colour`: its row and column, counted
+ * from 1 through the rows and cells xterm drew, and its box in the page. Null when no
+ * drawn cell has that background.
+ */
+async function drawnCell(page: Page, colour: string): Promise<{ row: number; col: number; box: DOMRect } | null> {
+  return page.evaluate((hex) => {
+    const rgb = `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
+    const rows = [...document.querySelectorAll('.xterm-rows > div')];
+    for (const [r, line] of rows.entries()) {
+      let col = 1;
+      for (const node of line.childNodes) {
+        if (node instanceof HTMLElement && getComputedStyle(node).backgroundColor === rgb) return { row: r + 1, col, box: node.getBoundingClientRect().toJSON() as DOMRect };
+        col += (node.textContent ?? '').length;
+      }
+    }
+    return null;
+  }, colour);
+}
+
+/** The corners of the range of sizes the parser accepts: its most and fewest columns, each with its most and fewest rows. */
+const SIZE_LIMITS = [TERMINAL_COLS.max, TERMINAL_COLS.min].flatMap((cols) => [TERMINAL_ROWS.max, TERMINAL_ROWS.min].map((rows) => ({ cols, rows })));
 
 /** A program that prints, in hex, the bytes each key sends, in application cursor-key mode with \`app\`. */
 const KEYS = `const app = process.argv[2] === 'app';
@@ -361,6 +401,58 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
       for (const pid of names.map(pidOf)) if (pid > 1 && running(pid)) process.kill(pid, 'SIGKILL');
       await page.close();
       cleanup();
+    }
+  });
+
+  for (const size of SIZE_LIMITS) {
+    test(`a ${size.cols}x${size.rows} terminal is drawn whole in a video frame, its corner cells clear of the caption bar`, async () => {
+      const md = `# Demo: Corners\n\n**Terminal:** ${size.cols}x${size.rows}\n\n## Steps\n\n1. **s**\n   \`run node corners.mjs\`\n`;
+      const { dir, cleanup } = scratchDir();
+      writeFiles(dir, { 'corners.mjs': PAINT_CORNERS });
+      // A video frame: the window on the backdrop, at the drivers' viewport, under the step's caption.
+      const page = await browser!.newPage({ viewport: VIEWPORT });
+      let surface: Surface | null = null;
+      try {
+        surface = await openSurface(page, parseDemoScript(md), { cwd: dir, backdrop: true, log: quiet });
+        await runAction(page, '', { verb: 'run', target: 'node corners.mjs', raw: 'run node corners.mjs' }, false, quiet);
+        await surface.settle();
+        await showCaption(page, 1, 1, 's', false);
+        const png = await page.screenshot();
+        const box = (selector: string) => page.locator(selector).evaluate((el) => el.getBoundingClientRect().toJSON() as DOMRect);
+        const [win, screen, caption] = await Promise.all([box(TERMINAL_WINDOW), box('.xterm-screen'), box('#__ss_caption__')]);
+        const where = `window ${JSON.stringify(win)}, screen ${JSON.stringify(screen)}`;
+        assert.ok(win.left >= 0 && win.top >= 0 && win.right <= VIEWPORT.width, `the window is inside the frame: ${where}`);
+        assert.ok(win.bottom <= caption.top, `the window clears the caption bar at ${caption.top}: ${where}`);
+        assert.ok(screen.left >= win.left && screen.right <= win.right && screen.top >= win.top && screen.bottom <= win.bottom, `the window holds the whole screen: ${where}`);
+        for (const { row, col, colour } of CORNERS) {
+          const corner = { row: row > 0 ? row : size.rows + row + 1, col: col > 0 ? col : size.cols + col + 1 };
+          const cell = await drawnCell(page, colour);
+          assert.ok(cell, `no cell is drawn in ${colour}`);
+          assert.deepEqual({ row: cell.row, col: cell.col }, corner, `the ${colour} cell is drawn at its corner`);
+          const [x, y] = [cell.box.left + cell.box.width / 2, cell.box.top + cell.box.height / 2];
+          assert.ok(x >= screen.left && x < screen.right && y >= screen.top && y < screen.bottom, `the cell at row ${corner.row}, column ${corner.col} is inside the screen: (${x}, ${y}), ${where}`);
+          assert.equal(await pixel(page, png, x, y), colour, `the frame shows the cell at row ${corner.row}, column ${corner.col} at (${Math.round(x)}, ${Math.round(y)})`);
+        }
+      } finally {
+        await surface?.close();
+        await page.close();
+        cleanup();
+      }
+    });
+  }
+
+  test('a terminal that cannot fit its page at any font size is refused before its shell starts', async () => {
+    const size = `${TERMINAL_COLS.max}x${TERMINAL_ROWS.max}`;
+    const md = `# Demo: Too big\n\n**Terminal:** ${size}\n\n## Steps\n\n1. **s**\n   \`run true\`\n`;
+    const page = await browser!.newPage({ viewport: { width: 200, height: 150 } });
+    const lines: string[] = [];
+    try {
+      // A surface that opens anyway is closed, so its shell does not outlive the test.
+      const opened = openSurface(page, parseDemoScript(md), { log: (m) => lines.push(m) }).then((surface) => surface.close());
+      await assert.rejects(opened, new RegExp(`terminal: a ${size} terminal does not fit a 200x150 page even at 1 px`));
+      assert.deepEqual(lines, [], 'no shell was started');
+    } finally {
+      await page.close();
     }
   });
 
