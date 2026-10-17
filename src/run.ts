@@ -11,7 +11,7 @@ import { parseDemoScript, outputSlug, type Demo } from './demo-script.ts';
 import { ensureServer, type ServeOptions } from './server.ts';
 import { captureProof, type CaptureResult } from './capture.ts';
 import { captureWalkthrough } from './walkthrough.ts';
-import { captureScreenshot, AREA_CONFLICT, type ScreenshotResult } from './screenshot.ts';
+import { captureScreenshot, AREA_CONFLICT, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
 import { chromiumLaunchArgs, VIEWPORT } from './browser.ts';
 
 export type CaptureMode = 'proof' | 'walkthrough';
@@ -92,20 +92,11 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
   }
 }
 
-export interface RunScreenshotOptions extends ServeOptions {
+export interface RunScreenshotOptions extends ServeOptions, Pick<CaptureScreenshotOptions, 'outputPath' | 'fullPage' | 'selector' | 'transparent' | 'log'> {
   /** Path to a demo-script markdown file, or the parsed demo. */
   script: string | Demo;
-  /** The PNG path. */
-  outputPath: string;
-  /** Capture the whole scrollable page instead of the viewport. */
-  fullPage?: boolean;
-  /** Capture one element, the selector's first match, once it is visible. */
-  selector?: string | null;
   /** Device scale factor (default 1): PNG pixels per CSS pixel along each axis. At 2, text stays sharp in a PNG shown at half its size. */
   scale?: number;
-  /** Leave out the page's default white background. */
-  transparent?: boolean;
-  log?: (m: string) => void;
 }
 
 /**
