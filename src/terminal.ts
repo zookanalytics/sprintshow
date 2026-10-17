@@ -401,7 +401,9 @@ export async function openTerminal(page: Page, o: TerminalOptions): Promise<Term
 
   // The pty's output goes to the page in the order it arrived. Output that arrives while
   // a hand-off is in flight waits for it and goes in the next one. The page is told the
-  // shell exited only after all of its output.
+  // shell exited only after all of its output. node-pty drops output that no listener
+  // takes, so the listeners below attach in the same tick as the spawn, with no await
+  // between them, or the first prompt can be lost.
   let pending = '';
   let pumping: Promise<void> | null = null;
   let detached = false;
