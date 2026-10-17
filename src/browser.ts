@@ -219,9 +219,14 @@ export interface StepProof {
  * Every capture drives its steps through here, so a proof means the same thing in a
  * video and in a screenshot. The step and its result are logged in the form every
  * capture prints.
+ *
+ * `beforeActions` runs after the step's header line is logged and before its actions. A
+ * driver that draws something for the step, such as the walkthrough's caption, draws it
+ * there, so when drawing it fails, the last line logged names the step that was starting.
  */
-export async function runStep(page: Page, base: string, step: DemoStep, total: number, humanize: boolean, log: (m: string) => void): Promise<StepProof> {
+export async function runStep(page: Page, base: string, step: DemoStep, total: number, humanize: boolean, log: (m: string) => void, beforeActions?: () => Promise<void>): Promise<StepProof> {
   log(`step ${step.index}/${total}: ${step.narration}`);
+  await beforeActions?.();
   for (const act of step.actions) await runAction(page, base, act, humanize, log);
 
   // A prove-assertion must become true; a failIf-assertion becoming true overrides it.

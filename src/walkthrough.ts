@@ -47,8 +47,7 @@ interface SegMark {
 }
 
 async function walkStep(page: import('playwright').Page, base: string, step: DemoStep, total: number, log: (m: string) => void): Promise<boolean> {
-  await showCaption(page, step.index, total, step.narration, false);
-  const { proved } = await runStep(page, base, step, total, true, log);
+  const { proved } = await runStep(page, base, step, total, true, log, () => showCaption(page, step.index, total, step.narration, false));
   if (!proved) {
     await showCaption(page, step.index, total, step.narration, true);
     await page.waitForTimeout(FAIL_HOLD_MS);

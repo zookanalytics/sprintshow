@@ -3,9 +3,10 @@
 //
 // A step's actions run first, then its proof is checked against the live page: a
 // `_Prove:_` assertion must hold within PROVE_TIMEOUT, a `_Fail if:_` assertion that
-// matches overrides it, and a step with neither records a manual proof. These tests pin
-// that against a real page, and pin that proof mode and the screenshot capture report the
-// same script's steps alike.
+// matches overrides it, and a step with neither records a manual proof. A driver's
+// `beforeActions` hook runs between the step's header line and its actions. These tests
+// pin that against a real page, and pin that proof mode and the screenshot capture report
+// the same script's steps alike.
 //
 // They need a headless Chromium and skip without one (see browser-fixture.ts).
 
@@ -79,6 +80,35 @@ describe('the step runner', { concurrency: true, skip }, () => {
         'step 3/3: A step with no machine assertion records a manual proof',
         '  ✓ (manual — no machine assertion)',
       ]);
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
+
+  test('runStep: beforeActions runs after the step header and before the actions, and when it fails the header is the last line', async () => {
+    const site = await serveSite({ 'index.html': APP });
+    const page = await browser!.newPage();
+    try {
+      await page.goto(joinUrl(site.baseUrl, '/'));
+      const [step] = parseDemoScript(SCRIPT).steps;
+      const lines: string[] = [];
+      const log = (m: string): void => {
+        lines.push(m);
+      };
+      const result = await runStep(page, site.baseUrl, step, 3, false, log, async () => {
+        lines.push(`before: ${await page.locator('.item').count()} item(s)`);
+      });
+      assert.deepEqual(result, { proved: true, manual: false, reason: '' });
+      assert.deepEqual(lines, ['step 1/3: An action runs before the proof is checked', 'before: 0 item(s)', '  ✓ proof held']);
+
+      lines.length = 0;
+      const drawFails = async (): Promise<void> => {
+        throw new Error('the page closed');
+      };
+      await assert.rejects(runStep(page, site.baseUrl, step, 3, false, log, drawFails), { message: 'the page closed' });
+      assert.deepEqual(lines, ['step 1/3: An action runs before the proof is checked']);
+      assert.equal(await page.locator('.item').count(), 1, 'the actions did not run');
     } finally {
       await page.close();
       await site.close();
