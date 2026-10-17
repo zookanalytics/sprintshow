@@ -1,16 +1,17 @@
-// The one-command orchestrator behind `sprintshow run`: bring up the server, drive the
-// demo in the chosen mode, tear the server down. The two drivers own the browser
-// (walkthrough needs a recorded context; proof takes a plain page), so this layer only
-// wires the server seam to them.
+// The one-command orchestrators behind `sprintshow run` and `sprintshow screenshot`:
+// bring up the server, drive the demo, tear the server down. The walkthrough driver
+// opens its own recorded context. The proof and screenshot drivers take a plain page,
+// which this layer launches a browser for.
 
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { chromium } from 'playwright';
+import { chromium, type BrowserContextOptions, type Page } from 'playwright';
 
 import { parseDemoScript, outputSlug, type Demo } from './demo-script.ts';
 import { ensureServer, type ServeOptions } from './server.ts';
 import { captureProof, type CaptureResult } from './capture.ts';
 import { captureWalkthrough } from './walkthrough.ts';
+import { captureScreenshot, AREA_CONFLICT, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
 import { chromiumLaunchArgs, VIEWPORT } from './browser.ts';
 
 export type CaptureMode = 'proof' | 'walkthrough';
@@ -42,6 +43,16 @@ function slugName(title: string): string {
   return title.replace(/[^A-Za-z0-9._-]+/g, '-');
 }
 
+/** Launch a headless Chromium, hand `use` a new page made with `pageOpts`, and close the browser once `use` settles. */
+async function withHeadlessPage<T>(pageOpts: BrowserContextOptions, use: (page: Page) => Promise<T>): Promise<T> {
+  const browser = await chromium.launch({ headless: true, args: chromiumLaunchArgs() });
+  try {
+    return await use(await browser.newPage(pageOpts));
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
 export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
   const { demo, name } = loadDemo(opts.script);
@@ -64,10 +75,8 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
       });
     }
 
-    const browser = await chromium.launch({ headless: true, args: chromiumLaunchArgs() });
-    try {
-      const page = await browser.newPage({ viewport: VIEWPORT });
-      return await captureProof({
+    return await withHeadlessPage({ viewport: VIEWPORT }, (page) =>
+      captureProof({
         page,
         baseUrl: server.baseUrl,
         demo,
@@ -76,10 +85,48 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
         musicPath: opts.musicPath,
         keep: opts.keep,
         log,
-      });
-    } finally {
-      await browser.close().catch(() => {});
-    }
+      }),
+    );
+  } finally {
+    await server.stop();
+  }
+}
+
+export interface RunScreenshotOptions extends ServeOptions, Pick<CaptureScreenshotOptions, 'outputPath' | 'fullPage' | 'selector' | 'transparent' | 'log'> {
+  /** Path to a demo-script markdown file, or the parsed demo. */
+  script: string | Demo;
+  /** Device scale factor (default 1): PNG pixels per CSS pixel along each axis. At 2, text stays sharp in a PNG shown at half its size. */
+  scale?: number;
+}
+
+/**
+ * Bring up the server, drive the demo's steps in a fresh headless page at `scale`, save
+ * the state the last step leaves as a PNG, and tear the server down. A failed proof
+ * still saves the PNG and is counted in `failures`.
+ */
+export async function runScreenshot(opts: RunScreenshotOptions): Promise<ScreenshotResult> {
+  const log = opts.log ?? ((m: string) => console.log(m));
+  const scale = opts.scale ?? 1;
+  // Checked before a server or a browser is spent on a capture that cannot happen.
+  if (!(Number.isFinite(scale) && scale > 0)) throw new Error(`screenshot: the scale must be a positive number (got ${opts.scale})`);
+  if (opts.fullPage && opts.selector) throw new Error(AREA_CONFLICT);
+  const { demo } = loadDemo(opts.script);
+  log(`demo: "${demo.title}" — ${demo.steps.length} steps · screenshot`);
+
+  const server = await ensureServer(opts);
+  try {
+    return await withHeadlessPage({ viewport: VIEWPORT, deviceScaleFactor: scale }, (page) =>
+      captureScreenshot({
+        page,
+        baseUrl: server.baseUrl,
+        demo,
+        outputPath: opts.outputPath,
+        fullPage: opts.fullPage,
+        selector: opts.selector,
+        transparent: opts.transparent,
+        log,
+      }),
+    );
   } finally {
     await server.stop();
   }

@@ -1,20 +1,24 @@
 #!/usr/bin/env node
-// The `sprintshow` command: run / assemble / lint. Thin — it parses flags and calls the
-// library, which is where the behaviour lives.
+// The `sprintshow` command: run / screenshot / assemble / lint. Thin — it parses flags and
+// calls the library, which is where the behaviour lives.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { runDemo, type CaptureMode } from './run.ts';
+import { runDemo, runScreenshot, type CaptureMode } from './run.ts';
 import { assembleVideo, type AssembleResult } from './assemble.ts';
 import { lintCli } from './lint.ts';
 import { outputSlug } from './demo-script.ts';
 import type { CaptureResult } from './capture.ts';
+import type { ServeOptions } from './server.ts';
 
 const HELP = `sprintshow — auto-generate a quick, unpolished demo video of what your app (or agent) just did.
 
 Usage:
   sprintshow run <demo.md> [options]           Drive a demo script and produce an mp4
+  sprintshow screenshot <demo.md> -o <file.png> [options]
+                                               Drive a demo script and save the state its
+                                               last step leaves as one PNG
   sprintshow assemble <captures-dir> [options]  Frames + manifest.json → narrated mp4
   sprintshow lint <demo.md> [--strict]         Check a demo script before capturing
 
@@ -24,13 +28,31 @@ run options:
   --base-url <url>            Drive against a server already running.
   --serve "<command>"         Spawn a dev-server command, wait for it, then tear it down.
   --serve-dir <dir>           Serve a static directory with the built-in file server.
-  --port <n>                  Port for --serve / --serve-dir (default 5173).
+  --port <n>                  Port for --serve (default 5173) or --serve-dir (default: a
+                              free port the system assigns).
   --cwd <dir>                 Working directory for --serve.
   -o, --output <file.mp4>     Output path (default demos/<script-name>.mp4).
   --music <file>              Mix a background-music bed under the narration.
   --no-narrate                Force a silent video even with OPENAI_API_KEY set.
   --keep                      Keep the .captures/<run>/ working dir.
   --headed                    Launch the browser headed (walkthrough).
+
+screenshot options:
+  --base-url, --serve, --serve-dir, --port, --cwd
+                              Where the pages come from, as for run.
+  -o, --output <file.png>     Output path (required).
+  --full-page                 Capture the whole scrollable page instead of the viewport.
+  --selector <css>            Capture one element, its first match, once it is visible.
+  --scale <n>                 Device scale factor (default 1). At 2, text stays sharp in
+                              a PNG shown at half its size.
+  --transparent               Leave out the page's default white background.
+  Each step's proof is checked as proof mode checks it, with no caption drawn, and
+  neither ffmpeg nor OPENAI_API_KEY is needed.
+
+run and screenshot exit codes:
+  0                           The output is saved and every step's proof held.
+  3                           The output is saved, but a step's proof failed.
+  1                           No output is saved.
 
 assemble options:
   -o, --output <file.mp4>     Output path (default demos/<dir-name>.mp4).
@@ -40,7 +62,7 @@ assemble options:
 Narration is optional: set OPENAI_API_KEY to voice the steps (tts-1/nova; override with
 DEMO_TTS_MODEL / DEMO_TTS_VOICE). Without it the mp4 is silent and captioned.`;
 
-const BOOLEAN_FLAGS = new Set(['no-narrate', 'keep', 'headed', 'strict']);
+const BOOLEAN_FLAGS = new Set(['no-narrate', 'keep', 'headed', 'strict', 'full-page', 'transparent']);
 
 interface Parsed {
   pos: string[];
@@ -72,6 +94,25 @@ function takeValue(flag: string, v: string | undefined): string {
   return v;
 }
 
+/** The server options from the flags `run` and `screenshot` share. The server checks the port. */
+function serveOptions(flags: Parsed['flags']): ServeOptions {
+  return {
+    baseUrl: (flags['base-url'] as string) ?? null,
+    serve: (flags.serve as string) ?? null,
+    serveDir: (flags['serve-dir'] as string) ?? null,
+    port: flags.port === undefined ? undefined : Number(flags.port),
+    cwd: flags.cwd as string | undefined,
+  };
+}
+
+/**
+ * The exit code of a capture command that saved its output: 0 when every step's proof
+ * held, 3 when one failed. A capture that saves nothing throws, and main() exits 1.
+ */
+function savedExit(failures: number): number {
+  return failures > 0 ? 3 : 0;
+}
+
 function reportRun(res: CaptureResult): void {
   const kind = res.narrated ? 'narrated' : 'silent';
   const music = res.music ? ' + music bed' : '';
@@ -100,11 +141,7 @@ async function runCommand(rest: string[]): Promise<number> {
   const res = await runDemo({
     script,
     mode,
-    baseUrl: (flags['base-url'] as string) ?? null,
-    serve: (flags.serve as string) ?? null,
-    serveDir: (flags['serve-dir'] as string) ?? null,
-    port: flags.port ? Number(flags.port) : undefined,
-    cwd: flags.cwd as string | undefined,
+    ...serveOptions(flags),
     outputPath: flags.output as string | undefined,
     musicPath: (flags.music as string) ?? null,
     noNarrate: Boolean(flags['no-narrate']),
@@ -112,7 +149,31 @@ async function runCommand(rest: string[]): Promise<number> {
     headed: Boolean(flags.headed),
   });
   reportRun(res);
-  return res.failures > 0 ? 1 : 0;
+  return savedExit(res.failures);
+}
+
+async function screenshotCommand(rest: string[]): Promise<number> {
+  const { pos, flags } = collect(rest);
+  const script = pos[0];
+  const output = flags.output as string | undefined;
+  if (!script || !output) {
+    console.error(`screenshot: ${script ? 'an output path (-o <file.png>)' : 'a demo-script path'} is required.\n`);
+    console.log(HELP);
+    return 1;
+  }
+  const res = await runScreenshot({
+    script,
+    outputPath: path.resolve(output),
+    ...serveOptions(flags),
+    fullPage: Boolean(flags['full-page']),
+    selector: (flags.selector as string) ?? null,
+    scale: flags.scale === undefined ? undefined : Number(flags.scale),
+    transparent: Boolean(flags.transparent),
+  });
+  console.log('');
+  console.log(`✅ screenshot → ${path.relative(process.cwd(), res.outputPath)}`);
+  if (res.failures > 0) console.log(`   ⚠️  ${res.failures} step(s) failed their proof — the screenshot shows the state they left`);
+  return savedExit(res.failures);
 }
 
 async function assembleCommand(rest: string[]): Promise<number> {
@@ -158,6 +219,8 @@ async function main(): Promise<number> {
   switch (cmd) {
     case 'run':
       return runCommand(rest);
+    case 'screenshot':
+      return screenshotCommand(rest);
     case 'assemble':
       return assembleCommand(rest);
     case 'lint': {
