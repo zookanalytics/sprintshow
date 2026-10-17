@@ -151,7 +151,7 @@ describe('the step runner', { concurrency: true, skip }, () => {
         'step 3/3: A step with no machine assertion records a manual proof',
         '  ✓ (manual — no machine assertion)',
       ];
-      assert.equal(proof.code, 1, `a failed proof fails the run\n${proof.stdout}${proof.stderr}`);
+      assert.equal(proof.code, 3, `a failed proof still saves the video\n${proof.stdout}${proof.stderr}`);
       assert.deepEqual(stepLines(proof.stdout), expected);
       assert.equal(shot.code, 3, `a failed proof still saves the screenshot\n${shot.stdout}${shot.stderr}`);
       assert.deepEqual(stepLines(shot.stdout), expected);

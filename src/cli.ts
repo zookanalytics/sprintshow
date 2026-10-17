@@ -47,8 +47,12 @@ screenshot options:
                               a PNG shown at half its size.
   --transparent               Leave out the page's default white background.
   Each step's proof is checked as proof mode checks it, with no caption drawn, and
-  neither ffmpeg nor OPENAI_API_KEY is needed. Exits 0 when the PNG is saved and every
-  proof held, 3 when it is saved but a step's proof failed, 1 when no PNG is saved.
+  neither ffmpeg nor OPENAI_API_KEY is needed.
+
+run and screenshot exit codes:
+  0                           The output is saved and every step's proof held.
+  3                           The output is saved, but a step's proof failed.
+  1                           No output is saved.
 
 assemble options:
   -o, --output <file.mp4>     Output path (default demos/<dir-name>.mp4).
@@ -101,6 +105,14 @@ function serveOptions(flags: Parsed['flags']): ServeOptions {
   };
 }
 
+/**
+ * The exit code of a capture command that saved its output: 0 when every step's proof
+ * held, 3 when one failed. A capture that saves nothing throws, and main() exits 1.
+ */
+function savedExit(failures: number): number {
+  return failures > 0 ? 3 : 0;
+}
+
 function reportRun(res: CaptureResult): void {
   const kind = res.narrated ? 'narrated' : 'silent';
   const music = res.music ? ' + music bed' : '';
@@ -137,7 +149,7 @@ async function runCommand(rest: string[]): Promise<number> {
     headed: Boolean(flags.headed),
   });
   reportRun(res);
-  return res.failures > 0 ? 1 : 0;
+  return savedExit(res.failures);
 }
 
 async function screenshotCommand(rest: string[]): Promise<number> {
@@ -160,11 +172,8 @@ async function screenshotCommand(rest: string[]): Promise<number> {
   });
   console.log('');
   console.log(`✅ screenshot → ${path.relative(process.cwd(), res.outputPath)}`);
-  if (res.failures > 0) {
-    console.log(`   ⚠️  ${res.failures} step(s) failed their proof — the screenshot shows the state they left`);
-    return 3;
-  }
-  return 0;
+  if (res.failures > 0) console.log(`   ⚠️  ${res.failures} step(s) failed their proof — the screenshot shows the state they left`);
+  return savedExit(res.failures);
 }
 
 async function assembleCommand(rest: string[]): Promise<number> {

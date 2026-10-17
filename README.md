@@ -106,9 +106,14 @@ element, its first match, once that element is visible. `--scale <n>` sets the d
 factor. `--transparent` leaves out the page's default white background, so on a page that
 paints no background of its own, an element with rounded corners keeps transparent corners.
 
-The exit code says what was saved. It is 0 when the PNG is saved and every proof held, and 3
-when the PNG is saved but a step's proof failed, because the capture still shows what
-failed. It is 1 when no PNG is saved.
+## Exit codes
+
+The exit code of `run` and `screenshot` says what was saved:
+
+- **0**: the output (the MP4 or the PNG) is saved and every step's proof held.
+- **3**: the output is saved, but at least one step's proof failed. The output still shows
+  what failed, and `run` keeps its `.captures/<run>/` working dir.
+- **1**: no output is saved.
 
 ## Demo-script format
 
