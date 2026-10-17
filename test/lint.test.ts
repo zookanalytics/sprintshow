@@ -7,9 +7,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { parseDemoScript } from '../src/demo-script.ts';
-import { lintDemo, demoScenarioOf, looksLikeDirective, type LintEnv } from '../src/lint.ts';
+import { lintDemo, demoScenarioOf, looksLikeDirective, looksLikeAssertion, type LintEnv } from '../src/lint.ts';
 
 /** A well-adapted script: five steps, all driving the page, machine assertions everywhere. */
 const ADAPTED_SCRIPT = `# Demo: Adapted
@@ -156,4 +158,88 @@ test('looksLikeDirective: case slips and Playwright habits yes, prose no', () =>
   assert.equal(looksLikeDirective('#board'), false);
   assert.equal(looksLikeDirective('?seed=board'), false);
   assert.equal(looksLikeDirective('npm run dev'), false);
+});
+
+// ── Terminal scripts ──
+//
+// A terminal script is read with the terminal's verbs and assertions, so a page directive
+// or assertion in one is dropped as prose. The linter names the surface it belongs to.
+
+/** A five-step terminal script that drives the shell and proves every step. */
+const TERMINAL_SCRIPT = `# Demo: Shell
+
+**Terminal:** 80x24
+
+## Steps
+
+${[1, 2, 3, 4, 5]
+  .map(
+    (i) => `${i}. **Step ${i} runs a command**
+   \`run echo ${i}\`
+   _Prove:_ it printed — \`screen ~ "${i}"\`
+`,
+  )
+  .join('\n')}`;
+
+test('a terminal script that drives the shell and proves each step is quiet, and so is the sample', () => {
+  assert.deepEqual(
+    messagesFor(TERMINAL_SCRIPT).filter((f) => f.severity !== 'info'),
+    [],
+  );
+  const sample = readFileSync(path.join(import.meta.dirname, '..', 'demos', 'terminal.md'), 'utf8');
+  assert.deepEqual(
+    messagesFor(sample).filter((f) => f.severity !== 'info'),
+    [],
+  );
+});
+
+test('a terminal script with no action is flagged, and so is a **Start:** it ignores', () => {
+  const idle = messagesFor(`# Demo: X\n\n**Terminal:**\n**Start:** \`/\`\n\n## Steps\n\n1. **The prompt shows**\n   _Prove:_ a prompt — \`row 1 ~ /^\\$/\`\n`);
+  assert.ok(idle.some((f) => /no step runs a command or presses a key/.test(f.message)));
+  assert.ok(idle.some((f) => /\*\*Start:\*\* `\/` is ignored — a terminal script's shell starts in --cwd/.test(f.message)));
+  assert.equal(idle.filter((f) => /no query and no step performs an action/.test(f.message)).length, 0);
+});
+
+test("a directive or an assertion of the other surface is named as that surface's", () => {
+  const inTerminal = messagesFor(`# Demo: X
+
+**Terminal:**
+
+## Steps
+
+1. **A page directive in a terminal script**
+   \`run ls\`
+   \`click #add\`
+   _Prove:_ the board shows — \`visible #board\`
+`).filter((f) => f.step === 1);
+  assert.ok(inTerminal.some((f) => /`click #add` is a page directive in a terminal script — it is IGNORED at capture time \(verbs: run, press, waitForScreen, wait\)/.test(f.message)));
+  assert.ok(inTerminal.some((f) => /carries `visible #board`, a page assertion in a terminal script — the step is NOT checked. Assertions are screen\/row\/cursor\/exit/.test(f.message)));
+
+  const inPage = messagesFor(`# Demo: X
+
+**Start:** \`/?seed=board\`
+
+## Steps
+
+1. **A terminal directive in a page script**
+   \`run npm test\`
+   _Prove:_ the tests passed — \`exit == 0\`
+`).filter((f) => f.step === 1);
+  assert.ok(inPage.some((f) => /`run npm test` is a terminal directive in a page script — it is IGNORED/.test(f.message)));
+  assert.ok(inPage.some((f) => /carries `exit == 0`, a terminal assertion in a page script/.test(f.message)));
+});
+
+test('a terminal proof of a row or column past the screen is flagged', () => {
+  const md = `# Demo: X\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **Off the edge**\n   \`run true\`\n   _Prove:_ the row — \`row 12 ~ x\`\n   _Fail if:_ the cursor — \`cursor -3 41\`\n`;
+  const warns = messagesFor(md).filter((f) => f.step === 1);
+  assert.ok(warns.some((f) => /`row 12 ~ x` names row 12, past the terminal's 10 rows/.test(f.message)));
+  assert.ok(warns.some((f) => /`cursor -3 41` names column 41, past the terminal's 40 columns/.test(f.message)));
+  assert.equal(warns.filter((f) => /names row -3/.test(f.message)).length, 0);
+});
+
+test('looksLikeAssertion knows both surfaces', () => {
+  assert.equal(looksLikeAssertion('screen x'), true);
+  assert.equal(looksLikeAssertion('exit 0'), true);
+  assert.equal(looksLikeAssertion('Visible #x'), true);
+  assert.equal(looksLikeAssertion('#board'), false);
 });

@@ -7,12 +7,16 @@
 // PURE CORE, thin CLI — the same split as demo-script.ts: `lintDemo()` takes a parsed
 // Demo plus an explicit environment snapshot and returns findings, so the rules are
 // unit-tested (lint.test.ts) without git, a browser or a network.
+//
+// A script drives one surface, a page or a terminal, and the parser reads only that
+// surface's directives and assertions. One written for the other surface is dropped as
+// prose, so the linter names the surface it belongs to.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { parseDemoScript, ACTION_VERBS, ASSERTION_KINDS, outputSlug, type Demo } from './demo-script.ts';
+import { parseDemoScript, ACTION_VERBS, ASSERTION_KINDS, TERMINAL_VERBS, TERMINAL_ASSERTION_KINDS, outputSlug, surfaceOf, type Demo, type SurfaceKind } from './demo-script.ts';
 
 /** Step-count window from the demo-authoring contract: under 5 is thin, over 12 spans too much. */
 const MIN_STEPS = 5;
@@ -61,6 +65,7 @@ export function demoScenarioOf(start: string): string | null {
  */
 const DIRECTIVE_WORDS = new Set([
   ...ACTION_VERBS.map((v) => v.toLowerCase()),
+  ...TERMINAL_VERBS.map((v) => v.toLowerCase()),
   'waitforselector',
   'waitforelement',
   'waitfortext',
@@ -80,6 +85,20 @@ const DIRECTIVE_WORDS = new Set([
   'scrollintoview',
 ]);
 
+/** Each surface's directives and assertions, as a finding names them. */
+const VOCABULARY: Record<SurfaceKind, { verbs: readonly string[]; assertions: readonly string[] }> = {
+  page: { verbs: ACTION_VERBS, assertions: ASSERTION_KINDS },
+  terminal: { verbs: TERMINAL_VERBS, assertions: TERMINAL_ASSERTION_KINDS },
+};
+
+/** The surface a code span's lead word is a directive or an assertion of, when that is not `surface`. */
+function otherSurface(code: string, surface: SurfaceKind, kind: 'verbs' | 'assertions'): SurfaceKind | null {
+  const lead = leadWord(code);
+  const has = (s: SurfaceKind): boolean => VOCABULARY[s][kind].some((w) => w.toLowerCase() === lead);
+  const other: SurfaceKind = surface === 'page' ? 'terminal' : 'page';
+  return has(other) && !has(surface) ? other : null;
+}
+
 /** First bare word of a code span, lowercased — '' when it does not start with one. */
 function leadWord(code: string): string {
   const first = code.trim().split(/\s+/)[0] ?? '';
@@ -94,12 +113,13 @@ export function looksLikeDirective(code: string): boolean {
 
 /**
  * True when a code span on a `_Prove:_` / `_Fail if:_` line reads as an attempted
- * ASSERTION — e.g. `count #x` (missing its operator) or `Visible #x`. Separate from the
- * directive test because assertion kinds are a different vocabulary from action verbs.
+ * ASSERTION — e.g. `count #x` (missing its operator), `Visible #x`, or either surface's
+ * assertion in a script of the other. Separate from the directive test because assertion
+ * kinds are a different vocabulary from action verbs.
  */
 export function looksLikeAssertion(code: string): boolean {
   const lead = leadWord(code);
-  return ASSERTION_KINDS.some((k) => k === lead) || DIRECTIVE_WORDS.has(lead);
+  return [...ASSERTION_KINDS, ...TERMINAL_ASSERTION_KINDS].some((k) => k === lead) || DIRECTIVE_WORDS.has(lead);
 }
 
 /** Apply every rule to a parsed script. Order: script-level findings first, then per step. */
@@ -109,15 +129,22 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
     out.push({ severity, step, message });
   };
 
-  // ── Substrate: does the demo actually interact with the page? ──
+  // ── Substrate: does the demo actually interact with the page or the terminal? ──
   //
   // A demo that performs no action and opens on a bare path captures a still life. A
   // query on the start URL (an app that arms itself from one) or any step action counts
-  // as interaction.
+  // as interaction. A terminal has no start URL: only its steps' actions drive it.
+  const surface = surfaceOf(demo);
+  const { verbs, assertions } = VOCABULARY[surface];
   const scenario = demoScenarioOf(demo.start);
   const drivesByAction = demo.steps.some((s) => s.actions.length > 0);
   const hasQuery = demo.start.includes('?');
-  if (scenario && env.scenarios.length && !env.scenarios.includes(scenario)) {
+  if (surface === 'terminal') {
+    if (!drivesByAction) {
+      add('warn', null, `no step runs a command or presses a key — the capture shows the shell's first prompt and nothing else. Add actions (${verbs.join('/')}).`);
+    }
+    if (demo.start) add('warn', null, `**Start:** \`${demo.start}\` is ignored — a terminal script's shell starts in --cwd, not at a path.`);
+  } else if (scenario && env.scenarios.length && !env.scenarios.includes(scenario)) {
     add(
       'error',
       null,
@@ -148,12 +175,13 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
       add('warn', step.index, `no \`_Prove:_\` line — this step shows a screen without claiming anything about it.`);
     } else if (!step.prove.assertion) {
       const attempted = step.prove.codes.filter(looksLikeAssertion);
+      const other = attempted.length ? otherSurface(attempted[0], surface, 'assertions') : null;
       add(
         'warn',
         step.index,
         attempted.length
-          ? `\`_Prove:_\` carries \`${attempted[0]}\`, which is not a recognised assertion — the step is NOT checked. Assertions are visible/hidden/count/text/eval.`
-          : `\`_Prove:_\` is prose only — nothing is checked against the page. Add an assertion (\`visible\`/\`hidden\`/\`count\`/\`text\`/\`eval\`) to make the step a proof.`,
+          ? `\`_Prove:_\` carries \`${attempted[0]}\`, ${other ? `a ${other} assertion in a ${surface} script` : 'which is not a recognised assertion'} — the step is NOT checked. Assertions are ${assertions.join('/')}.`
+          : `\`_Prove:_\` is prose only — nothing is checked against the ${surface}. Add an assertion (${assertions.map((k) => `\`${k}\``).join('/')}) to make the step a proof.`,
       );
     }
     if (step.failIf && !step.failIf.assertion) {
@@ -161,7 +189,24 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
     }
 
     for (const code of step.droppedCodes.filter(looksLikeDirective)) {
-      add('warn', step.index, `\`${code}\` is not a known directive — it is IGNORED at capture time (verbs: ${ACTION_VERBS.join(', ')}).`);
+      const other = otherSurface(code, surface, 'verbs');
+      add(
+        'warn',
+        step.index,
+        `\`${code}\` ${other ? `is a ${other} directive in a ${surface} script` : 'is not a known directive'} — it is IGNORED at capture time (verbs: ${verbs.join(', ')}).`,
+      );
+    }
+
+    // A row or column past the terminal's edge is one no screen has.
+    if (demo.terminal) {
+      for (const a of [step.prove?.assertion, step.failIf?.assertion]) {
+        if (a?.row !== undefined && Math.abs(a.row) > demo.terminal.rows) {
+          add('warn', step.index, `\`${a.raw}\` names row ${a.row}, past the terminal's ${demo.terminal.rows} rows — it never holds.`);
+        }
+        if (a?.col !== undefined && a.col > demo.terminal.cols) {
+          add('warn', step.index, `\`${a.raw}\` names column ${a.col}, past the terminal's ${demo.terminal.cols} columns — it never holds.`);
+        }
+      }
     }
   }
 

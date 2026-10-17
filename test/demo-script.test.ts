@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseDemoScript, parseAction, parseAssertion, parseMatcher, slugify, outputSlug } from '../src/demo-script.ts';
+import { parseDemoScript, parseAction, parseAssertion, parseMatcher, parseKeys, parseTerminalSpec, surfaceOf, slugify, outputSlug, DEFAULT_TERMINAL } from '../src/demo-script.ts';
 
 const SCRIPT = `# Demo: Task Board
 
@@ -205,4 +205,96 @@ test('a section after ## Steps closes the steps block instead of leaking into a 
 
 test('a script with no ## Scrutiny section yields an empty list', () => {
   assert.deepEqual(parseDemoScript(SCRIPT).scrutiny, []);
+});
+
+// ── Terminal scripts ──
+//
+// A script that declares `**Terminal:**` drives a shell in the engine's terminal. It needs
+// no `**Start:**`, and the parser reads only the terminal's verbs and assertions in it, as
+// it reads only a page's in a page script.
+
+const TERMINAL = `# Demo: A shell
+
+**Terminal:** 80x24
+
+## Steps
+
+1. **A command runs**
+   \`run ls -la\`
+   _Prove:_ it lists the file — \`screen ~ "tasks.md"\`
+   _Fail if:_ it failed — \`exit > 0\`
+
+2. **Keys reach a full-screen program**
+   \`press ArrowDown "two words" Control+C\`
+   \`waitForScreen /^done$/\`
+   \`click #ignored\`
+   \`wait 200\`
+   _Prove:_ the cursor sits on the last row — \`cursor -1 3\`
+
+3. **The status bar reads**
+   _Prove:_ the bottom row counts it — \`row -1 ~ /2 of 3 done/\`
+`;
+
+test('terminal: **Terminal:** declares the surface and its size, and no **Start:** is needed', () => {
+  const d = parseDemoScript(TERMINAL);
+  assert.deepEqual(d.terminal, { cols: 80, rows: 24 });
+  assert.equal(d.start, '');
+  assert.equal(surfaceOf(d), 'terminal');
+  assert.equal(surfaceOf(parseDemoScript(SCRIPT)), 'page');
+  assert.equal(parseDemoScript(SCRIPT).terminal, undefined);
+});
+
+test('terminal: the size is optional, may sit in backticks, and is refused outside the range', () => {
+  assert.deepEqual(parseTerminalSpec(''), DEFAULT_TERMINAL);
+  assert.deepEqual(parseTerminalSpec('`120x40`'), { cols: 120, rows: 40 });
+  assert.deepEqual(parseTerminalSpec('132 × 43'), { cols: 132, rows: 43 });
+  assert.throws(() => parseTerminalSpec('wide'), /takes an optional size, <cols>x<rows> \(got "wide"\)/);
+  assert.throws(() => parseTerminalSpec('10x24'), /10x24 is out of range/);
+  assert.throws(() => parseTerminalSpec('80x101'), /80x101 is out of range/);
+  assert.throws(() => parseDemoScript('# Demo: X\n**Terminal:** huge\n## Steps\n1. **s**\n'), /\*\*Terminal:\*\* takes an optional size/);
+});
+
+test('terminal: run, press, waitForScreen and wait parse; a page directive stays prose', () => {
+  const [one, two] = parseDemoScript(TERMINAL).steps;
+  assert.deepEqual(one.actions, [{ verb: 'run', target: 'ls -la', raw: 'run ls -la' }]);
+  assert.deepEqual(
+    two.actions.map((a) => a.verb),
+    ['press', 'waitForScreen', 'wait'],
+  );
+  assert.deepEqual(two.actions[0].keys, [{ key: 'ArrowDown' }, { text: 'two words' }, { key: 'Control+C' }]);
+  assert.deepEqual(two.actions[1].matcher, { type: 'regex', value: '^done$' });
+  assert.deepEqual(two.droppedCodes, ['click #ignored']);
+});
+
+test('terminal: a page script keeps the terminal verbs as prose, so existing scripts parse as before', () => {
+  const d = parseDemoScript(`# Demo: X\n**Start:** /\n## Steps\n1. **s**\n   Then \`run npm test\` and \`press Enter\`.\n   \`click #add\`\n`);
+  assert.deepEqual(
+    d.steps[0].actions.map((a) => a.verb),
+    ['click'],
+  );
+  assert.deepEqual(d.steps[0].droppedCodes, ['run npm test', 'press Enter']);
+  assert.equal(parseAction('run ls'), null);
+  assert.equal(parseAction('click #a', 'terminal'), null);
+  assert.equal(parseAction('run', 'terminal'), null);
+  assert.equal(parseAction('waitForScreen', 'terminal'), null);
+});
+
+test('terminal: screen, row, cursor and exit assertions parse; a page assertion does not', () => {
+  const [one, two, three] = parseDemoScript(TERMINAL).steps;
+  assert.deepEqual(one.prove?.assertion, { kind: 'screen', matcher: { type: 'substr', value: 'tasks.md' }, raw: 'screen ~ "tasks.md"' });
+  assert.deepEqual(one.failIf?.assertion, { kind: 'exit', op: '>', n: 0, raw: 'exit > 0' });
+  assert.deepEqual(two.prove?.assertion, { kind: 'cursor', row: -1, col: 3, raw: 'cursor -1 3' });
+  assert.deepEqual(three.prove?.assertion, { kind: 'row', row: -1, matcher: { type: 'regex', value: '2 of 3 done' }, raw: 'row -1 ~ /2 of 3 done/' });
+
+  assert.equal(parseAssertion('visible #board', 'terminal'), null);
+  assert.equal(parseAssertion('screen ~ x'), null);
+  for (const bad of ['screen x', 'row 0 ~ x', 'row one ~ x', 'cursor 0 1', 'cursor 1 0', 'cursor 1', 'exit 0', 'exit != 0', 'exit == -1']) {
+    assert.equal(parseAssertion(bad, 'terminal'), null, bad);
+  }
+});
+
+test('terminal: press splits keys from quoted text, and refuses an open or empty quote', () => {
+  assert.deepEqual(parseKeys('ArrowDown ArrowDown Enter'), [{ key: 'ArrowDown' }, { key: 'ArrowDown' }, { key: 'Enter' }]);
+  assert.deepEqual(parseKeys('":wq" Enter " "'), [{ text: ':wq' }, { key: 'Enter' }, { text: ' ' }]);
+  for (const bad of ['', '"open', '""', '"a"b', 'a"b']) assert.equal(parseKeys(bad), null, bad);
 });
