@@ -229,6 +229,42 @@ test("a directive or an assertion of the other surface is named as that surface'
   assert.ok(inPage.some((f) => /carries `exit == 0`, a terminal assertion in a page script/.test(f.message)));
 });
 
+test("a directive of the script's own surface is reported for the arguments that kept it from parsing", () => {
+  const warns = messagesFor(`# Demo: X
+
+**Terminal:**
+
+## Steps
+
+1. **Directives whose arguments do not parse**
+   \`press "hello\`
+   \`press ""\`
+   \`press "a"b\`
+   \`run\`
+   \`waitForScreen\`
+   \`Run ls\`
+   _Prove:_ a prompt — \`screen ~ "$"\`
+`)
+    .filter((f) => f.step === 1)
+    .map((f) => f.message);
+  const malformed = (code: string, why: string): string => `\`${code}\` has malformed arguments: ${why} — it is IGNORED at capture time.`;
+  const keys = 'a quote is left open or sits inside a word, a string is empty, or there are no keys';
+  for (const message of [
+    malformed('press "hello', keys),
+    malformed('press ""', keys),
+    malformed('press "a"b', keys),
+    malformed('run', 'it needs a command line'),
+    malformed('waitForScreen', 'it needs a matcher'),
+  ]) {
+    assert.ok(warns.includes(message), `${message}\nis not among:\n${warns.join('\n')}`);
+  }
+  // A verb in the wrong case is no verb of the surface, so that span is still unknown.
+  assert.deepEqual(
+    warns.filter((m) => /is not a known directive/.test(m)),
+    ['`Run ls` is not a known directive — it is IGNORED at capture time (verbs: run, press, waitForScreen, wait).'],
+  );
+});
+
 test('a terminal proof of a row or column past the screen is flagged', () => {
   const md = `# Demo: X\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **Off the edge**\n   \`run true\`\n   _Prove:_ the row — \`row 12 ~ x\`\n   _Fail if:_ the cursor — \`cursor -3 41\`\n`;
   const warns = messagesFor(md).filter((f) => f.step === 1);

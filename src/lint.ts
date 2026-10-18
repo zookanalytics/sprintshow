@@ -10,7 +10,8 @@
 //
 // A script drives one surface, a page or a terminal, and the parser reads only that
 // surface's directives and assertions. One written for the other surface is dropped as
-// prose, so the linter names the surface it belongs to.
+// prose, so the linter names the surface it belongs to. A directive whose verb is its
+// own surface's is dropped only when its arguments do not parse, and the linter says so.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -90,6 +91,19 @@ const VOCABULARY: Record<SurfaceKind, { verbs: readonly string[]; assertions: re
   page: { verbs: ACTION_VERBS, assertions: ASSERTION_KINDS },
   terminal: { verbs: TERMINAL_VERBS, assertions: TERMINAL_ASSERTION_KINDS },
 };
+
+/** What a directive's arguments lack, for each verb whose arguments parseAction can refuse. */
+const ARGUMENTS: Record<string, string> = {
+  run: 'it needs a command line',
+  press: 'a quote is left open or sits inside a word, a string is empty, or there are no keys',
+  waitForScreen: 'it needs a matcher',
+};
+
+/** The verb a code span opens with, read as the parser reads it, when it is one of `surface`'s. */
+function ownVerb(code: string, surface: SurfaceKind): string | null {
+  const verb = code.trim().split(' ')[0];
+  return VOCABULARY[surface].verbs.includes(verb) ? verb : null;
+}
 
 /** The surface a code span's lead word is a directive or an assertion of, when that is not `surface`. */
 function otherSurface(code: string, surface: SurfaceKind, kind: 'verbs' | 'assertions'): SurfaceKind | null {
@@ -189,11 +203,14 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
     }
 
     for (const code of step.droppedCodes.filter(looksLikeDirective)) {
+      const own = ownVerb(code, surface);
       const other = otherSurface(code, surface, 'verbs');
       add(
         'warn',
         step.index,
-        `\`${code}\` ${other ? `is a ${other} directive in a ${surface} script` : 'is not a known directive'} — it is IGNORED at capture time (verbs: ${verbs.join(', ')}).`,
+        own
+          ? `\`${code}\` has malformed arguments: ${ARGUMENTS[own] ?? 'they do not parse'} — it is IGNORED at capture time.`
+          : `\`${code}\` ${other ? `is a ${other} directive in a ${surface} script` : 'is not a known directive'} — it is IGNORED at capture time (verbs: ${verbs.join(', ')}).`,
       );
     }
 

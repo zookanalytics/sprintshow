@@ -233,7 +233,7 @@ export function parseAction(code: string, surface: SurfaceKind = 'page'): DemoAc
 /**
  * The keys of a `press`, split on whitespace: a double-quoted string is text to type, and
  * any other word is a key name (`Enter`, `ArrowDown`, `Control+C`, `q`). Null when a quote
- * is left open, a string is empty, or there are no keys at all.
+ * is left open or sits inside a word, a string is empty, or there are no keys at all.
  */
 export function parseKeys(spec: string): PressKey[] | null {
   const keys: PressKey[] = [];
