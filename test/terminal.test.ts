@@ -12,8 +12,9 @@
 // quitting it restores the shell's screen. They pin the captures: the still is the
 // terminal window with transparent corners, `--full-page` holds the whole session, or
 // its last lines, each one drawn in tiles of either size Chromium draws in, when the
-// session is more than one capture holds, and a terminal script refuses a server, a
-// selector, or a directory that does not exist before a browser is spent. A video frame
+// session is more than one capture holds. A full-page still saves nothing, and says why,
+// when the page has no terminal window. A terminal script refuses a server, a selector,
+// or a directory that does not exist before a browser is spent. A video frame
 // shows every cell of a terminal at each limit of the sizes the parser accepts, clear of
 // the caption bar. The shell and every program it still runs end before the capture
 // returns, even a program that handles SIGHUP and however slowly the host lists them, and
@@ -427,6 +428,29 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
         assert.deepEqual(drawn, [...Array.from({ length: 19 }, (_, i) => String(32 + i)), '$']);
       });
     } finally {
+      cleanup();
+    }
+  });
+
+  test('a full-page still of a page whose terminal window is gone fails with the screenshot error, counting the steps whose proof failed', async () => {
+    const md = `# Demo: Gone\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **A command that fails**\n   \`run false\`\n   _Fail if:_ it failed — \`exit > 0\`\n`;
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage();
+    try {
+      // The terminal is written into this page's document, whose realm keeps this lookup, so the capture finds no window.
+      await page.evaluate((win) => {
+        const find = Document.prototype.querySelector;
+        Document.prototype.querySelector = function (this: Document, sel: string) {
+          return sel === win ? null : find.call(this, sel);
+        } as typeof find;
+      }, TERMINAL_WINDOW);
+      const png = path.join(dir, 'gone.png');
+      await assert.rejects(captureScreenshot({ page, demo: md, cwd: dir, outputPath: png, fullPage: true, log: quiet }), {
+        message: 'screenshot: could not measure the terminal window (1 step(s) failed their proof): this page has no terminal window',
+      });
+      assert.equal(existsSync(png), false);
+    } finally {
+      await page.close();
       cleanup();
     }
   });

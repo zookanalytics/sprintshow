@@ -74,12 +74,14 @@ function captureTimeout({ width, height, scale }: Extent): number {
   return ACTION_TIMEOUT + TILE_TIME_MS * tileSpan(width, scale, 256) * tileSpan(height, scale, 256);
 }
 
-/** The terminal window's extent. */
-function windowExtent(page: Page): Promise<Extent> {
-  return page.evaluate((sel) => {
-    const box = (document.querySelector(sel) as HTMLElement).getBoundingClientRect();
-    return { width: box.width, height: box.height, scale: devicePixelRatio };
+/** The terminal window's extent. Throws when the page has no terminal window. */
+async function windowExtent(page: Page): Promise<Extent> {
+  const extent = await page.evaluate((sel) => {
+    const box = document.querySelector(sel)?.getBoundingClientRect();
+    return box && { width: box.width, height: box.height, scale: devicePixelRatio };
   }, TERMINAL_WINDOW);
+  if (!extent) throw new Error('this page has no terminal window');
+  return extent;
 }
 
 /** The whole page's extent, measured as Playwright measures it for a full-page capture. */
@@ -180,11 +182,11 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
       let timeout = ACTION_TIMEOUT;
       if (opts.fullPage) {
         // A still's window sits at the page's top-left corner, and grows down from there.
-        const { width, scale } = await windowExtent(page);
-        const held = await attempt('could not grow the window to the session', () => expandToSession(page, captureHeightLimit(width, scale)));
+        const win = await attempt('could not measure the terminal window', () => windowExtent(page));
+        const held = await attempt('could not grow the window to the session', () => expandToSession(page, captureHeightLimit(win.width, win.scale)));
         area = held.rows < held.lines ? `the session's last ${held.rows} of its ${held.lines} lines` : 'the whole terminal session';
-        if (held.rows < held.lines) note = limited(scale);
-        timeout = captureTimeout(await windowExtent(page));
+        if (held.rows < held.lines) note = limited(win.scale);
+        timeout = captureTimeout(await attempt('could not measure the terminal window', () => windowExtent(page)));
       }
       log(`screenshot: capturing ${area}${note} → ${path.basename(opts.outputPath)}`);
       await attempt(`could not capture ${area}`, () => page.locator(TERMINAL_WINDOW).screenshot({ ...shot, omitBackground: true, timeout }));
@@ -199,7 +201,7 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
       let timeout = ACTION_TIMEOUT;
       let clip: { x: number; y: number; width: number; height: number } | undefined;
       if (opts.fullPage) {
-        const full = await pageExtent(page);
+        const full = await attempt('could not measure the full page', () => pageExtent(page));
         const limit = captureHeightLimit(full.width, full.scale);
         if (full.height > limit) {
           clip = { x: 0, y: 0, width: full.width, height: limit };
