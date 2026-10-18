@@ -1,0 +1,3 @@
+- [ ] Ship the demo engine
+- [ ] Write the README
+- [x] Cut the first release

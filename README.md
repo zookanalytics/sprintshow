@@ -11,6 +11,9 @@ on-screen step captions, an optional TTS voiceover, and ffmpeg assembly into an 
 ```bash
 # produce a narrated, captioned mp4 from the bundled sample, with no app of your own
 npx @zookanalytics/sprintshow run demos/sample.md --serve-dir examples/sample-app
+
+# the same for a command-line session, full-screen program included
+npx @zookanalytics/sprintshow run demos/terminal.md --cwd examples/sample-cli
 ```
 
 ## What it does
@@ -33,6 +36,10 @@ One script drives each capture:
   proof mode, and the state the last step leaves is saved as one PNG. It draws no caption
   and needs neither ffmpeg nor a narration key.
 
+A script drives an app in a browser page, or, when it declares `**Terminal:**`, a shell in
+a terminal the engine serves itself: commands typed, their output, and full-screen programs.
+Every capture takes either kind (see [Terminal demos](#terminal-demos)).
+
 ## Install
 
 ```bash
@@ -49,6 +56,9 @@ Prerequisites, fetched on demand rather than assumed:
   `FFMPEG_BIN` to point at one) is used when present. Otherwise `ffmpeg-static` provides
   it, but npm ≥ 12 blocks its install script, so fetch the binary once:
   `npm run provision:ffmpeg` (or, for this package's own tests, it is fetched the same way).
+- **bash on `PATH`**, for a terminal demo. Its pty comes from `@lydell/node-pty`, which
+  installs a prebuilt binary for macOS or Linux (x64 or arm64) with nothing to build or
+  allow.
 
 ## Run a demo
 
@@ -106,6 +116,83 @@ element, its first match, once that element is visible. `--scale <n>` sets the d
 factor. `--transparent` leaves out the page's default white background, so on a page that
 paints no background of its own, an element with rounded corners keeps transparent corners.
 
+## Terminal demos
+
+A script that declares `**Terminal:**` drives a bash session instead of a page. The engine
+serves the terminal itself: xterm.js, in a page of its own, attached to the shell in a
+pseudo-terminal. xterm draws everything the shell's programs print, colours, cursor
+addressing and the alternate screen included, so a full-screen program such as an editor
+or a curses dashboard is captured as it looks. The steps go through the same grammar and
+step runner as a page script's, and every capture takes the script.
+
+```markdown
+# Demo: Sprint board in a terminal
+
+**Terminal:** 100x30                ← columns x rows; optional, 100x30 by default
+
+## Steps
+
+1. **A command counts the board**
+   `run node board.mjs --summary`
+   _Prove:_ three tasks, one done — `screen ~ /^3 tasks · 1 done$/`
+
+2. **The board opens full screen**
+   `run node board.mjs`
+   `press ArrowDown Space`
+   _Prove:_ the status bar counts two done — `row -1 ~ /2 of 3 done$/`
+```
+
+```bash
+sprintshow run demos/terminal.md --cwd examples/sample-cli
+sprintshow screenshot demos/terminal.md --cwd examples/sample-cli --scale 2 -o terminal.png
+```
+
+A terminal script needs no `**Start:**` and takes no server: `--base-url`, `--serve`,
+`--serve-dir` and `--port` are refused for one. Its shell starts in `--cwd` (default: the
+working directory) as `bash --noprofile --norc`, with a `$ ` prompt, no history file, no
+`inputrc` and `TERM=xterm-256color`. It inherits the engine's environment, less the
+variables that describe another terminal, such as `TMUX` and `COLUMNS`.
+
+**Actions:**
+
+- `run <command line>` waits for the prompt, types the line and presses Enter. It then
+  waits until the command finishes, a full-screen program takes over the screen, or the
+  shell exits, for up to 60s, and logs the command's exit status. A program that waits for
+  input on the normal screen, such as `python3`, `node`, `npm init` or a `read` prompt,
+  does none of these, so it is started with `press "<command>" Enter` and followed by
+  `waitForScreen` on its prompt, not with `run`. For Python that is `press "python3" Enter`
+  and then `waitForScreen />>>$/`. A row loses its trailing blanks, so the `>>> ` prompt
+  reads as `>>>`.
+- `press <keys>` presses each key in turn: a key as Playwright names it (`Enter`,
+  `Escape`, `ArrowDown`, `Space`, `F1`, `Control+C`, `q`), or a `"quoted string"`, which
+  it types.
+- `waitForScreen <matcher>` waits for the screen's text to match.
+- `wait <ms>` pauses.
+
+**Assertions** read the terminal's state. The screen is what the terminal displays now: on
+the normal screen its last rows, not the scrollback above them, and while a full-screen
+program holds the alternate screen, that screen.
+
+- `screen ~ <matcher>`: the screen's text matches. Each row loses its trailing blanks, and
+  a row the terminal wrapped joins the next with no line break.
+- `row <n> ~ <matcher>`: row `n` matches. Row 1 is the top and row -1 the bottom.
+- `cursor <row> <col>`: the cursor is at that row and column, counted from 1.
+- `exit <op> <n>`: the exit status of the last command the shell finished compares with
+  `n` (`>= > == <= <`). While a command runs, no `exit` assertion holds.
+
+A matcher is as in a page script's `text` assertion, and a `/regex/` is tested with the
+`m` flag, so `^` and `$` match at each row's start and end.
+
+**Captures.** `sprintshow screenshot` saves the terminal window, title bar included, with
+its rounded corners transparent. `--full-page` captures the whole session instead of the
+screen: one row for each line it holds, scrollback included. `--selector` is for page
+scripts. The videos show the window on a dark backdrop, above the caption bar. Every
+capture draws the window at the largest font size, up to 24 px, at which it fits a video
+frame above the caption bar, so a very wide or tall terminal draws small. Once a capture
+is done, the shell and every program it still runs are ended, and a program that ignores
+SIGHUP is killed.
+`specs/ss-71qt/design.md` records why the surface is built this way.
+
 ## Exit codes
 
 The exit code of `run` and `screenshot` says what was saved:
@@ -120,7 +207,8 @@ The exit code of `run` and `screenshot` says what was saved:
 ```markdown
 # Demo: <title>
 
-**Start:** `/path?query`          ← joined onto the server origin
+**Start:** `/path?query`          ← joined onto the server origin (a page script)
+**Terminal:** 100x30              ← or this, for a terminal script
 
 <free prose → the cover subtitle>
 
@@ -138,7 +226,9 @@ The exit code of `run` and `screenshot` says what was saved:
 
 **Actions:** `goto <path>` · `wait <ms>` · `waitFor <selector>` ·
 `waitForText <selector> ~ <substring>` · `click <selector>` · `type <selector> ~ <text>` ·
-`scroll <selector>` (centre a below-the-fold element so the frame shows it).
+`scroll <selector>` (centre a below-the-fold element so the frame shows it). A terminal
+script has [its own](#terminal-demos), and each kind of script reads only its own actions
+and assertions.
 
 **Assertions** (in `_Prove:_` / `_Fail if:_`): `visible <sel>` · `hidden <sel>` ·
 `count <sel> <op> <n>` (`>= > == <= <`) · `text <sel> ~ <matcher>` · `eval <js>`. A matcher
@@ -170,7 +260,9 @@ const result = await captureProof({
 `captureScreenshot` takes the same kind of page and saves one PNG in place of the MP4.
 `runDemo` and `runScreenshot` bring up the server and the browser themselves, as the CLI
 does. A custom driver that runs its steps through `runStep` checks each proof as the
-built-in captures do.
+built-in captures do. For a terminal script, a driver takes a `cwd` in place of a
+`baseUrl`, and `openSurface` brings up what any script drives: the app at its start path,
+or the engine's terminal and its shell.
 
 ## The agent / MCP path
 

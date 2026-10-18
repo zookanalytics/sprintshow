@@ -8,12 +8,13 @@
 
 import type { Page } from 'playwright';
 
-const ACCENT = '#6ad08a';
-const ACCENT_FAIL = '#e0554e';
-const BG = '#0f1115';
-const FG = '#e7e9ee';
-const MUTED = '#9aa3b2';
-const FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+// The engine's palette and UI font, which the terminal page (terminal.ts) draws in too.
+export const ACCENT = '#6ad08a';
+export const ACCENT_FAIL = '#e0554e';
+export const BG = '#0f1115';
+export const FG = '#e7e9ee';
+export const MUTED = '#9aa3b2';
+export const FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 
 /** HTML-escape text bound for `innerHTML` / `setContent`. */
 export function esc(s: string): string {

@@ -17,7 +17,7 @@ import type { Page } from 'playwright';
 
 import { captureScreenshot, AREA_CONFLICT } from '../src/screenshot.ts';
 import { ensureServer } from '../src/server.ts';
-import { launchBrowser, serveSite, scratchDir, writeFiles, runCli, stepLines, REPO } from './browser-fixture.ts';
+import { launchBrowser, serveSite, scratchDir, writeFiles, runCli, stepLines, pngSize, rgba, alphaAt, REPO } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
 after(() => browser?.close());
@@ -25,38 +25,6 @@ after(() => browser?.close());
 const SAMPLE = path.join(REPO, 'demos', 'sample.md');
 const SAMPLE_APP = path.join(REPO, 'examples', 'sample-app');
 const quiet = (): void => {};
-
-/** Width and height from a PNG's IHDR chunk. */
-function pngSize(file: string): { width: number; height: number } {
-  const b = readFileSync(file);
-  assert.equal(b.subarray(1, 4).toString('latin1'), 'PNG', `${file} is not a PNG`);
-  return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
-}
-
-/** A PNG's RGBA pixels, decoded by the browser. */
-async function rgba(page: Page, png: Buffer): Promise<{ width: number; data: Buffer }> {
-  const { width, b64 } = await page.evaluate(async (src) => {
-    const img = new Image();
-    img.src = `data:image/png;base64,${src}`;
-    await img.decode();
-    const canvas = document.createElement('canvas');
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const g = canvas.getContext('2d') as CanvasRenderingContext2D;
-    g.drawImage(img, 0, 0);
-    const data = g.getImageData(0, 0, img.width, img.height).data;
-    let bin = '';
-    for (let i = 0; i < data.length; i += 0x8000) bin += String.fromCharCode(...data.subarray(i, i + 0x8000));
-    return { width: img.width, b64: btoa(bin) };
-  }, png.toString('base64'));
-  return { width, data: Buffer.from(b64, 'base64') };
-}
-
-/** The alpha of the pixel at (x, y) of a PNG file. */
-async function alphaAt(page: Page, file: string, x: number, y: number): Promise<number> {
-  const { width, data } = await rgba(page, readFileSync(file));
-  return data[(y * width + x) * 4 + 3];
-}
 
 /**
  * How many pixels of two same-size PNGs differ by more than `tolerance` in any channel.

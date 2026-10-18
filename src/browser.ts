@@ -1,22 +1,28 @@
 // Browser-driving primitives shared by the capture drivers: the synthetic pointer and
 // its human-paced glide helpers, the action runner that executes a parsed directive, the
 // assertion evaluator that checks a `_Prove:_` / `_Fail if:_` contract against the live
-// DOM, and the step runner that runs one demo step's actions and then checks its proof.
+// DOM or terminal, the step runner that runs one demo step's actions and then checks its
+// proof, and openSurface, which brings up what a script drives: the app at its start
+// path, or the engine's own terminal (terminal.ts).
 //
 // The pointer is a DOM element the engine moves, so a click or a keystroke reads on
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
 // The still-frame and screenshot paths skip it and drive the page directly, for speed and
-// determinism.
+// determinism. A terminal needs no pointer: what is typed shows where the shell echoes it.
 
 import type { Page } from 'playwright';
-import type { Assertion, DemoAction, DemoStep } from './demo-script.ts';
+import type { Assertion, Demo, DemoAction, DemoStep, Matcher } from './demo-script.ts';
+import { openTerminal, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
 
 export const VIEWPORT = { width: 1280, height: 900 };
-export const ACTION_TIMEOUT = 15000; // per waitFor/waitForText/click/type
+export const ACTION_TIMEOUT = 15000; // per waitFor/waitForText/click/type, and a terminal's waitForScreen
 export const PROVE_TIMEOUT = 10000; // how long a `_Prove:_` assertion is polled before failing
+export const COMMAND_TIMEOUT = 60000; // how long a terminal `run` waits for its command to settle
 const POLL_MS = 200;
 const GLIDE_MS = 480; // pointer travel time; matches the CSS transition below
 const TYPE_DELAY_MS = 55; // per keystroke in humanized typing
+const KEY_PAUSE_MS = 400; // between the keys a terminal `press` presses, in humanized driving
+const READ_PAUSE_MS = 1000; // once a terminal `run` or `press` is done, in humanized driving, so its effect reads
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -106,9 +112,10 @@ export async function glideAndType(page: Page, selector: string, text: string): 
 
 /**
  * Execute one parsed action. `humanize` routes clicks and typing through the pointer
- * glide; without it the page is driven directly. An action timeout is logged, not thrown
- * — the step's `_Prove:_` is the real gate, so a genuinely stuck step still shows a frame
- * and fails its proof rather than aborting the run.
+ * glide, and paces a terminal's typing and keys for a viewer; without it the page is
+ * driven directly. An action timeout is logged, not thrown — the step's `_Prove:_` is the
+ * real gate, so a genuinely stuck step still shows a frame and fails its proof rather
+ * than aborting the run.
  */
 export async function runAction(page: Page, base: string, act: DemoAction, humanize: boolean, log: (m: string) => void): Promise<void> {
   try {
@@ -143,6 +150,20 @@ export async function runAction(page: Page, base: string, act: DemoAction, human
         await page.locator(act.target).first().evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'nearest' }));
         await page.waitForTimeout(150);
         return;
+      case 'run':
+        await terminalRun(
+          page,
+          act.target,
+          { typeDelay: humanize ? TYPE_DELAY_MS : 0, promptTimeout: ACTION_TIMEOUT, commandTimeout: COMMAND_TIMEOUT, pause: humanize ? READ_PAUSE_MS : 0 },
+          log,
+        );
+        return;
+      case 'press':
+        await terminalPress(page, act.keys ?? [], { typeDelay: humanize ? TYPE_DELAY_MS : 0, keyPause: humanize ? KEY_PAUSE_MS : 0, pause: humanize ? READ_PAUSE_MS : 0 });
+        return;
+      case 'waitForScreen':
+        await terminalWaitForScreen(page, act.matcher as Matcher, ACTION_TIMEOUT);
+        return;
     }
   } catch (e) {
     log(`  · action \`${act.verb} ${act.target}\` did not settle: ${(e as Error).message.split('\n')[0]}`);
@@ -160,7 +181,7 @@ function compare(actual: number, op: string, n: number): boolean {
   }
 }
 
-/** Evaluate one assertion against the live page (single check, no polling). */
+/** Evaluate one assertion against the live page or its terminal (single check, no polling). */
 export async function checkAssertion(page: Page, a: Assertion): Promise<boolean> {
   try {
     switch (a.kind) {
@@ -186,6 +207,11 @@ export async function checkAssertion(page: Page, a: Assertion): Promise<boolean>
       }
       case 'eval':
         return Boolean(await page.evaluate(a.expr as string));
+      case 'screen':
+      case 'row':
+      case 'cursor':
+      case 'exit':
+        return await checkTerminalAssertion(page, a);
       default:
         return false;
     }
@@ -245,4 +271,43 @@ export async function runStep(page: Page, base: string, step: DemoStep, total: n
   const manual = !step.prove?.assertion && !step.failIf?.assertion;
   log(proved ? (manual ? '  ✓ (manual — no machine assertion)' : '  ✓ proof held') : `  ✗ ${reason}`);
   return { proved, manual, reason };
+}
+
+/** What a capture drives a demo's steps against, once it is up in a page. */
+export interface Surface {
+  /** Wait until the surface shows everything it has been sent, so a frame taken now shows it. */
+  settle(): Promise<void>;
+  /** Release what the surface holds: a terminal's shell is ended, and a page holds nothing. */
+  close(): Promise<void>;
+}
+
+export interface OpenSurfaceOptions {
+  /** The origin a page script's start path is joined onto. A terminal script needs none. */
+  baseUrl?: string;
+  /** The directory a terminal script's shell starts in (default: the working directory). */
+  cwd?: string;
+  /** Frame a terminal on a backdrop above the caption band, as the videos show it. A still leaves it off. */
+  backdrop?: boolean;
+  log?: (m: string) => void;
+}
+
+/**
+ * Bring up what `demo` drives in `page`: for a page script, navigate to its start path on
+ * `baseUrl`; for a terminal script, write the engine's terminal page and start its shell
+ * (terminal.ts). The caller closes the surface once the capture no longer shows it.
+ */
+export async function openSurface(page: Page, demo: Demo, opts: OpenSurfaceOptions): Promise<Surface> {
+  if (demo.terminal) {
+    return openTerminal(page, {
+      spec: demo.terminal,
+      title: demo.title,
+      cwd: opts.cwd,
+      backdrop: Boolean(opts.backdrop),
+      readyTimeout: ACTION_TIMEOUT,
+      log: opts.log ?? ((m: string) => console.log(m)),
+    });
+  }
+  if (!opts.baseUrl) throw new Error('a page script needs a base URL to join its **Start:** path onto');
+  await page.goto(joinUrl(opts.baseUrl, demo.start), { waitUntil: 'load' });
+  return { settle: async () => {}, close: async () => {} };
 }

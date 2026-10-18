@@ -34,7 +34,10 @@ export interface ServeOptions {
    * `serveDir` listens on a free port the system assigns unless this names one.
    */
   port?: number;
-  /** Working directory for the `serve` command (default: process cwd). */
+  /**
+   * Working directory for the `serve` command (default: process cwd). The capture
+   * commands also start a terminal script's shell here.
+   */
   cwd?: string;
   /** Path polled for readiness of a spawned `serve` command (default `/`). */
   readyPath?: string;

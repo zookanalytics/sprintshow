@@ -11,20 +11,30 @@
 // so the grammar is pinned by unit tests (demo-script.test.ts) and the driver is the
 // thin layer that executes the parsed structure.
 //
-// ── Grammar (see demos/sample.md for a worked example) ──
+// ── Grammar (see demos/sample.md and demos/terminal.md for worked examples) ──
 //
 //   # Demo: <title>            (or "# <title>")
-//   **Start:** `<url path + query>`
+//   **Start:** `<url path + query>`        (a page script)
+//   **Terminal:** <cols>x<rows>            (a terminal script; the size is optional)
 //   **Auth:** yes|no           (optional; accepted and ignored — see below)
 //   <free prose>               (becomes the cover subtitle / description)
 //   ## Steps
 //   1. **<narration>**         (numbered item; bold = the on-screen caption)
-//      `<action>`              (0+ backtick directives: goto/wait/waitFor/waitForText/click/type/scroll)
+//      `<action>`              (0+ backtick directives of the script's surface)
 //      <free prose>            (step description; ignored by the driver)
 //      _Prove:_ <prose> `<assertion>`
 //      _Fail if:_ <prose> `<assertion>`   (both optional; assertion optional)
 //   ## Scrutiny                (optional)
 //   - <thing a viewer should check critically>
+//
+// ── Two surfaces ──
+//
+// A page script drives an app in a browser page, and its `**Start:**` path is joined
+// onto the app's origin. A script that declares `**Terminal:**` drives a bash session in
+// the engine's own terminal instead, and needs no `**Start:**`. Each surface has its own
+// actions and assertions, and the parser reads only the declared surface's. A directive
+// or an assertion of the other surface stays prose, as any unrecognised code span does,
+// and the linter reports it.
 //
 // ── The generic demo:capture dialect is a subset ──
 //
@@ -39,26 +49,51 @@
 //   • `## Scrutiny` bullets are parsed into `Demo.scrutiny` and rendered as a closing
 //     card, so the section a generated draft ships survives into the video.
 //
-// Actions:     goto <path> · wait <ms> · waitFor <selector> · waitForText <selector> ~ <substr> · click <selector> · type <selector> ~ <text> · scroll <selector>
-// Assertions:  visible <sel> · hidden <sel> · count <sel> <op> <n> · text <sel> ~ <matcher> · eval <js>
+// Page actions:         goto <path> · wait <ms> · waitFor <selector> · waitForText <selector> ~ <substr> · click <selector> · type <selector> ~ <text> · scroll <selector>
+// Page assertions:      visible <sel> · hidden <sel> · count <sel> <op> <n> · text <sel> ~ <matcher> · eval <js>
+// Terminal actions:     run <command line> · press <key or "text"> … · waitForScreen <matcher> · wait <ms>
+// Terminal assertions:  screen ~ <matcher> · row <n> ~ <matcher> · cursor <row> <col> · exit <op> <n>
 //   <op> ∈ >= > == <= <   ·   <matcher> = /regex/ or "substring" or bare substring
 
-export type ActionVerb = 'goto' | 'wait' | 'waitFor' | 'waitForText' | 'click' | 'type' | 'scroll';
-export const ACTION_VERBS: readonly ActionVerb[] = ['goto', 'wait', 'waitFor', 'waitForText', 'click', 'type', 'scroll'];
+/** What a script drives: an app in a browser page, or a shell in the engine's terminal. */
+export type SurfaceKind = 'page' | 'terminal';
+
+export type PageVerb = 'goto' | 'wait' | 'waitFor' | 'waitForText' | 'click' | 'type' | 'scroll';
+export type TerminalVerb = 'run' | 'press' | 'waitForScreen' | 'wait';
+export type ActionVerb = PageVerb | TerminalVerb;
+/** A page script's actions. */
+export const ACTION_VERBS: readonly PageVerb[] = ['goto', 'wait', 'waitFor', 'waitForText', 'click', 'type', 'scroll'];
+/** A terminal script's actions. */
+export const TERMINAL_VERBS: readonly TerminalVerb[] = ['run', 'press', 'waitForScreen', 'wait'];
+
+/** One key a `press` presses: a key name as Playwright's keyboard names it, or text to type. */
+export type PressKey = { key: string } | { text: string };
 
 export interface DemoAction {
   verb: ActionVerb;
-  /** First selector/argument (for waitForText and type, the part before ` ~ `). */
+  /**
+   * First selector/argument (for waitForText and type, the part before ` ~ `). For run, the
+   * command line; for press and waitForScreen, the rest of the directive as written.
+   */
   target: string;
   /** For waitForText: the substring to await. For type: the text to enter. */
   text?: string;
   /** For wait: milliseconds. */
   ms?: number;
+  /** For press: the keys, in the order they are pressed. */
+  keys?: PressKey[];
+  /** For waitForScreen: what the screen's text must match. */
+  matcher?: Matcher;
   raw: string;
 }
 
-export type AssertionKind = 'visible' | 'hidden' | 'count' | 'text' | 'eval';
-export const ASSERTION_KINDS: readonly AssertionKind[] = ['visible', 'hidden', 'count', 'text', 'eval'];
+export type PageAssertionKind = 'visible' | 'hidden' | 'count' | 'text' | 'eval';
+export type TerminalAssertionKind = 'screen' | 'row' | 'cursor' | 'exit';
+export type AssertionKind = PageAssertionKind | TerminalAssertionKind;
+/** A page script's assertions. */
+export const ASSERTION_KINDS: readonly PageAssertionKind[] = ['visible', 'hidden', 'count', 'text', 'eval'];
+/** A terminal script's assertions. */
+export const TERMINAL_ASSERTION_KINDS: readonly TerminalAssertionKind[] = ['screen', 'row', 'cursor', 'exit'];
 export type CountOp = '>=' | '>' | '==' | '<=' | '<';
 export const COUNT_OPS: readonly CountOp[] = ['>=', '>', '==', '<=', '<'];
 
@@ -71,15 +106,31 @@ export interface Assertion {
   kind: AssertionKind;
   /** Present for visible/hidden/count/text. */
   selector?: string;
-  /** count only. */
+  /** count and exit. */
   op?: CountOp;
   n?: number;
-  /** text only. */
+  /** text, screen and row. */
   matcher?: Matcher;
   /** eval only — a JS expression evaluated in the page; truthy = pass. */
   expr?: string;
+  /** row and cursor: a row of the screen, counted from 1 at the top, or from -1 at the bottom. */
+  row?: number;
+  /** cursor only: a column of the screen, counted from 1. */
+  col?: number;
   raw: string;
 }
+
+/** The size of a terminal script's terminal, in character cells. */
+export interface TerminalSpec {
+  cols: number;
+  rows: number;
+}
+
+/** The terminal a `**Terminal:**` line with no size gets. */
+export const DEFAULT_TERMINAL: TerminalSpec = { cols: 100, rows: 30 };
+/** The columns and rows a `**Terminal:**` size may name. Every size in range is drawn whole in a capture. */
+export const TERMINAL_COLS = { min: 20, max: 300 };
+export const TERMINAL_ROWS = { min: 5, max: 100 };
 
 /** A `_Prove:_` / `_Fail if:_` contract line: human prose plus an optional machine assertion. */
 export interface Contract {
@@ -114,13 +165,20 @@ export interface DemoStep {
 
 export interface Demo {
   title: string;
-  /** Start URL path (+ query). The driver joins it onto the base origin. */
+  /** Start URL path (+ query). The driver joins it onto the base origin. A terminal script needs none, and it is '' there unless the script names one. */
   start: string;
   /** Free prose between the header and `## Steps` — the cover subtitle. */
   description: string;
   steps: DemoStep[];
   /** `## Scrutiny` bullets — what a viewer should check critically. Rendered as a closing card. */
   scrutiny: string[];
+  /** Set when the script declares `**Terminal:**`: its steps drive a shell in a terminal of this size, not a page. */
+  terminal?: TerminalSpec;
+}
+
+/** The surface a parsed script drives. */
+export function surfaceOf(demo: Demo): SurfaceKind {
+  return demo.terminal ? 'terminal' : 'page';
 }
 
 /** Pull every inline-code span `` `...` `` out of a line, in order. */
@@ -142,12 +200,18 @@ function proseOf(line: string): string {
     .trim();
 }
 
-/** Parse one action directive (`goto /x`, `waitFor #y`, `waitForText #z ~ hi`, `wait 500`, `click #b`, `type #i ~ hello`). */
-export function parseAction(code: string): DemoAction | null {
+/**
+ * Parse one action directive of `surface`: on a page, `goto /x`, `waitFor #y`,
+ * `waitForText #z ~ hi`, `wait 500`, `click #b`, `type #i ~ hello`; in a terminal,
+ * `run ls -la`, `press ArrowDown "text" Enter`, `waitForScreen /ready/`, `wait 500`.
+ * Returns null for anything else, another surface's verbs included.
+ */
+export function parseAction(code: string, surface: SurfaceKind = 'page'): DemoAction | null {
   const raw = code.trim();
   const sp = raw.indexOf(' ');
   const verb = (sp === -1 ? raw : raw.slice(0, sp)) as string;
-  if (!ACTION_VERBS.includes(verb as ActionVerb)) return null;
+  const verbs: readonly ActionVerb[] = surface === 'terminal' ? TERMINAL_VERBS : ACTION_VERBS;
+  if (!verbs.includes(verb as ActionVerb)) return null;
   const rest = sp === -1 ? '' : raw.slice(sp + 1).trim();
   if (verb === 'wait') {
     const ms = Number(rest);
@@ -157,15 +221,56 @@ export function parseAction(code: string): DemoAction | null {
     const [sel, ...matchParts] = rest.split(' ~ ');
     return { verb, target: sel.trim(), text: matchParts.join(' ~ ').trim(), raw };
   }
+  if (verb === 'run') return rest ? { verb, target: rest, raw } : null;
+  if (verb === 'press') {
+    const keys = parseKeys(rest);
+    return keys ? { verb, target: rest, keys, raw } : null;
+  }
+  if (verb === 'waitForScreen') return rest ? { verb, target: rest, matcher: parseMatcher(rest), raw } : null;
   return { verb: verb as ActionVerb, target: rest, raw };
 }
 
-/** Parse the assertion code span from a `_Prove:_` / `_Fail if:_` line. Returns null if unrecognised. */
-export function parseAssertion(code: string): Assertion | null {
+/**
+ * The keys of a `press`, split on whitespace: a double-quoted string is text to type, and
+ * any other word is a key name (`Enter`, `ArrowDown`, `Control+C`, `q`). Null when a quote
+ * is left open or sits inside a word, a string is empty, or there are no keys at all.
+ */
+export function parseKeys(spec: string): PressKey[] | null {
+  const keys: PressKey[] = [];
+  let i = 0;
+  while (i < spec.length) {
+    if (/\s/.test(spec[i])) {
+      i++;
+      continue;
+    }
+    if (spec[i] === '"') {
+      const end = spec.indexOf('"', i + 1);
+      if (end <= i + 1) return null;
+      keys.push({ text: spec.slice(i + 1, end) });
+      i = end + 1;
+      if (i < spec.length && !/\s/.test(spec[i])) return null;
+      continue;
+    }
+    let j = i;
+    while (j < spec.length && !/\s/.test(spec[j])) j++;
+    const key = spec.slice(i, j);
+    if (key.includes('"')) return null;
+    keys.push({ key });
+    i = j;
+  }
+  return keys.length ? keys : null;
+}
+
+/**
+ * Parse the assertion code span from a `_Prove:_` / `_Fail if:_` line of a `surface`
+ * script. Returns null if unrecognised, another surface's assertions included.
+ */
+export function parseAssertion(code: string, surface: SurfaceKind = 'page'): Assertion | null {
   const raw = code.trim();
   const sp = raw.indexOf(' ');
   const kind = (sp === -1 ? raw : raw.slice(0, sp)) as string;
   const rest = sp === -1 ? '' : raw.slice(sp + 1).trim();
+  if (surface === 'terminal') return parseTerminalAssertion(kind, rest, raw);
 
   switch (kind) {
     case 'visible':
@@ -194,6 +299,51 @@ export function parseAssertion(code: string): Assertion | null {
   }
 }
 
+/** `screen ~ <matcher>`, `row <n> ~ <matcher>`, `cursor <row> <col>` and `exit <op> <n>`. */
+function parseTerminalAssertion(kind: string, rest: string, raw: string): Assertion | null {
+  switch (kind) {
+    case 'screen': {
+      const m = rest.match(/^~\s+(.+)$/);
+      return m ? { kind, matcher: parseMatcher(m[1].trim()), raw } : null;
+    }
+    case 'row': {
+      const m = rest.match(/^(-?\d+)\s+~\s+(.+)$/);
+      const row = m ? Number(m[1]) : 0;
+      return m && row !== 0 ? { kind, row, matcher: parseMatcher(m[2].trim()), raw } : null;
+    }
+    case 'cursor': {
+      const m = rest.match(/^(-?\d+)\s+(\d+)$/);
+      const [row, col] = m ? [Number(m[1]), Number(m[2])] : [0, 0];
+      return m && row !== 0 && col >= 1 ? { kind, row, col, raw } : null;
+    }
+    case 'exit': {
+      const m = rest.match(/^(\S+)\s+(\d+)$/);
+      const op = m?.[1] as CountOp;
+      return m && COUNT_OPS.includes(op) ? { kind, op, n: Number(m[2]), raw } : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Read a `**Terminal:**` line's value: empty for the default size, else `<cols>x<rows>`.
+ * Throws on anything else, and on a size outside the range a terminal is drawn at.
+ */
+export function parseTerminalSpec(value: string): TerminalSpec {
+  const v = value.replace(/`/g, '').trim();
+  if (!v) return { ...DEFAULT_TERMINAL };
+  const m = v.match(/^(\d+)\s*[x×]\s*(\d+)$/i);
+  if (!m) throw new Error(`demo script: **Terminal:** takes an optional size, <cols>x<rows> (got "${v}")`);
+  const [cols, rows] = [Number(m[1]), Number(m[2])];
+  if (cols < TERMINAL_COLS.min || cols > TERMINAL_COLS.max || rows < TERMINAL_ROWS.min || rows > TERMINAL_ROWS.max) {
+    throw new Error(
+      `demo script: **Terminal:** ${cols}x${rows} is out of range; a terminal is ${TERMINAL_COLS.min} to ${TERMINAL_COLS.max} columns by ${TERMINAL_ROWS.min} to ${TERMINAL_ROWS.max} rows`,
+    );
+  }
+  return { cols, rows };
+}
+
 /** `/re/` → regex; `"str"` → substring; bare → substring. */
 export function parseMatcher(rhs: string): Matcher {
   if (rhs.length >= 2 && rhs.startsWith('/') && rhs.endsWith('/')) {
@@ -206,12 +356,12 @@ export function parseMatcher(rhs: string): Matcher {
 }
 
 /** Parse a `_Prove:_` / `_Fail if:_` line into prose + (optional) machine assertion. */
-function parseContract(body: string): Contract {
+function parseContract(body: string, surface: SurfaceKind): Contract {
   const codes = inlineCodes(body);
   // The assertion is the LAST recognised code span; earlier spans stay in the prose.
   let assertion: Assertion | undefined;
   for (let i = codes.length - 1; i >= 0; i--) {
-    const a = parseAssertion(codes[i]);
+    const a = parseAssertion(codes[i], surface);
     if (a) {
       assertion = a;
       break;
@@ -222,6 +372,7 @@ function parseContract(body: string): Contract {
 
 const H1 = /^#\s+(?:Demo:\s*)?(.+)$/i;
 const START = /^\*\*Start:\*\*\s*(.+)$/i;
+const TERMINAL = /^\*\*Terminal:\*\*\s*(.*)$/i;
 /** Generic-dialect header line; accepted so it never lands in the cover subtitle. */
 const AUTH = /^\*\*Auth:\*\*/i;
 /** A `##` section heading (`###` and deeper stay prose). */
@@ -246,13 +397,15 @@ function bulletText(s: string): string {
 /**
  * Parse a demo-script markdown string into a `Demo`. Tolerant: unknown lines become
  * step description prose; a `_Prove:_` without a recognised assertion is kept as a
- * prose-only (manual) contract. Throws only when the document has no title, no
- * `**Start:**`, or no steps — the three things the driver cannot run without.
+ * prose-only (manual) contract. Throws only when the document has no title, no steps,
+ * or no `**Start:**` in a page script — the things the driver cannot run without — or
+ * when `**Terminal:**` names a size a terminal is not drawn at.
  */
 export function parseDemoScript(md: string): Demo {
   const lines = md.split(/\r?\n/);
   let title = '';
   let start = '';
+  let terminal: TerminalSpec | undefined;
   const descParts: string[] = [];
   const steps: DemoStep[] = [];
   const scrutiny: string[] = [];
@@ -294,6 +447,11 @@ export function parseDemoScript(md: string): Demo {
         start = s[1].trim().replace(/^`|`$/g, '').trim();
         continue;
       }
+      const t = line.match(TERMINAL);
+      if (t) {
+        terminal = parseTerminalSpec(t[1]);
+        continue;
+      }
       if (AUTH.test(line)) continue; // generic-dialect field; auth is arranged by the caller
       // Prose between the header and ## Steps → the description (skip the title line).
       if (line && !H1.test(line)) descParts.push(line);
@@ -322,24 +480,26 @@ export function parseDemoScript(md: string): Demo {
     }
     if (!cur || !line) continue;
 
+    // Every head line comes before `## Steps`, so the surface is settled by now.
+    const surface: SurfaceKind = terminal ? 'terminal' : 'page';
     const pv = line.match(PROVE);
     if (pv) {
-      cur.prove = parseContract(pv[1]);
+      cur.prove = parseContract(pv[1], surface);
       continue;
     }
     const fi = line.match(FAIL_IF);
     if (fi) {
-      cur.failIf = parseContract(fi[1]);
+      cur.failIf = parseContract(fi[1], surface);
       continue;
     }
 
     // Any inline-code action directives on this line?
     const codes = inlineCodes(line);
-    const actions = codes.map(parseAction).filter((a): a is DemoAction => a !== null);
+    const actions = codes.map((c) => parseAction(c, surface)).filter((a): a is DemoAction => a !== null);
     // Spans that are not directives: usually prose citing a selector or a URL, but
     // a typo'd verb is indistinguishable here — keep them for the linter to judge.
     for (const c of codes) {
-      if (parseAction(c) === null) cur.droppedCodes.push(c);
+      if (parseAction(c, surface) === null) cur.droppedCodes.push(c);
     }
     if (actions.length) {
       cur.actions.push(...actions);
@@ -353,10 +513,10 @@ export function parseDemoScript(md: string): Demo {
   }
 
   if (!title) throw new Error('demo script: missing "# Demo: <title>" heading');
-  if (!start) throw new Error('demo script: missing "**Start:** <url>"');
+  if (!start && !terminal) throw new Error('demo script: missing "**Start:** <url>" (or "**Terminal:**" for a terminal script)');
   if (steps.length === 0) throw new Error('demo script: no steps found under "## Steps"');
 
-  return { title, start, description: descParts.join(' ').replace(/\s+/g, ' ').trim(), steps, scrutiny };
+  return { title, start, description: descParts.join(' ').replace(/\s+/g, ' ').trim(), steps, scrutiny, ...(terminal ? { terminal } : {}) };
 }
 
 /**

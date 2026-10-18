@@ -30,7 +30,8 @@ run options:
   --serve-dir <dir>           Serve a static directory with the built-in file server.
   --port <n>                  Port for --serve (default 5173) or --serve-dir (default: a
                               free port the system assigns).
-  --cwd <dir>                 Working directory for --serve.
+  --cwd <dir>                 Working directory for --serve, and where a terminal
+                              script's shell starts.
   -o, --output <file.mp4>     Output path (default demos/<script-name>.mp4).
   --music <file>              Mix a background-music bed under the narration.
   --no-narrate                Force a silent video even with OPENAI_API_KEY set.
@@ -41,13 +42,21 @@ screenshot options:
   --base-url, --serve, --serve-dir, --port, --cwd
                               Where the pages come from, as for run.
   -o, --output <file.png>     Output path (required).
-  --full-page                 Capture the whole scrollable page instead of the viewport.
+  --full-page                 Capture the whole scrollable page instead of the viewport,
+                              or a terminal script's whole session instead of its screen.
   --selector <css>            Capture one element, its first match, once it is visible.
   --scale <n>                 Device scale factor (default 1). At 2, text stays sharp in
                               a PNG shown at half its size.
   --transparent               Leave out the page's default white background.
   Each step's proof is checked as proof mode checks it, with no caption drawn, and
   neither ffmpeg nor OPENAI_API_KEY is needed.
+
+terminal scripts:
+  A script that declares **Terminal:** drives a bash session in the engine's own
+  terminal instead of a page, and takes no --base-url, --serve, --serve-dir or --port.
+  Its shell starts in --cwd. Its steps run commands and press keys, and its proofs read
+  the screen, a row, the cursor or the last command's exit status. screenshot saves
+  the terminal window, its rounded corners transparent.
 
 run and screenshot exit codes:
   0                           The output is saved and every step's proof held.
