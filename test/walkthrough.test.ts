@@ -1,19 +1,24 @@
 // Tests for the walkthrough's narration timing (src/walkthrough.ts).
 //
 // The narration track is laid on the recording's own timeline. The recording starts with
-// the first frame the page sends, which can come well after the page opens, so its start
-// is read from that frame. The track is silent until the cover appears, each clip starts
-// at the mark of its segment, and the last slot runs to the end of the recording, so
-// `-shortest` cuts no picture.
+// the first frame the page sends, which can come well after the page opens. A segment
+// starts with the frame that first shows it, which can come well after the engine asked
+// for it. The browser reports the frame that first shows a caption, and a card starts
+// with the first frame drawn after the page added it. The track is silent until the cover
+// appears, each clip starts in the frame that first shows its segment, and the last slot
+// runs to the end of the recording, so `-shortest` cuts no picture.
 //
-// narrationSlots is pinned on its own. The recording's start is pinned against a page drawn
-// black at a known time, found in the video. A narrated walkthrough is pinned end to end:
-// it opens a page that draws 1 s after it is asked for and loads 1.5 s after that, so the
-// recording may start with the blank page or with the page's first frame, and the cover
-// appears at least 1.5 s in. A tone stands in for each clip in place of a real voice.
-// The test reads, from the MP4, when each tone sounds and when the cover and the closing
-// card show. A step that ends at once comes before the closing card, so a slot held longer
-// than its step would show as a late closing clip.
+// narrationSlots is pinned on its own. The recording's frames are pinned against a page
+// drawn black at a known time, found in the video. A narrated walkthrough is pinned end to
+// end. It opens a page that draws 1 s after it is asked for and loads 1.5 s after that.
+// The cover and the caption bar each keep the page busy for 1 s once the page has added
+// them. So the recording may start with the blank page or with the page's first frame, the
+// cover appears at least 2.5 s in, and the browser draws the cover and the first step's
+// caption about 1 s after the page changed, and later still after the engine asked it to.
+// A tone stands in for each clip in place of a real voice. The test reads, from the MP4,
+// when each tone sounds and when the cover, the first step's caption and the closing card
+// show. A step that ends at once comes before the closing card, so a slot held longer than
+// its step would show as a late closing clip.
 //
 // The browser-backed tests need a headless Chromium and a real ffmpeg, and skip without
 // them (see browser-fixture.ts and assemble.test.ts).
@@ -26,7 +31,7 @@ import type { AddressInfo } from 'node:net';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
-import { captureWalkthrough, narrationSlots, watchRecordingStart } from '../src/walkthrough.ts';
+import { captureWalkthrough, narrationSlots, watchRecording } from '../src/walkthrough.ts';
 import { ffmpegBin, probeDuration } from '../src/ffmpeg.ts';
 import { VIEWPORT } from '../src/browser.ts';
 import { launchBrowser, scratchDir } from './browser-fixture.ts';
@@ -91,42 +96,49 @@ function onsets(file: string): number[] {
   return firstSilence && Number(firstSilence[1]) < 0.05 ? ends : [0, ...ends];
 }
 
-test('the recording starts at its first frame, so a page drawn at a known time shows at that time in the video', { skip: skip || needsFfmpeg }, async () => {
+test('the recording starts at its first frame, and a change the page makes shows in the video from the first frame drawn after it', { skip: skip || needsFfmpeg }, async () => {
   const { dir, cleanup } = scratchDir();
   const context = await browser!.newContext({ viewport: VIEWPORT, recordVideo: { dir, size: VIEWPORT } });
   try {
     const page = await context.newPage();
-    const recordingStart = await watchRecordingStart(page);
+    const recording = await watchRecording(page);
     // A page that has not drawn may send no frame for this long, and then the recording starts with the black.
     await page.waitForTimeout(600);
-    const before = Date.now();
-    await page.evaluate(() => {
+    const drawnAt = await page.evaluate(() => {
       document.documentElement.style.background = '#000';
+      return performance.timeOrigin + performance.now();
     });
-    const after = Date.now();
     await page.waitForTimeout(1000);
     const video = page.video();
     assert.ok(video, 'the context records the page');
     await context.close();
-    const start = recordingStart();
-    assert.ok(start !== null, 'a frame of the recording was seen');
+    const start = recording.start();
+    const shown = recording.firstFrom(drawnAt);
+    assert.ok(start !== null && shown !== null, 'the recording has a first frame, and a frame drawn after the page turned black');
     const black = firstFrame(patchLuma(await video.path(), 320, 300), 0, (l) => l < 100, 'the page drawn black');
-    // The frame drawn black is swapped once the evaluate has run, and the video holds it
-    // from the next of its 40 ms frames.
-    const [from, to] = [(before - start) / 1000, (after - start) / 1000];
-    assert.ok(black >= from - 0.08 && black <= to + 0.12, `the page was drawn black ${from}s to ${to}s into the recording, and the video shows it from ${black}s`);
+    // The video is cut in 40 ms frames, and shows a drawn frame from the one that starts at
+    // most a little over 40 ms before the frame was drawn.
+    const at = (shown - start) / 1000;
+    assert.ok(black >= at - 0.06 && black <= at + 0.02, `the frame drawn black is ${at}s into the recording, and the video shows it from ${black}s`);
   } finally {
     await context.close();
     cleanup();
   }
 });
 
-// The page answers DRAW_MS after it is asked for, and its image LOAD_MS after that.
+// The page answers DRAW_MS after it is asked for, and its image LOAD_MS after that. Once it
+// has loaded, the first two things added to it, the cover and the caption bar, each keep
+// it busy for BUSY_MS, so the browser draws each that long after the page added it.
 const DRAW_MS = 1000;
 const LOAD_MS = 1500;
+const BUSY_MS = 1000;
 const PAGE =
   '<!doctype html><html><body style="margin:0;background:#fff;font:14px sans-serif">' +
-  '<main id="app" style="height:100vh">The page draws, then loads once its image has.</main><img src="/slow.png" alt=""></body></html>';
+  '<main id="app" style="height:100vh">The page draws, then loads once its image has.</main><img src="/slow.png" alt="">' +
+  "<script>addEventListener('load', () => { let busy = 2; new MutationObserver((records, observer) => {" +
+  'if (!records.some((r) => r.addedNodes.length)) return; if (--busy === 0) observer.disconnect();' +
+  `const end = performance.now() + ${BUSY_MS}; while (performance.now() < end);` +
+  '}).observe(document.body, { childList: true }); });</script></body></html>';
 const SCRIPT = `# Demo: Narration timing
 
 **Start:** \`/\`
@@ -189,16 +201,23 @@ test('a narrated walkthrough voices each segment when it shows in the recording,
     assert.deepEqual(asked, ['Narration timing', 'The page is up', 'A step that ends at once', 'What to check critically'], 'each segment was voiced, and the lead-in was not');
 
     // The page is white, and the cover and the closing card cover it in the engine's dark
-    // background, so each card shows from the first frame whose patch darkens. Its clip
-    // starts with it.
+    // background, so each card shows from the first frame whose patch darkens. The caption
+    // bar darkens the foot of the page. Each clip starts with what it voices.
     const frames = patchLuma(outputPath, 320, 300);
     const cover = firstFrame(frames, 0, (l) => l < 200, 'the cover');
     const between = firstFrame(frames, cover, (l) => l > 220, 'the page between the cards');
-    const closing = firstFrame(frames, between, (l) => l < 200, 'the closing card');
+    // Near the end of a card's fade-out, a loaded browser can draw one frame with the card
+    // darker than in the frame before. So the caption is the first frame whose foot is dark
+    // while the page above it is light, and the closing card is looked for once it shows.
+    const foot = patchLuma(outputPath, 640, 880);
+    const captionFrame = foot.find((f, i) => f.t >= between && f.luma < 100 && frames[i].luma > 220);
+    assert.ok(captionFrame, `no frame from ${between}s shows the first step's caption`);
+    const caption = captionFrame.t;
+    const closing = firstFrame(frames, caption, (l) => l < 200, 'the closing card');
     // A track laid from the cover's mark, as if the recording started there, would run this far ahead.
-    assert.ok(cover > LOAD_MS / 1000 - TOLERANCE_S, `the cover shows once the page has loaded, at ${cover}s`);
+    assert.ok(cover > (LOAD_MS + BUSY_MS) / 1000 - TOLERANCE_S, `the cover shows once the page has loaded and is no longer busy with it, at ${cover}s`);
     const heard = onsets(outputPath);
-    for (const [name, shown] of [['cover', cover], ['closing card', closing]] as const) {
+    for (const [name, shown] of [['cover', cover], ["first step's caption", caption], ['closing card', closing]] as const) {
       const nearest = heard.reduce((a, b) => (Math.abs(b - shown) < Math.abs(a - shown) ? b : a), Infinity);
       assert.ok(Math.abs(nearest - shown) <= TOLERANCE_S, `the ${name} shows at ${shown}s, and the nearest clip starts at ${nearest}s (clips start at ${heard.join(', ')})`);
     }

@@ -21,13 +21,23 @@ export function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** How long a caption waits for the browser to report that it has shown it. */
+const SHOWN_TIMEOUT_MS = 5000;
+let captions = 0;
+
 /**
  * Show (or update, if already present) the step caption bar at the bottom of the page.
  * Idempotent, so the walkthrough path can call it every step to retitle the same bar.
+ *
+ * The counter and the label are fresh elements each time, marked for the page's Element
+ * Timing, so the browser reports the frame in which it first showed their text. Resolves
+ * once it has, with that frame's wall-clock time in ms. When the browser reports no frame
+ * within SHOWN_TIMEOUT_MS, it resolves with the time the page changed the bar.
  */
-export async function showCaption(page: Page, idx: number, total: number, text: string, failed: boolean): Promise<void> {
-  await page.evaluate(
-    ({ idx, total, text, failed, ACCENT, ACCENT_FAIL, FONT }) => {
+export async function showCaption(page: Page, idx: number, total: number, text: string, failed: boolean): Promise<number> {
+  const id = `__ss_caption_${++captions}`;
+  const changedAt = await page.evaluate(
+    ({ idx, total, text, failed, id, ACCENT, ACCENT_FAIL, FONT }) => {
       const ID = '__ss_caption__';
       const accent = failed ? ACCENT_FAIL : ACCENT;
       let bar = document.getElementById(ID);
@@ -50,18 +60,6 @@ export async function showCaption(page: Page, idx: number, total: number, text: 
           boxShadow: '0 -10px 30px rgba(0,0,0,0.35)',
           transition: 'border-color .2s ease',
         });
-        const counter = document.createElement('span');
-        counter.dataset.role = 'counter';
-        Object.assign(counter.style, {
-          flex: '0 0 auto',
-          fontWeight: '700',
-          fontVariantNumeric: 'tabular-nums',
-          fontSize: '15px',
-          borderRadius: '6px',
-          padding: '2px 8px',
-        });
-        const label = document.createElement('span');
-        label.dataset.role = 'label';
         const badge = document.createElement('span');
         badge.dataset.role = 'badge';
         Object.assign(badge.style, {
@@ -76,21 +74,66 @@ export async function showCaption(page: Page, idx: number, total: number, text: 
           display: 'none',
         });
         badge.textContent = 'PROOF FAILED';
-        bar.append(counter, label, badge);
+        bar.append(badge);
         document.body.appendChild(bar);
       }
       bar.style.borderTop = `3px solid ${accent}`;
-      const counter = bar.querySelector('[data-role=counter]') as HTMLElement;
+      const counter = document.createElement('span');
+      counter.dataset.role = 'counter';
+      Object.assign(counter.style, {
+        flex: '0 0 auto',
+        fontWeight: '700',
+        fontVariantNumeric: 'tabular-nums',
+        fontSize: '15px',
+        borderRadius: '6px',
+        padding: '2px 8px',
+        color: accent,
+        border: `1px solid ${accent}`,
+      });
       counter.textContent = `${idx} / ${total}`;
-      counter.style.color = accent;
-      counter.style.border = `1px solid ${accent}`;
-      (bar.querySelector('[data-role=label]') as HTMLElement).textContent = text;
+      const label = document.createElement('span');
+      label.dataset.role = 'label';
+      label.textContent = text;
+      for (const el of [counter, label]) el.setAttribute('elementtiming', id);
+      bar.querySelectorAll('[data-role=counter], [data-role=label]').forEach((el) => el.remove());
+      bar.prepend(counter, label);
       const badge = bar.querySelector('[data-role=badge]') as HTMLElement;
       badge.style.display = failed ? 'inline-block' : 'none';
       badge.style.background = accent;
+      return performance.timeOrigin + performance.now();
     },
-    { idx, total, text, failed, ACCENT, ACCENT_FAIL, FONT },
+    { idx, total, text, failed, id, ACCENT, ACCENT_FAIL, FONT },
   );
+  return (await shownAt(page, id)) ?? changedAt;
+}
+
+/**
+ * The wall-clock time, in ms, of the frame in which the browser first showed the text of
+ * the element marked `id`, as the page's Element Timing reports it. Null when the browser
+ * reports none within SHOWN_TIMEOUT_MS, or the page goes away first. Element Timing
+ * reports an element once, for the first frame that shows its text.
+ */
+async function shownAt(page: Page, id: string): Promise<number | null> {
+  return page
+    .evaluate(
+      ({ id, timeout }) =>
+        new Promise<number | null>((resolve) => {
+          if (!PerformanceObserver.supportedEntryTypes.includes('element')) return resolve(null);
+          const observer = new PerformanceObserver((list) => {
+            const entry = (list.getEntries() as unknown as { identifier: string; renderTime: number }[]).find((e) => e.identifier === id && e.renderTime > 0);
+            if (!entry) return;
+            observer.disconnect();
+            resolve(performance.timeOrigin + entry.renderTime);
+          });
+          observer.observe({ type: 'element', buffered: true });
+          setTimeout(() => {
+            observer.disconnect();
+            resolve(null);
+          }, timeout);
+        }),
+      { id, timeout: SHOWN_TIMEOUT_MS },
+    )
+    .catch(() => null);
 }
 
 export async function removeCaption(page: Page): Promise<void> {
@@ -128,9 +171,10 @@ export function cardDocument(inner: string): string {
 /**
  * Show a full-screen card over the live page for `ms`, then remove it (the walkthrough
  * path, where the recording keeps rolling and the page must not be navigated away).
+ * Resolves with the wall-clock time, in ms, at which the page added the card.
  */
-export async function showCardOverlay(page: Page, inner: string, ms: number): Promise<void> {
-  await page.evaluate(
+export async function showCardOverlay(page: Page, inner: string, ms: number): Promise<number> {
+  const addedAt = await page.evaluate(
     ({ inner, BG, FG, FONT }) => {
       const el = document.createElement('div');
       el.id = '__ss_card__';
@@ -152,6 +196,7 @@ export async function showCardOverlay(page: Page, inner: string, ms: number): Pr
       el.innerHTML = inner;
       document.body.appendChild(el);
       requestAnimationFrame(() => (el.style.opacity = '1'));
+      return performance.timeOrigin + performance.now();
     },
     { inner, BG, FG, FONT },
   );
@@ -163,4 +208,5 @@ export async function showCardOverlay(page: Page, inner: string, ms: number): Pr
     setTimeout(() => el.remove(), 360);
   });
   await page.waitForTimeout(380);
+  return addedAt;
 }

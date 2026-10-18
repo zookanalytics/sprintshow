@@ -73,36 +73,45 @@ export function narrationSlots(marks: SegMark[], endMs: number): NarrationSlot[]
     .filter((s) => s.duration > 0);
 }
 
-/**
- * Watch for the start of `page`'s recording. The video opens on the first frame the page
- * shows, which can come well after the page opens, because a page that has not painted
- * may show none. So the start is that frame's wall-clock time: a screencast client is sent
- * the page's frames, keeps the time of the first, and stops. A client that joins after a
- * frame is sent the last frame shown, which is still the first until the page draws
- * again, so start watching before anything is drawn in the page. The function returned
- * gives the start as a wall-clock time in ms, or null while no frame has arrived.
- */
-export async function watchRecordingStart(page: Page): Promise<() => number | null> {
-  let start: number | null = null;
-  await page.screencast
-    .start({
-      onFrame: ({ timestamp }) => {
-        if (start !== null) return;
-        start = timestamp;
-        page.screencast.stop().catch(() => {});
-      },
-    })
-    .catch(() => {});
-  return () => start;
+/** The frames of a page's recording, each by the wall-clock time in ms the browser drew it at. */
+export interface RecordingFrames {
+  /** The first frame, where the video starts, or null while none has arrived. */
+  start(): number | null;
+  /** The first frame drawn at or after `wall`, or null when none has been. */
+  firstFrom(wall: number): number | null;
 }
 
-async function walkStep(page: import('playwright').Page, base: string, step: DemoStep, total: number, log: (m: string) => void): Promise<boolean> {
-  const { proved } = await runStep(page, base, step, total, true, log, () => showCaption(page, step.index, total, step.narration, false));
+/**
+ * Watch the frames of `page`'s recording. The video opens on the first frame the page
+ * shows, which can come well after the page opens, because a page that has not painted
+ * may show none. A change the page makes shows from the next frame the browser draws,
+ * which under load can also come well after the change. The recording places each frame
+ * at the wall-clock time it was drawn, and a screencast client is sent each frame with
+ * that time, so this client keeps the times. A client that joins after a frame is sent
+ * the last frame shown, which is still the first until the page draws again, so start
+ * watching before anything is drawn in the page.
+ */
+export async function watchRecording(page: Page): Promise<RecordingFrames> {
+  const drawn: number[] = [];
+  await page.screencast.start({ onFrame: ({ timestamp }) => void drawn.push(timestamp) }).catch(() => {});
+  const earliest = (times: number[]): number | null => (times.length ? Math.min(...times) : null);
+  return {
+    start: () => earliest(drawn),
+    firstFrom: (wall) => earliest(drawn.filter((t) => t >= wall)),
+  };
+}
+
+/** Walk one step, and resolve with whether its proof held and when the browser first showed its caption. */
+async function walkStep(page: Page, base: string, step: DemoStep, total: number, log: (m: string) => void): Promise<{ proved: boolean; shownAt: number }> {
+  let shownAt = Date.now();
+  const { proved } = await runStep(page, base, step, total, true, log, async () => {
+    shownAt = await showCaption(page, step.index, total, step.narration, false);
+  });
   if (!proved) {
     await showCaption(page, step.index, total, step.narration, true);
     await page.waitForTimeout(FAIL_HOLD_MS);
   }
-  return proved;
+  return { proved, shownAt };
 }
 
 /**
@@ -124,16 +133,14 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
   const browser = opts.browser ?? (await chromium.launch({ headless: !opts.headed, args: chromiumLaunchArgs() }));
   const context = await browser.newContext({ viewport: VIEWPORT, recordVideo: { dir: capturesDir, size: VIEWPORT } });
   const page = await context.newPage();
-  const recordingStart = await watchRecordingStart(page);
+  const recording = await watchRecording(page);
   const openedAt = Date.now();
   await installPointer(page);
 
-  // The wall-clock time each segment starts at. Chromium stamps the recording's frames on
-  // the same clock, so each is read against the recording's start once the recording ends.
-  const shown: { narration: string; wall: number }[] = [];
-  const mark = (narration: string): void => {
-    shown.push({ narration, wall: Date.now() });
-  };
+  // Each segment, with a wall-clock time: for a step, when the browser first showed its
+  // caption; for the cover and the closing card, when the page added the card; for a tail
+  // with no card, which draws nothing, when it began.
+  const segments: { narration: string; wall: number; card: boolean }[] = [];
   let failures = 0;
   let webmPath: string | null = null;
   let flushedAt = 0;
@@ -141,18 +148,22 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
 
   try {
     surface = await openSurface(page, demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, backdrop: true, log });
-    mark(demo.title);
-    await showCardOverlay(page, coverInnerHtml(BRAND, demo.title, demo.description, `${demo.steps.length} steps`), COVER_MS);
+    const cover = await showCardOverlay(page, coverInnerHtml(BRAND, demo.title, demo.description, `${demo.steps.length} steps`), COVER_MS);
+    segments.push({ narration: demo.title, wall: cover, card: true });
 
     for (const step of demo.steps) {
-      mark(step.narration);
-      const proved = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
+      const { proved, shownAt } = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
+      segments.push({ narration: step.narration, wall: shownAt, card: false });
       if (!proved) failures++;
     }
 
-    mark(demo.scrutiny.length ? 'What to check critically' : '');
-    if (demo.scrutiny.length) await showCardOverlay(page, scrutinyInnerHtml(demo.scrutiny), Math.min(14000, Math.max(6000, demo.scrutiny.length * 2500)));
-    else await page.waitForTimeout(TAIL_MS);
+    if (demo.scrutiny.length) {
+      const card = await showCardOverlay(page, scrutinyInnerHtml(demo.scrutiny), Math.min(14000, Math.max(6000, demo.scrutiny.length * 2500)));
+      segments.push({ narration: 'What to check critically', wall: card, card: true });
+    } else {
+      segments.push({ narration: '', wall: Date.now(), card: false });
+      await page.waitForTimeout(TAIL_MS);
+    }
   } finally {
     try {
       // Closing the context is what flushes the .webm; the path resolves after.
@@ -169,10 +180,18 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
 
   if (!webmPath) throw new Error('walkthrough: recording produced no video (recordVideo did not write a file)');
 
-  const firstFrame = recordingStart();
+  const firstFrame = recording.start();
   if (firstFrame === null) log('walkthrough: no frame of the recording reached the engine, so the narration is timed from when the page opened');
   const start = firstFrame ?? openedAt;
-  const marks = shown.map((s) => ({ narration: s.narration, at: s.wall - start }));
+  // A segment starts with the frame that first shows it, so neither the time an evaluate
+  // takes to reach a busy page nor the time a loaded browser takes to draw counts against
+  // its clip. A caption's frame is the one the browser reported. A card can fade in, and
+  // the browser reports no frame for text it first paints unseen, so a card starts with
+  // the first frame the browser drew after the page added it. That is the card's frame
+  // unless the page was drawing frames of its own then. The page, the browser and the
+  // engine all tell the host's wall-clock time, so every time is read against the
+  // recording's start.
+  const marks = segments.map((s) => ({ narration: s.narration, at: ((s.card ? recording.firstFrom(s.wall) : null) ?? s.wall) - start }));
 
   const tmp = mkdtempSync(path.join(tmpdir(), 'sprintshow-wt-'));
   try {
