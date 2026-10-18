@@ -120,12 +120,13 @@ Chromium draws one capture in tiles, and holds only so many of them at once: abo
 million device pixels' worth. A `--full-page` capture larger than that holds what fits,
 whichever size of tile the browser draws in: 256 pixels on a side, or 512 in a browser
 started on a screen at scale 2 or more on macOS. A page keeps its top and a terminal
-session keeps its last lines, and the log says how much the capture holds. At
-`--scale 2`, a 1280-pixel-wide page keeps about its top 20,000 CSS pixels, and an 80x24
-terminal about its last 870 lines. Those are the tiles of a browser that rasterizes in
-software, as the headless shell does. A browser that rasterizes on the GPU, such as a
-headed Chrome whose page is given to `captureScreenshot`, lays its tiles out another way,
-which the limit was not measured for.
+session keeps its last lines, and the log says how much the capture holds. A capture that
+cannot hold one row of the page, or one line of the session, saves nothing and says the
+scale is too large for one capture. At `--scale 2`, a 1280-pixel-wide page keeps about its
+top 20,000 CSS pixels, and an 80x24 terminal about its last 870 lines. Those are the tiles
+of a browser that rasterizes in software, as the headless shell does. A browser that
+rasterizes on the GPU, such as a headed Chrome whose page is given to `captureScreenshot`,
+lays its tiles out another way, which the limit was not measured for.
 
 ## Terminal demos
 

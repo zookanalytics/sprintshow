@@ -179,14 +179,15 @@ interface PageTerminal {
   /**
    * Give the terminal one row for each line of the session, as many of its last lines as
    * fit a window `maxHeight` CSS pixels tall, so the window holds them. Returns the rows
-   * the window holds and the lines the session holds.
+   * the window holds and the lines the session holds. When not one line fits, the window
+   * is left as it is and the rows are 0.
    */
   expand(maxHeight: number): HeldLines;
   /** Resolve once the browser has drawn what xterm rendered. */
   painted(): Promise<void>;
 }
 
-/** What a window grown to the session holds: `rows` of the session's `lines`, its last ones. */
+/** What a window grown to the session holds: `rows` of the session's `lines`, its last ones, and 0 rows when not one line fits. */
 export interface HeldLines {
   rows: number;
   lines: number;
@@ -301,7 +302,8 @@ function installTerminal(o: InstallOptions): boolean {
       // The window is its title bar and padding, and the rows below them, which share one height.
       const screen = (term.element.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect().height;
       const frame = (document.getElementById('ss-window') as HTMLElement).getBoundingClientRect().height - screen;
-      const rows = Math.max(1, Math.min(lines, Math.floor((maxHeight - frame) / (screen / term.rows))));
+      const rows = Math.min(lines, Math.floor((maxHeight - frame) / (screen / term.rows)));
+      if (rows < 1) return { rows: 0, lines };
       if (rows !== term.rows) term.resize(term.cols, rows);
       // A taller terminal takes its new rows from the scrollback only while the cursor is
       // on the bottom row. Below a cleared screen it adds blank rows instead, so the window
@@ -771,7 +773,8 @@ export async function checkTerminalAssertion(page: Page, a: Assertion): Promise<
 
 /**
  * Give the page's terminal one row for each line of the session, as many of its last
- * lines as fit a window `maxHeight` CSS pixels tall, and wait for it to be drawn.
+ * lines as fit a window `maxHeight` CSS pixels tall, and wait for it to be drawn. When not
+ * one line fits, the window is left as it is and the rows are 0.
  */
 export async function expandToSession(page: Page, maxHeight: number): Promise<HeldLines> {
   await requireTerminal(page);

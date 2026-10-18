@@ -13,8 +13,9 @@
 // terminal window with transparent corners, `--full-page` holds the whole session, or
 // its last lines, each one drawn in tiles of either size Chromium draws in, when the
 // session is more than one capture holds. A full-page still saves nothing, and says why,
-// when the page has no terminal window. A terminal script refuses a server, a selector,
-// or a directory that does not exist before a browser is spent. A video frame
+// at a scale where one capture cannot hold a line of the session, or when the page has
+// no terminal window. A terminal script refuses a server, a selector, or a directory that
+// does not exist before a browser is spent. A video frame
 // shows every cell of a terminal at each limit of the sizes the parser accepts, clear of
 // the caption bar. The shell and every program it still runs end before the capture
 // returns, even a program that handles SIGHUP and however slowly the host lists them, and
@@ -411,7 +412,7 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     }
   });
 
-  test('a window grown to the session holds its last lines when the session is more than the window may hold', async () => {
+  test('a window grown to the session holds its last lines when the session is more than the window may hold, and none when not one line fits', async () => {
     const md = `# Demo: Long\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **Fifty lines**\n   \`run seq 1 50\`\n`;
     const { dir, cleanup } = scratchDir();
     try {
@@ -422,10 +423,14 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
           const s = (document.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect();
           return { frame: w.height - s.height, row: s.height / 10 };
         }, TERMINAL_WINDOW);
+        const drawn = (): Promise<string[]> => page.evaluate(() => [...document.querySelectorAll('.xterm-rows > div')].map((r) => (r.textContent ?? '').trimEnd()));
         // Room for twenty and a half rows, where the session is `$ seq 1 50`, the fifty lines, and the prompt.
         assert.deepEqual(await expandToSession(page, frame + 20.5 * row), { rows: 20, lines: 52 });
-        const drawn = await page.evaluate(() => [...document.querySelectorAll('.xterm-rows > div')].map((r) => (r.textContent ?? '').trimEnd()));
-        assert.deepEqual(drawn, [...Array.from({ length: 19 }, (_, i) => String(32 + i)), '$']);
+        const last20 = [...Array.from({ length: 19 }, (_, i) => String(32 + i)), '$'];
+        assert.deepEqual(await drawn(), last20);
+        // Room for half a row: the window is left as it is.
+        assert.deepEqual(await expandToSession(page, frame + 0.5 * row), { rows: 0, lines: 52 });
+        assert.deepEqual(await drawn(), last20);
       });
     } finally {
       cleanup();
@@ -449,6 +454,26 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
         message: 'screenshot: could not measure the terminal window (1 step(s) failed their proof): this page has no terminal window',
       });
       assert.equal(existsSync(png), false);
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test('--full-page refuses a still at a scale where one capture cannot hold a line of the session, and saves nothing', async () => {
+    const scale = 100;
+    const md = `# Demo: Short\n\n**Terminal:** 20x5\n\n## Steps\n\n1. **One line**\n   \`run echo hi\`\n`;
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage({ deviceScaleFactor: scale });
+    try {
+      const png = path.join(dir, 'x.png');
+      await assert.rejects(captureScreenshot({ page, demo: md, cwd: dir, outputPath: png, fullPage: true, log: quiet }), {
+        message: new RegExp(`^screenshot: could not capture the terminal session: scale ${scale} is too large for one capture of a window \\d+ CSS pixels wide$`),
+      });
+      assert.equal(existsSync(png), false);
+      // One capture would hold some rows of pixels, just not a whole line of the window.
+      const width = await page.evaluate((win) => (document.querySelector(win) as HTMLElement).getBoundingClientRect().width, TERMINAL_WINDOW);
+      assert.ok(captureHeightLimit(width, scale) >= 1);
     } finally {
       await page.close();
       cleanup();

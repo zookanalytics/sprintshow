@@ -109,6 +109,12 @@ pixels, or 512 laid every 510.
 - A terminal still grows its window to as many of the session's last lines as fit, so the
   screen, which the default still shows, is always in it. A page capture keeps the page's
   top. Either way the log says what the capture holds of the whole.
+- A capture that cannot hold one row of the page, or one line of the session, at its
+  width and scale saves nothing, and its error says the scale is too large for one
+  capture. A page reaches that once one row of tiles across it is more than the budget,
+  as a page 250,000 CSS pixels wide does at `--scale 1`. A terminal still reaches it once
+  one line of the window, with its title bar and padding, is taller than the limit, as a
+  20-column session's is at `--scale 100`.
 - A capture is given 15 s and 100 ms more for each tile it spans, about three times the
   slowest rate measured. The tiles are counted at 256 pixels whatever size the browser
   draws in, so a capture of the same area gets the same time in either browser.

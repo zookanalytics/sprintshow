@@ -8,7 +8,8 @@
 // the steps have run says how many of their proofs failed. A full-page capture of a page
 // larger than one capture holds keeps its top, each row of it drawn in tiles of either
 // size Chromium draws in, and says so, and the limit it stops at ends inside what
-// Chromium drew of captures that asked for more.
+// Chromium drew of captures that asked for more. One of a page too wide at its scale for
+// one capture to hold a row of it saves nothing, and says the scale is too large.
 //
 // The tests that drive a page need a headless Chromium and skip without one (see
 // browser-fixture.ts).
@@ -89,6 +90,20 @@ const BANDS = `# Demo: Banded page
 1. **A page of bands, 30000 px tall**
    \`waitFor #end\`
    _Prove:_ the last band is on the page — \`count #end == 1\`
+`;
+
+/** A page 250,000 px wide: at scale 1, one row of 512-pixel tiles across it is more than Chromium's budget. */
+const WIDE_HTML = '<!doctype html><body style="margin:0"><div id="end" style="width:250000px;height:10px"></div></body>';
+
+const WIDE = `# Demo: Wide page
+
+**Start:** \`/wide.html\`
+
+## Steps
+
+1. **A page 250000 px wide**
+   \`waitFor #end\`
+   _Prove:_ the strip across it is on the page — \`count #end == 1\`
 `;
 
 /** A rounded card on a page that paints no background of its own. */
@@ -197,6 +212,22 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
       assert.ok(fullHeight > 2000);
       assert.deepEqual(pngSize(full), { width: 1280, height: fullHeight });
       assert.deepEqual(pngSize(view), { width: 1280, height: 900 });
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
+
+  test('--full-page refuses a page too wide at its scale for one capture to hold a row of it, and saves nothing', async () => {
+    const site = await serveSite({ 'wide.html': WIDE_HTML });
+    const page = await browser!.newPage();
+    try {
+      const png = path.join(site.dir, 'wide.png');
+      assert.equal(captureHeightLimit(250000, 1), 0);
+      await assert.rejects(captureScreenshot({ page, baseUrl: site.baseUrl, demo: WIDE, outputPath: png, fullPage: true, log: quiet }), {
+        message: 'screenshot: could not capture the full page: scale 1 is too large for one capture of a page 250000 CSS pixels wide',
+      });
+      assert.equal(existsSync(png), false);
     } finally {
       await page.close();
       await site.close();

@@ -17,8 +17,9 @@
 //
 // Chromium draws a capture in tiles and holds only so many of them, so a full-page
 // capture holds no more than it draws whole (captureHeightLimit). A page keeps its top,
-// and a terminal session its last lines. specs/ss-vyii/capture-limit.md records how the
-// limit was found.
+// and a terminal session its last lines. A capture that cannot hold one row of the page,
+// or one line of the session, at its scale fails instead. specs/ss-vyii/capture-limit.md
+// records how the limit was found.
 
 import path from 'node:path';
 import type { Page } from 'playwright';
@@ -52,7 +53,8 @@ function tileSpan(length: number, scale: number, size: number): number {
 /**
  * The tallest capture, in CSS pixels, that Chromium draws whole in tiles of either size
  * when it is `width` CSS pixels wide at `scale` device pixels per CSS pixel and starts at
- * the page's top-left corner, where the tiles start.
+ * the page's top-left corner, where the tiles start. It is 0 when one row of tiles across
+ * that width is more than the budget.
  */
 export function captureHeightLimit(width: number, scale: number): number {
   const limits = TILE_SIZES.map((size) => {
@@ -142,8 +144,9 @@ export const TERMINAL_SELECTOR = 'screenshot: a terminal script captures its ter
 /**
  * Drive `demo` against `page`, checking each step's proof, then save the state the last
  * step leaves as a PNG at `outputPath`. Throws, saving nothing, when the page cannot be
- * driven, the selector never becomes visible, or the PNG cannot be written. An error
- * raised once the steps have run counts the steps whose proof failed.
+ * driven, the selector never becomes visible, a full-page capture cannot hold one row of
+ * the page or one line of the session at its scale, or the PNG cannot be written. An
+ * error raised once the steps have run counts the steps whose proof failed.
  */
 export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise<ScreenshotResult> {
   if (opts.fullPage && opts.selector) throw new Error(AREA_CONFLICT);
@@ -174,6 +177,8 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
     };
     // Said after the area of a full-page capture that stops short.
     const limited = (scale: number): string => `, the most one capture holds at scale ${scale}`;
+    // Why a full-page capture holds nothing: not one row of a page, or one line of a terminal window.
+    const tooLarge = (what: string, { width, scale }: Extent): string => `scale ${scale} is too large for one capture of ${what} ${Math.round(width)} CSS pixels wide`;
 
     const shot = { path: opts.outputPath, type: 'png' as const, omitBackground: Boolean(opts.transparent), timeout: ACTION_TIMEOUT };
     if (demo.terminal) {
@@ -184,6 +189,7 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
         // A still's window sits at the page's top-left corner, and grows down from there.
         const win = await attempt('could not measure the terminal window', () => windowExtent(page));
         const held = await attempt('could not grow the window to the session', () => expandToSession(page, captureHeightLimit(win.width, win.scale)));
+        if (held.rows < 1) throw new Error(`screenshot: could not capture the terminal session${failed}: ${tooLarge('a window', win)}`);
         area = held.rows < held.lines ? `the session's last ${held.rows} of its ${held.lines} lines` : 'the whole terminal session';
         if (held.rows < held.lines) note = limited(win.scale);
         timeout = captureTimeout(await attempt('could not measure the terminal window', () => windowExtent(page)));
@@ -203,6 +209,7 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
       if (opts.fullPage) {
         const full = await attempt('could not measure the full page', () => pageExtent(page));
         const limit = captureHeightLimit(full.width, full.scale);
+        if (limit < 1) throw new Error(`screenshot: could not capture the full page${failed}: ${tooLarge('a page', full)}`);
         if (full.height > limit) {
           clip = { x: 0, y: 0, width: full.width, height: limit };
           area = `the page's top ${limit} of its ${full.height} CSS pixels`;
