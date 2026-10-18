@@ -176,10 +176,21 @@ interface PageTerminal {
   row(n: number): string | null;
   cursor(): { row: number; col: number; rows: number };
   focus(): void;
-  /** Give the terminal one row for each line of the session, so the window holds all of it. Returns the rows. */
-  expand(): number;
+  /**
+   * Give the terminal one row for each line of the session, as many of its last lines as
+   * fit a window `maxHeight` CSS pixels tall, so the window holds them. Returns the rows
+   * the window holds and the lines the session holds. When not one line fits, the window
+   * is left as it is and the rows are 0.
+   */
+  expand(maxHeight: number): HeldLines;
   /** Resolve once the browser has drawn what xterm rendered. */
   painted(): Promise<void>;
+}
+
+/** What a window grown to the session holds: `rows` of the session's `lines`, its last ones, and 0 rows when not one line fits. */
+export interface HeldLines {
+  rows: number;
+  lines: number;
 }
 
 type TermWindow = { __ss_term: PageTerminal };
@@ -275,11 +286,11 @@ function installTerminal(o: InstallOptions): boolean {
     // A cursor parked after the last column (a pending wrap) shows on the last column.
     cursor: () => ({ row: buf().cursorY + 1, col: Math.min(buf().cursorX, term.cols - 1) + 1, rows: term.rows }),
     focus: () => term.focus(),
-    expand() {
+    expand(maxHeight) {
       // From the scrollback's first line to the last line with text or the cursor's,
       // whichever is lower. The alternate screen has no scrollback and stays as it is.
       const b = buf();
-      if (b.type !== 'normal') return term.rows;
+      if (b.type !== 'normal') return { rows: term.rows, lines: term.rows };
       let last = b.baseY + b.cursorY;
       for (let y = b.length - 1; y > last; y--) {
         if (text(y, true)) {
@@ -287,12 +298,18 @@ function installTerminal(o: InstallOptions): boolean {
           break;
         }
       }
-      if (last + 1 !== term.rows) term.resize(term.cols, last + 1);
+      const lines = last + 1;
+      // The window is its title bar and padding, and the rows below them, which share one height.
+      const screen = (term.element.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect().height;
+      const frame = (document.getElementById('ss-window') as HTMLElement).getBoundingClientRect().height - screen;
+      const rows = Math.min(lines, Math.floor((maxHeight - frame) / (screen / term.rows)));
+      if (rows < 1) return { rows: 0, lines };
+      if (rows !== term.rows) term.resize(term.cols, rows);
       // A taller terminal takes its new rows from the scrollback only while the cursor is
       // on the bottom row. Below a cleared screen it adds blank rows instead, so the window
-      // is scrolled to the buffer's first line, where the session starts either way.
-      term.scrollToTop();
-      return last + 1;
+      // is scrolled to the first line it holds, where it starts either way.
+      term.scrollToLine(lines - rows);
+      return { rows, lines };
     },
     painted: () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
   };
@@ -754,9 +771,14 @@ export async function checkTerminalAssertion(page: Page, a: Assertion): Promise<
   }, a);
 }
 
-/** Give the page's terminal one row for each line of the session, and wait for it to be drawn. */
-export async function expandToSession(page: Page): Promise<void> {
+/**
+ * Give the page's terminal one row for each line of the session, as many of its last
+ * lines as fit a window `maxHeight` CSS pixels tall, and wait for it to be drawn. When not
+ * one line fits, the window is left as it is and the rows are 0.
+ */
+export async function expandToSession(page: Page, maxHeight: number): Promise<HeldLines> {
   await requireTerminal(page);
-  await page.evaluate(() => (window as unknown as TermWindow).__ss_term.expand());
+  const held = await page.evaluate((h) => (window as unknown as TermWindow).__ss_term.expand(h), maxHeight);
   await page.evaluate(() => (window as unknown as TermWindow).__ss_term.painted());
+  return held;
 }
