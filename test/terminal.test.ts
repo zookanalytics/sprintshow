@@ -28,7 +28,7 @@ import path from 'node:path';
 import type { Page } from 'playwright';
 
 import { parseDemoScript, parseAssertion, parseKeys, parseMatcher, TERMINAL_COLS, TERMINAL_ROWS, type Assertion, type Demo } from '../src/demo-script.ts';
-import { openSurface, runStep, runAction, checkAssertion, awaitAssertion, VIEWPORT, type StepProof, type Surface } from '../src/browser.ts';
+import { openSurface, runStep, runAction, checkAssertion, awaitAssertion, ACTION_TIMEOUT, COMMAND_TIMEOUT, VIEWPORT, type StepProof, type Surface } from '../src/browser.ts';
 import { showCaption } from '../src/overlay.ts';
 import { captureScreenshot } from '../src/screenshot.ts';
 import { TERMINAL_WINDOW, terminalPress, terminalRun, terminalWaitForScreen } from '../src/terminal.ts';
@@ -213,7 +213,7 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
         assert.equal(await checkAssertion(page, exitZero), true);
         await runAction(page, '', { verb: 'press', target: '"sleep 1" Enter', keys: [{ text: 'sleep 1' }, { key: 'Enter' }], raw: 'press "sleep 1" Enter' }, false, quiet);
         assert.equal(await checkAssertion(page, exitZero), false, 'the sleep is still running');
-        assert.equal(await awaitAssertion(page, exitZero, 5000), true, 'the sleep finished with status 0');
+        assert.equal(await awaitAssertion(page, exitZero, ACTION_TIMEOUT), true, 'the sleep finished with status 0');
       });
     } finally {
       cleanup();
@@ -226,18 +226,19 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     try {
       await withTerminal(md, dir, async (page) => {
         const read = "read -p 'Name? ' name";
-        const pace = { typeDelay: 0, promptTimeout: 5000, commandTimeout: 1000, pause: 0 };
+        // Each wait is the engine's own, except the run meant to run out, which gets a second.
+        const pace = { typeDelay: 0, promptTimeout: ACTION_TIMEOUT, commandTimeout: COMMAND_TIMEOUT, pause: 0 };
         const press = (spec: string) => terminalPress(page, parseKeys(spec) ?? [], { typeDelay: 0, keyPause: 0, pause: 0 });
-        await assert.rejects(terminalRun(page, read, pace, quiet), {
+        await assert.rejects(terminalRun(page, read, { ...pace, commandTimeout: 1000 }, quiet), {
           message: `\`${read}\` showed no prompt within 1s; for an interactive program on the normal screen, use \`press "${read}" Enter\` and \`waitForScreen\``,
         });
         await press('"Ada" Enter');
-        assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), 5000), true, 'the read took its answer and the shell is back');
+        assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), ACTION_TIMEOUT), true, 'the read took its answer and the shell is back');
 
         // What the error names: press starts the program, and waitForScreen waits for its
         // prompt, whose trailing blank the screen drops.
         await press(`"${read}" Enter`);
-        await terminalWaitForScreen(page, parseMatcher('/^Name\\?$/'), 5000);
+        await terminalWaitForScreen(page, parseMatcher('/^Name\\?$/'), ACTION_TIMEOUT);
         await press('"Grace" Enter');
         const lines: string[] = [];
         await terminalRun(page, 'echo "$name"', pace, (m) => lines.push(m));
@@ -293,15 +294,15 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
         const press = (key: string) => runAction(page, '', { verb: 'press', target: key, keys: [{ key }], raw: `press ${key}` }, false, quiet);
         const run = (command: string) => runAction(page, '', { verb: 'run', target: command, raw: `run ${command}` }, false, quiet);
         await run('node keys.mjs');
-        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "ready"'), 5000), true);
+        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "ready"'), ACTION_TIMEOUT), true);
         await press('ArrowUp');
-        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "[1b 5b 41]"'), 5000), true, 'normal mode sends ESC [ A');
+        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "[1b 5b 41]"'), ACTION_TIMEOUT), true, 'normal mode sends ESC [ A');
         await press('q');
-        assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), 5000), true);
+        assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), ACTION_TIMEOUT), true);
         await run('node keys.mjs app');
-        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "ready"'), 5000), true);
+        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "ready"'), ACTION_TIMEOUT), true);
         await press('ArrowUp');
-        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "[1b 4f 41]"'), 5000), true, 'application mode sends ESC O A');
+        assert.equal(await awaitAssertion(page, parseAssertionFor('screen ~ "[1b 4f 41]"'), ACTION_TIMEOUT), true, 'application mode sends ESC O A');
         await press('q');
       });
     } finally {
@@ -345,7 +346,7 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
       assert.equal(await at(3, 40), '#0f1115', 'an unlit row');
 
       await runAction(page, '', { verb: 'press', target: 'q', keys: [{ key: 'q' }], raw: 'press q' }, false, quiet);
-      assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), 5000), true);
+      assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), ACTION_TIMEOUT), true);
       assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ "Sprint board"')), false, 'the alternate screen is gone');
       assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^\\$ node board\\.mjs$/')), true, 'the shell screen is back');
       assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^1 of 3 done$/')), true);
