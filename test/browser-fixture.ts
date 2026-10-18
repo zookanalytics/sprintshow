@@ -20,10 +20,18 @@ import { ensureServer } from '../src/server.ts';
 export const REPO = path.join(import.meta.dirname, '..');
 const CLI = path.join(REPO, 'src', 'cli.ts');
 
-/** A headless Chromium, or the reason the tests that need one skip. */
-export async function launchBrowser(): Promise<{ browser: Browser | null; skip: string | false }> {
+/**
+ * Flags for a browser that draws in 512-pixel tiles, as Chromium does on macOS once it
+ * starts on a screen at scale 2 or more. It starts at scale 2, and it is given the tile
+ * size as well, because on Linux a browser started at scale 2 still draws in 256-pixel
+ * tiles.
+ */
+export const HIGH_DPI_ARGS = ['--force-device-scale-factor=2', '--default-tile-width=512', '--default-tile-height=512'];
+
+/** A headless Chromium, started with `args` besides the engine's own, or the reason the tests that need one skip. */
+export async function launchBrowser(args: string[] = []): Promise<{ browser: Browser | null; skip: string | false }> {
   try {
-    return { browser: await chromium.launch({ headless: true, args: chromiumLaunchArgs() }), skip: false };
+    return { browser: await chromium.launch({ headless: true, args: [...chromiumLaunchArgs(), ...args] }), skip: false };
   } catch (e) {
     const msg = (e as Error).message;
     if (!/Executable doesn't exist/.test(msg)) throw e;

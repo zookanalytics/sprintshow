@@ -6,8 +6,9 @@
 // command exits 0 when every proof held, 3 when the PNG is saved but a proof failed, and
 // 1 when no PNG is saved, and it runs with no ffmpeg reachable. A capture that fails once
 // the steps have run says how many of their proofs failed. A full-page capture of a page
-// larger than one capture holds keeps its top, each row of it drawn, and says so, and the
-// limit it stops at ends inside what Chromium drew of captures that asked for more.
+// larger than one capture holds keeps its top, each row of it drawn in tiles of either
+// size Chromium draws in, and says so, and the limit it stops at ends inside what
+// Chromium drew of captures that asked for more.
 //
 // The tests that drive a page need a headless Chromium and skip without one (see
 // browser-fixture.ts).
@@ -20,7 +21,7 @@ import type { Page } from 'playwright';
 
 import { captureHeightLimit, captureScreenshot, AREA_CONFLICT } from '../src/screenshot.ts';
 import { ensureServer } from '../src/server.ts';
-import { launchBrowser, serveSite, scratchDir, writeFiles, runCli, stepLines, pngSize, pngPixels, rgba, alphaAt, REPO } from './browser-fixture.ts';
+import { launchBrowser, serveSite, scratchDir, writeFiles, runCli, stepLines, pngSize, pngPixels, rgba, alphaAt, HIGH_DPI_ARGS, REPO } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
 after(() => browser?.close());
@@ -122,27 +123,37 @@ function noFfmpegEnv(dir: string): NodeJS.ProcessEnv {
   return { ...rest, PATH: dir, FFMPEG_BIN: path.join(dir, 'no-ffmpeg-here') };
 }
 
-test('the capture height limit ends inside what Chromium drew of captures past its tile budget, and keeps those it drew whole', () => {
-  // Captures Chromium was asked for whole, each its width in CSS pixels and its scale, with
-  // the lowest device-pixel row seen drawn, and whether it left the rows below unpainted.
+test('the capture height limit ends inside what Chromium drew of captures past its tile budget, in tiles of either size, and keeps those it drew whole', () => {
+  // Captures Chromium was asked for whole, each its width in CSS pixels, its scale and the
+  // size of the tiles it drew in, with the lowest device-pixel row seen drawn, and whether
+  // it left the rows below unpainted. A browser started at scale 2 on macOS drew the
+  // captures in 512-pixel tiles.
   const seen = [
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 2, drawn: 51804, cut: true },
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 3, drawn: 37050, cut: true },
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 4, drawn: 27112, cut: true },
-    { what: 'a page 30000 px tall', width: 1280, scale: 2, drawn: 47100, cut: true },
-    { what: 'a 40x24 terminal of 1002 lines', width: 606, scale: 2, drawn: 56224, cut: false },
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 1, drawn: 28112, cut: false },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 2, tile: 256, drawn: 51804, cut: true },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 3, tile: 256, drawn: 37050, cut: true },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 4, tile: 256, drawn: 27112, cut: true },
+    { what: 'a page 30000 px tall', width: 1280, scale: 2, tile: 256, drawn: 47100, cut: true },
+    { what: 'a 40x24 terminal of 1002 lines', width: 606, scale: 2, tile: 256, drawn: 56224, cut: false },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 1, tile: 256, drawn: 28112, cut: false },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 2, tile: 512, drawn: 52020, cut: true },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 3, tile: 512, drawn: 37230, cut: true },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 4, tile: 512, drawn: 26010, cut: true },
+    { what: 'a page 30000 px tall', width: 1280, scale: 2, tile: 512, drawn: 43350, cut: true },
+    { what: 'a 40x24 terminal of 1002 lines', width: 606, scale: 2, tile: 512, drawn: 56224, cut: false },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 1, tile: 512, drawn: 28112, cut: false },
   ];
   for (const c of seen) {
     const bottom = captureHeightLimit(c.width, c.scale) * c.scale;
-    const where = `${c.what} at scale ${c.scale}: the limit ends at device row ${bottom}`;
+    const where = `${c.what} at scale ${c.scale} in ${c.tile}-pixel tiles: the limit ends at device row ${bottom}`;
     if (!c.cut) {
       assert.ok(bottom >= c.drawn, where);
       continue;
     }
-    // Inside what was drawn, and short of it by no more than the sixteenth of the budget
-    // a capture leaves unspent, and the tile row the limit rounds down to.
-    assert.ok(bottom <= c.drawn && bottom >= (c.drawn * 15) / 16 - 254, where);
+    // Inside what was drawn. And short of the least that tiles of either size drew of that
+    // capture by no more than the sixteenth of the budget a capture leaves unspent, and the
+    // tile row the limit rounds down to.
+    const least = seen.filter((s) => s.cut && s.width === c.width && s.scale === c.scale).reduce((a, b) => (b.drawn < a.drawn ? b : a));
+    assert.ok(bottom <= c.drawn && bottom >= (least.drawn * 15) / 16 - (least.tile - 2), where);
   }
 });
 
@@ -326,29 +337,38 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
 });
 
 // On a busy host a capture near the most Chromium draws in one takes tens of seconds, and
-// the tests running beside it time out, so this one runs once they are done.
-test('--full-page keeps the top of a page taller than Chromium draws in one capture, and says so', { skip }, async () => {
-  const site = await serveSite({ 'bands.html': BANDS_HTML });
-  const page = await browser!.newPage({ deviceScaleFactor: 2 });
-  try {
-    const out = path.join(site.dir, 'bands.png');
-    const lines: string[] = [];
-    await captureScreenshot({ page, baseUrl: site.baseUrl, demo: BANDS, outputPath: out, fullPage: true, log: (m) => lines.push(m) });
-    const limit = captureHeightLimit(1280, 2);
-    assert.equal(lines.at(-1), `screenshot: capturing the page's top ${limit} of its 30000 CSS pixels, the most one capture holds at scale 2 → bands.png`);
-    assert.deepEqual(pngSize(out), { width: 2560, height: limit * 2 });
-    // Chromium drew every band down to the capture's last row, where the band it cuts through shows.
-    const ys = [...Array.from({ length: Math.floor(limit / 100) }, (_, n) => (n * 100 + 50) * 2), limit * 2 - 1];
-    const drawn = await pngPixels(out, ys.map((y) => ({ x: 2550, y })));
-    const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
-    const wrong = ys.flatMap((y, i) => {
-      const n = Math.floor(y / 200);
-      const [red, green, blue] = drawn[i];
-      return near(red, n % 256) && near(green, Math.floor(n / 256)) && near(blue, 200) ? [] : [`band ${n} at y ${y}: rgba(${drawn[i].join(', ')})`];
-    });
-    assert.deepEqual(wrong, []);
-  } finally {
-    await page.close();
-    await site.close();
-  }
-});
+// the tests running beside it time out, so these run once they are done, one at a time.
+// The shared browser draws in 256-pixel tiles, and the other in 512-pixel tiles, as a
+// browser started on a high-DPI screen on macOS does.
+for (const tiles of [256, 512]) {
+  test(`--full-page keeps the top of a page taller than Chromium draws in one capture, and says so, in a browser that draws in ${tiles}-pixel tiles`, { skip }, async () => {
+    const own = tiles === 512 ? (await launchBrowser(HIGH_DPI_ARGS)).browser : null;
+    try {
+      const site = await serveSite({ 'bands.html': BANDS_HTML });
+      const page = await (own ?? browser!).newPage({ deviceScaleFactor: 2 });
+      try {
+        const out = path.join(site.dir, 'bands.png');
+        const lines: string[] = [];
+        await captureScreenshot({ page, baseUrl: site.baseUrl, demo: BANDS, outputPath: out, fullPage: true, log: (m) => lines.push(m) });
+        const limit = captureHeightLimit(1280, 2);
+        assert.equal(lines.at(-1), `screenshot: capturing the page's top ${limit} of its 30000 CSS pixels, the most one capture holds at scale 2 → bands.png`);
+        assert.deepEqual(pngSize(out), { width: 2560, height: limit * 2 });
+        // Chromium drew every band down to the capture's last row, where the band it cuts through shows.
+        const ys = [...Array.from({ length: Math.floor(limit / 100) }, (_, n) => (n * 100 + 50) * 2), limit * 2 - 1];
+        const drawn = await pngPixels(out, ys.map((y) => ({ x: 2550, y })));
+        const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
+        const wrong = ys.flatMap((y, i) => {
+          const n = Math.floor(y / 200);
+          const [red, green, blue] = drawn[i];
+          return near(red, n % 256) && near(green, Math.floor(n / 256)) && near(blue, 200) ? [] : [`band ${n} at y ${y}: rgba(${drawn[i].join(', ')})`];
+        });
+        assert.deepEqual(wrong, []);
+      } finally {
+        await page.close();
+        await site.close();
+      }
+    } finally {
+      await own?.close();
+    }
+  });
+}

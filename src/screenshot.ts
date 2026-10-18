@@ -28,30 +28,38 @@ import { runStep, openSurface, ACTION_TIMEOUT, VIEWPORT } from './browser.ts';
 import { expandToSession, TERMINAL_WINDOW } from './terminal.ts';
 
 /**
- * Chromium rasterizes a capture in tiles of 256 device pixels, laid every 254, and holds
- * at most 512 MiB of them, 2048 tiles. That is its least on a desktop host, and a larger
- * screen raises it. A capture that spans more comes out with the tiles past the budget
- * unpainted, transparent in a terminal still and the page's background in a page
- * capture. A capture that stops above the end of the page is sometimes drawn up to 24
- * tiles short of the budget, so a capture spends at most 15/16 of it.
+ * Chromium rasterizes a capture in square tiles, each laid two device pixels short of its
+ * size so that it overlaps the next, and holds at most 512 MiB of them, at 4 bytes a
+ * pixel. That is its least on a desktop host, and a larger screen raises it. A tile is
+ * 256 pixels on a side, so 2048 of them fit. On macOS and ChromeOS, a browser started on
+ * a screen at scale 2 or more draws in tiles of 512 pixels, and only 512 of them fit. A
+ * page cannot tell which size its browser draws in, so a capture is held to what both
+ * draw. A capture that spans more comes out with the tiles past the budget unpainted,
+ * transparent in a terminal still and the page's background in a page capture. A capture
+ * that stops above the end of the page is sometimes drawn up to 24 tiles short of the
+ * budget, so a capture spends at most 15/16 of it.
  */
-const TILE_STEP = 254;
-const TILE_BUDGET = (2048 * 15) / 16;
-/** The time a capture is given for each tile it spans, on top of ACTION_TIMEOUT: rasterizing and encoding it take time in proportion to its tiles. */
+const TILE_SIZES = [256, 512];
+const TILE_MEMORY = 512 * 1024 * 1024;
+/** The time a capture is given for each 256-pixel tile it spans, on top of ACTION_TIMEOUT: rasterizing and encoding it take time in proportion to its area. */
 const TILE_TIME_MS = 100;
 
-/** The tiles that `length` CSS pixels of a capture span, from the page's edge, at `scale` device pixels per CSS pixel. */
-function tileSpan(length: number, scale: number): number {
-  return Math.ceil((Math.ceil(length) * scale) / TILE_STEP);
+/** The tiles of `size` device pixels that `length` CSS pixels of a capture span, from the page's edge, at `scale` device pixels per CSS pixel. */
+function tileSpan(length: number, scale: number, size: number): number {
+  return Math.ceil((Math.ceil(length) * scale) / (size - 2));
 }
 
 /**
- * The tallest capture, in CSS pixels, that Chromium draws whole when it is `width` CSS
- * pixels wide at `scale` device pixels per CSS pixel and starts at the page's top-left
- * corner, where the tiles start.
+ * The tallest capture, in CSS pixels, that Chromium draws whole in tiles of either size
+ * when it is `width` CSS pixels wide at `scale` device pixels per CSS pixel and starts at
+ * the page's top-left corner, where the tiles start.
  */
 export function captureHeightLimit(width: number, scale: number): number {
-  return Math.floor((Math.floor(TILE_BUDGET / tileSpan(width, scale)) * TILE_STEP) / scale);
+  const limits = TILE_SIZES.map((size) => {
+    const budget = (TILE_MEMORY / (size * size * 4)) * (15 / 16);
+    return Math.floor((Math.floor(budget / tileSpan(width, scale, size)) * (size - 2)) / scale);
+  });
+  return Math.min(...limits);
 }
 
 /** A capture's size in CSS pixels, and the device pixels per CSS pixel it is drawn at. */
@@ -63,7 +71,7 @@ interface Extent {
 
 /** How long a capture is given. */
 function captureTimeout({ width, height, scale }: Extent): number {
-  return ACTION_TIMEOUT + TILE_TIME_MS * tileSpan(width, scale) * tileSpan(height, scale);
+  return ACTION_TIMEOUT + TILE_TIME_MS * tileSpan(width, scale, 256) * tileSpan(height, scale, 256);
 }
 
 /** The terminal window's extent. */
