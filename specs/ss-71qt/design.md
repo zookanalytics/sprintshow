@@ -119,10 +119,19 @@ finished command reported.
 
 | Verb | What it does |
 |---|---|
-| `run <command line>` | Waits for the shell's prompt, types the line and presses Enter. It then waits until the command finishes (the next prompt shows), a full-screen program takes over the screen, or the shell exits, for up to 60 s, and logs the command's exit status. |
+| `run <command line>` | Waits for the shell's prompt, types the line and presses Enter. It then waits until the command finishes (the next prompt shows), a full-screen program takes over the screen, or the shell exits, for up to 60 s, and logs the command's exit status. When the 60 s run out, the log names the pattern below. |
 | `press <keys>` | Presses each key in turn. A key is a name as Playwright's keyboard names it (`Enter`, `Escape`, `ArrowDown`, `Space`, `F1`, `Control+C`, `q`), or a double-quoted string, whose text it types. It waits for nothing. |
 | `waitForScreen <matcher>` | Waits up to 15 s for the screen's text to match. |
 | `wait <ms>` | Pauses, as in a page script. |
+
+A program that waits for input on the normal screen, such as `python3`, `node`,
+`npm init` or a `read` prompt, shows no prompt of the shell's, takes no alternate screen
+and does not exit, so `run` would wait out its 60 s on it. Such a program is started with
+`press "<command>" Enter` and followed by `waitForScreen` on the prompt it shows, not with
+`run`. For Python that is `press "python3" Enter` and then `waitForScreen />>>$/`. The
+screen's rows lose their trailing blanks, so the `>>> ` prompt reads as `>>>`. `run` does
+not settle when the output goes quiet, because a slow command such as `npm install` pauses
+between bursts of output, and a quiet spell would end its wait early.
 
 In the walkthrough, `run` and `press` type at the pace a page script's typing uses, pause
 between keys, and hold a beat once they are done, so a viewer sees each one land.

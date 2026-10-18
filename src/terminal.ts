@@ -22,7 +22,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { IPty } from '@lydell/node-pty';
-import type { Page } from 'playwright';
+import { errors, type Page } from 'playwright';
 
 import type { Assertion, Matcher, PressKey, TerminalSpec } from './demo-script.ts';
 import { esc, ACCENT, ACCENT_FAIL, BG, FG, MUTED, FONT } from './overlay.ts';
@@ -624,6 +624,10 @@ export interface RunPace {
  * `run <command line>`: wait for the shell's prompt, type the line and press Enter, then
  * wait until the command finishes (the next prompt shows), a full-screen program takes
  * over the alternate screen, or the shell exits. Logs how it settled.
+ *
+ * A program that waits for input on the normal screen, such as a REPL or a `read`
+ * prompt, does none of these, so the wait runs out. The error then names the way to
+ * drive one: `press` to start it, and `waitForScreen` for its prompt.
  */
 export async function terminalRun(page: Page, command: string, pace: RunPace, log: (m: string) => void): Promise<void> {
   await requireTerminal(page);
@@ -640,14 +644,21 @@ export async function terminalRun(page: Page, command: string, pace: RunPace, lo
   await page.evaluate(() => (window as unknown as TermWindow).__ss_term.focus());
   await page.keyboard.type(command, { delay: pace.typeDelay });
   await page.keyboard.press('Enter');
-  await page.waitForFunction(
-    (prompts) => {
-      const s = (window as unknown as TermWindow).__ss_term.state();
-      return s.prompts > prompts || s.alternate || s.ended;
-    },
-    before.prompts,
-    { timeout: pace.commandTimeout, polling: 50 },
-  );
+  try {
+    await page.waitForFunction(
+      (prompts) => {
+        const s = (window as unknown as TermWindow).__ss_term.state();
+        return s.prompts > prompts || s.alternate || s.ended;
+      },
+      before.prompts,
+      { timeout: pace.commandTimeout, polling: 50 },
+    );
+  } catch (e) {
+    if (!(e instanceof errors.TimeoutError)) throw e;
+    throw new Error(
+      `\`${command}\` showed no prompt within ${pace.commandTimeout / 1000}s; for an interactive program on the normal screen, use \`press "${command}" Enter\` and \`waitForScreen\``,
+    );
+  }
   const after = await terminalState(page);
   if (after.prompts > before.prompts) log(`  · \`${command}\` exited ${after.status}`);
   else if (after.ended) log(`  · the shell exited ${after.status}`);

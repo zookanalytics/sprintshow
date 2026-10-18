@@ -153,12 +153,21 @@ working directory) as `bash --noprofile --norc`, with a `$ ` prompt, no history 
 `inputrc` and `TERM=xterm-256color`. It inherits the engine's environment, less the
 variables that describe another terminal, such as `TMUX` and `COLUMNS`.
 
-**Actions:** `run <command line>` waits for the prompt, types the line and presses Enter,
-then waits until the command finishes, a full-screen program takes over the screen, or the
-shell exits (up to 60s), and logs the command's exit status · `press <keys>` presses each
-key in turn: a key as Playwright names it (`Enter`, `Escape`, `ArrowDown`, `Space`, `F1`,
-`Control+C`, `q`), or a `"quoted string"`, which it types · `waitForScreen <matcher>` waits
-for the screen's text to match · `wait <ms>`.
+**Actions:**
+
+- `run <command line>` waits for the prompt, types the line and presses Enter. It then
+  waits until the command finishes, a full-screen program takes over the screen, or the
+  shell exits, for up to 60s, and logs the command's exit status. A program that waits for
+  input on the normal screen, such as `python3`, `node`, `npm init` or a `read` prompt,
+  does none of these, so it is started with `press "<command>" Enter` and followed by
+  `waitForScreen` on its prompt, not with `run`. For Python that is `press "python3" Enter`
+  and then `waitForScreen />>>$/`. A row loses its trailing blanks, so the `>>> ` prompt
+  reads as `>>>`.
+- `press <keys>` presses each key in turn: a key as Playwright names it (`Enter`,
+  `Escape`, `ArrowDown`, `Space`, `F1`, `Control+C`, `q`), or a `"quoted string"`, which
+  it types.
+- `waitForScreen <matcher>` waits for the screen's text to match.
+- `wait <ms>` pauses.
 
 **Assertions** read the terminal's state. The screen is what the terminal displays now: on
 the normal screen its last rows, not the scrollback above them, and while a full-screen

@@ -4,7 +4,9 @@
 //
 // They pin what a proof reads: `run` waits for its command and reports its exit status,
 // no `exit` assertion holds while a command runs, the screen joins a row the terminal
-// wrapped, and rows and the cursor count from the top or the bottom. They pin that xterm
+// wrapped, and rows and the cursor count from the top or the bottom. A `run` whose wait
+// runs out names `press` and `waitForScreen`, which drive a program that waits for input
+// on the normal screen. They pin that xterm
 // encodes each key for the terminal's cursor-key mode, that a full-screen program's
 // alternate screen, cursor addressing and colours are drawn as it sent them, and that
 // quitting it restores the shell's screen. They pin the captures: the still is the
@@ -23,11 +25,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { parseDemoScript, parseAssertion, TERMINAL_COLS, TERMINAL_ROWS, type Assertion, type Demo } from '../src/demo-script.ts';
+import { parseDemoScript, parseAssertion, parseKeys, parseMatcher, TERMINAL_COLS, TERMINAL_ROWS, type Assertion, type Demo } from '../src/demo-script.ts';
 import { openSurface, runStep, runAction, checkAssertion, awaitAssertion, VIEWPORT, type StepProof, type Surface } from '../src/browser.ts';
 import { showCaption } from '../src/overlay.ts';
 import { captureScreenshot } from '../src/screenshot.ts';
-import { TERMINAL_WINDOW } from '../src/terminal.ts';
+import { TERMINAL_WINDOW, terminalPress, terminalRun, terminalWaitForScreen } from '../src/terminal.ts';
 import { launchBrowser, scratchDir, writeFiles, runCli, stepLines, stubFfmpeg, pngSize, rgba, alphaAt, REPO } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
@@ -210,6 +212,35 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
         await runAction(page, '', { verb: 'press', target: '"sleep 1" Enter', keys: [{ text: 'sleep 1' }, { key: 'Enter' }], raw: 'press "sleep 1" Enter' }, false, quiet);
         assert.equal(await checkAssertion(page, exitZero), false, 'the sleep is still running');
         assert.equal(await awaitAssertion(page, exitZero, 5000), true, 'the sleep finished with status 0');
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('a run whose wait runs out names press and waitForScreen, which drive a program that waits for input on the normal screen', async () => {
+    const md = `# Demo: Prompt\n\n**Terminal:** 60x12\n\n## Steps\n\n1. **s**\n   \`run true\`\n`;
+    const { dir, cleanup } = scratchDir();
+    try {
+      await withTerminal(md, dir, async (page) => {
+        const read = "read -p 'Name? ' name";
+        const pace = { typeDelay: 0, promptTimeout: 5000, commandTimeout: 1000, pause: 0 };
+        const press = (spec: string) => terminalPress(page, parseKeys(spec) ?? [], { typeDelay: 0, keyPause: 0, pause: 0 });
+        await assert.rejects(terminalRun(page, read, pace, quiet), {
+          message: `\`${read}\` showed no prompt within 1s; for an interactive program on the normal screen, use \`press "${read}" Enter\` and \`waitForScreen\``,
+        });
+        await press('"Ada" Enter');
+        assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), 5000), true, 'the read took its answer and the shell is back');
+
+        // What the error names: press starts the program, and waitForScreen waits for its
+        // prompt, whose trailing blank the screen drops.
+        await press(`"${read}" Enter`);
+        await terminalWaitForScreen(page, parseMatcher('/^Name\\?$/'), 5000);
+        await press('"Grace" Enter');
+        const lines: string[] = [];
+        await terminalRun(page, 'echo "$name"', pace, (m) => lines.push(m));
+        assert.deepEqual(lines, ['  · `echo "$name"` exited 0']);
+        assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^Grace$/')), true);
       });
     } finally {
       cleanup();
