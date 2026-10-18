@@ -95,12 +95,16 @@ Ending the session ends the shell and every job it runs. Each of the session's p
 groups gets SIGHUP: the shell's own, and one for each job, which holds whatever that job
 started. Any group still running two seconds later gets SIGKILL, whether it is the shell
 or a job that outlived it, such as a program that handles SIGHUP. The capture returns
-once they have exited. The groups are read before the hang-up, while the shell leads the
-session, because once the shell exits nothing ties its jobs to the terminal. On Linux the
-engine lists the session by its id. A macOS process listing shows no session id, so there
-it reads the processes whose controlling terminal is the shell's. The engine reads the
-session only while the shell leads it, so a job still running after a script exits the
-shell itself is left running.
+once they have exited. A process that SIGKILL has not ended within 30 s is held by the
+kernel, so the engine names its group in the log and returns. The groups are read before
+the hang-up, while the shell leads the session, because once the shell exits nothing ties
+its jobs to the terminal. On Linux the engine lists the session by its id. A macOS process
+listing shows no session id, so there it reads the processes whose controlling terminal
+is the shell's. It matches them by the terminal's device number, because naming each
+process's terminal takes seconds on a busy host. The listing has no deadline: nothing
+races it while the shell runs, and a listing cut short would end only the shell. The
+engine reads the session only while the shell leads it, so a job still running after a
+script exits the shell itself is left running.
 
 The shell is bash. A shell reports each command's end and exit status only through a
 prompt the engine writes, and bash is on every macOS and mainstream Linux host. The marks

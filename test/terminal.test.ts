@@ -14,15 +14,16 @@
 // terminal script refuses a server, a selector, or a directory that does not exist before
 // a browser is spent. A video frame shows every cell of a terminal at each limit of the
 // sizes the parser accepts, clear of the caption bar. The shell and every program it
-// still runs end before the capture returns, even a program that handles SIGHUP, and the
-// walkthrough ends them only once its recording is flushed.
+// still runs end before the capture returns, even a program that handles SIGHUP and
+// however slowly the host lists them, and the walkthrough ends them only once its
+// recording is flushed.
 //
 // They need a headless Chromium and skip without one (see browser-fixture.ts).
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
@@ -432,6 +433,30 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
       // Nothing the capture left running outlives the test.
       for (const pid of names.map(pidOf)) if (pid > 1 && running(pid)) process.kill(pid, 'SIGKILL');
       await page.close();
+      cleanup();
+    }
+  });
+
+  test('a slow listing of the session delays its end and never cuts it short', { skip: process.platform === 'linux' && 'Linux lists the session from /proc, with no ps' }, async () => {
+    const { dir, cleanup } = scratchDir();
+    const pidOf = (name: string): number => Number(existsSync(path.join(dir, `${name}.pid`)) ? readFileSync(path.join(dir, `${name}.pid`), 'utf8') : 0);
+    try {
+      writeFiles(dir, {
+        'hold.mjs': HOLD,
+        // A ps as slow as a busy host's, which notes that it ran.
+        'bin/ps': `#!/bin/sh\necho "$@" >> '${path.join(dir, 'ps.calls')}'\nsleep 4\nexec /bin/ps "$@"\n`,
+        'demo.md': `# Demo: Slow listing\n\n**Terminal:** 60x12\n\n## Steps\n\n1. **A job that handles SIGHUP**\n   \`run node hold.mjs job hup & until [ -s job.pid ]; do sleep 0.1; done\`\n`,
+      });
+      chmodSync(path.join(dir, 'bin', 'ps'), 0o755);
+      const env = { ...process.env, PATH: `${path.join(dir, 'bin')}${path.delimiter}${process.env.PATH}` };
+      const res = await runCli(['screenshot', path.join(dir, 'demo.md'), '--cwd', dir, '-o', path.join(dir, 'shot.png')], { cwd: dir, env });
+      assert.equal(res.code, 0, `${res.stdout}${res.stderr}`);
+      assert.ok(existsSync(path.join(dir, 'ps.calls')), 'the engine listed the session with the slow ps');
+      assert.equal(running(pidOf('job')), false, `the job outlived the capture\n${res.stdout}`);
+      assert.doesNotMatch(res.stdout, /terminal: could not list the shell's jobs/);
+    } finally {
+      const pid = pidOf('job');
+      if (pid > 1 && running(pid)) process.kill(pid, 'SIGKILL');
       cleanup();
     }
   });

@@ -74,8 +74,13 @@ const SCROLLBACK = 1000;
 const QUIET_MS = 120;
 /** A program that never goes quiet, such as a spinner, is framed after this long. */
 const SETTLE_CAP_MS = 2000;
-/** How long the shell's session has to end after SIGHUP, and again after SIGKILL. */
+/** How long the shell's session has to end after SIGHUP, before what is left of it gets SIGKILL. */
 const KILL_GRACE_MS = 2000;
+/**
+ * How long SIGKILL has to end what is left of the session. A process outlasts it only when
+ * the kernel holds it, and the engine then names its group and stops waiting.
+ */
+const KILL_WAIT_MS = 30_000;
 
 /** The xterm theme: the engine's card colours, with an ANSI palette in the same key. */
 const THEME = {
@@ -366,7 +371,7 @@ export interface TerminalSession {
   settle(): Promise<void>;
   /**
    * End the shell and every job it runs (see endSession). Resolves once they have all
-   * exited, or once SIGKILL's grace has passed.
+   * exited, or once the log names a group that SIGKILL did not end.
    */
   close(): Promise<void>;
 }
@@ -397,7 +402,12 @@ async function until(done: () => boolean, ms: number): Promise<boolean> {
  *
  * Linux lists the session by its id, in /proc. A macOS process listing shows no session
  * id, so there the session is read as the processes whose controlling terminal is the
- * shell's, which are the session's for as long as the shell runs.
+ * shell's, which are the session's for as long as the shell runs. `ps` gives each one's
+ * terminal as a device number: naming the terminal costs a lookup for each process on the
+ * host, and takes seconds on a busy one.
+ *
+ * The listing has no deadline. Nothing races it, since the shell runs until it is hung
+ * up, and a listing cut short would leave only the shell to end.
  */
 async function sessionGroups(shell: number): Promise<number[]> {
   const groups = new Set([shell]);
@@ -415,10 +425,10 @@ async function sessionGroups(shell: number): Promise<number[]> {
       if (session === shell) groups.add(pgrp);
     }
   } else {
-    const { stdout } = await execFileP('ps', ['-A', '-o', 'pid=,pgid=,tty='], { timeout: KILL_GRACE_MS });
+    const { stdout } = await execFileP('ps', ['-A', '-o', 'pid=,pgid=,tdev=']);
     const procs = stdout.trim().split('\n').map((line) => line.trim().split(/\s+/));
-    const tty = procs.find(([pid]) => Number(pid) === shell)?.[2];
-    if (tty && !tty.startsWith('?')) for (const [, pgid, t] of procs) if (t === tty) groups.add(Number(pgid));
+    const tdev = procs.find(([pid]) => Number(pid) === shell)?.[2];
+    if (tdev && !tdev.startsWith('?')) for (const [, pgid, t] of procs) if (t === tdev) groups.add(Number(pgid));
   }
   // Never 0 or 1: kill(-0) signals the engine's own group, and kill(-1) every process it may signal.
   return [...groups].filter((g) => Number.isSafeInteger(g) && g > 1);
@@ -438,6 +448,8 @@ function groupRuns(pgid: number): boolean {
  * End the session the shell leads, the shell and every job it runs. Each of its process
  * groups gets SIGHUP. Any of them still running KILL_GRACE_MS later gets SIGKILL, whether
  * that is the shell or a job that outlived it, such as a program that handles SIGHUP.
+ * Resolves once every group has ended and node-pty has seen the shell exit. A group that
+ * SIGKILL has not ended within KILL_WAIT_MS is named in the log and left running.
  *
  * The groups are read before the hang-up, because once the shell has exited nothing ties
  * its jobs to the terminal, and SIGHUP is what makes it exit. `shellExited` reports
@@ -461,7 +473,9 @@ async function endSession(shell: number, shellExited: () => boolean, log: (m: st
   signal(groups, 'SIGHUP');
   if (await until(ended, KILL_GRACE_MS)) return;
   signal(groups.filter(groupRuns), 'SIGKILL');
-  await until(ended, KILL_GRACE_MS);
+  if (await until(ended, KILL_WAIT_MS)) return;
+  const left = groups.filter(groupRuns);
+  if (left.length) log(`terminal: SIGKILL did not end the shell's session within ${KILL_WAIT_MS / 1000}s, so it is left running in process group${left.length > 1 ? 's' : ''} ${left.join(', ')}`);
 }
 
 /**
