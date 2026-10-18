@@ -88,8 +88,8 @@ The surface opens before the first step:
 Before a still is taken, the surface settles: the pty's output has been handed over and
 parsed, and xterm has drawn it. The session ends once the capture no longer shows the
 terminal, and on any error. For a still and for proof mode, that is after the last step.
-The walkthrough films its closing card over the terminal, so it ends the session after the
-card.
+The walkthrough films its closing card over the terminal, and ends the session once the
+recording is flushed, so the time a program takes to end is not filmed.
 
 Ending the session ends the shell and every job it runs. Each of the session's process
 groups gets SIGHUP: the shell's own, and one for each job, which holds whatever that job

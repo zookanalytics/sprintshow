@@ -14,14 +14,15 @@
 // terminal script refuses a server, a selector, or a directory that does not exist before
 // a browser is spent. A video frame shows every cell of a terminal at each limit of the
 // sizes the parser accepts, clear of the caption bar. The shell and every program it
-// still runs end before the capture returns, even a program that handles SIGHUP.
+// still runs end before the capture returns, even a program that handles SIGHUP, and the
+// walkthrough ends them only once its recording is flushed.
 //
 // They need a headless Chromium and skip without one (see browser-fixture.ts).
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
@@ -88,12 +89,12 @@ async function cellCentre(page: Page, size: { cols: number; rows: number }, row:
 
 /**
  * `node hold.mjs <name> [hup] [screen]`: a program that records its pid in `<name>.pid` and
- * runs until it is killed. With `hup` it handles SIGHUP and carries on, and with `screen`
- * it holds the alternate screen.
+ * runs until it is killed. With `hup` it handles SIGHUP, records when it arrived in
+ * `<name>.hup`, and carries on, and with `screen` it holds the alternate screen.
  */
 const HOLD = `import { writeFileSync } from 'node:fs';
 const [name, ...flags] = process.argv.slice(2);
-if (flags.includes('hup')) process.on('SIGHUP', () => {});
+if (flags.includes('hup')) process.on('SIGHUP', () => writeFileSync(name + '.hup', String(Date.now())));
 writeFileSync(name + '.pid', String(process.pid));
 if (flags.includes('screen')) process.stdout.write('\\x1b[?1049h\\x1b[Hheld');
 setInterval(() => {}, 1000);
@@ -542,6 +543,33 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
       }
       for (const out of ['proof.mp4', 'walk.mp4', 'shot.png']) assert.ok(existsSync(path.join(dir, out)), out);
     } finally {
+      cleanup();
+    }
+  });
+
+  test('the walkthrough ends the session once its recording is flushed, so a program slow to end is not filmed', async () => {
+    const { dir, cleanup } = scratchDir();
+    const pidOf = (name: string): number => Number(existsSync(path.join(dir, `${name}.pid`)) ? readFileSync(path.join(dir, `${name}.pid`), 'utf8') : 0);
+    try {
+      writeFiles(dir, {
+        'hold.mjs': HOLD,
+        'demo.md': `# Demo: Slow to end\n\n**Terminal:** 60x12\n\n## Steps\n\n1. **A job that handles SIGHUP**\n   \`run node hold.mjs job hup & until [ -s job.pid ]; do sleep 0.1; done\`\n`,
+      });
+      const env = { ...process.env, FFMPEG_BIN: stubFfmpeg(dir), OPENAI_API_KEY: '' };
+      const res = await runCli(['run', path.join(dir, 'demo.md'), '--cwd', dir, '--no-narrate', '--keep', '-o', path.join(dir, 'walk.mp4')], { cwd: dir, env });
+      assert.equal(res.code, 0, `${res.stdout}${res.stderr}`);
+      const kept = path.join(dir, '.captures', readdirSync(path.join(dir, '.captures'))[0]);
+      const webm = readdirSync(kept).find((f) => f.endsWith('.webm'));
+      assert.ok(webm, `the kept run holds the recording: ${readdirSync(kept).join(', ')}`);
+      // The job handles SIGHUP, so ending it takes SIGKILL's grace. Ended before the flush,
+      // that grace would be filmed, and the recording would end seconds after the SIGHUP.
+      const flushed = statSync(path.join(kept, webm)).mtimeMs;
+      const hup = Number(readFileSync(path.join(dir, 'job.hup'), 'utf8'));
+      assert.ok(flushed < hup + 1000, `the recording was flushed ${Math.round(flushed - hup)} ms after the job's SIGHUP`);
+      assert.equal(running(pidOf('job')), false, 'the job outlived the capture');
+    } finally {
+      const pid = pidOf('job');
+      if (pid > 1 && running(pid)) process.kill(pid, 'SIGKILL');
       cleanup();
     }
   });

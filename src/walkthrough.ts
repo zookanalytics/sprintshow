@@ -101,13 +101,16 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
     if (demo.scrutiny.length) await showCardOverlay(page, scrutinyInnerHtml(demo.scrutiny), Math.min(14000, Math.max(6000, demo.scrutiny.length * 2500)));
     else await page.waitForTimeout(TAIL_MS);
   } finally {
-    // The closing card is filmed over the surface, so the surface ends here, after it.
-    await surface?.close();
-    // Closing the context is what flushes the .webm; the path resolves after.
-    const video = page.video();
-    await context.close();
-    webmPath = video ? await video.path() : null;
-    if (launched) await browser.close();
+    try {
+      // Closing the context is what flushes the .webm; the path resolves after.
+      const video = page.video();
+      await context.close();
+      webmPath = video ? await video.path() : null;
+    } finally {
+      // The surface ends once the recording is flushed, so a program slow to end is not filmed.
+      await surface?.close();
+      if (launched) await browser.close();
+    }
   }
   const endMs = at();
 
