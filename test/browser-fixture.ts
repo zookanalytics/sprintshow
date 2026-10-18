@@ -10,6 +10,8 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { createInflate } from 'node:zlib';
 import { chromium, type Browser, type Page } from 'playwright';
 
 import { chromiumLaunchArgs } from '../src/browser.ts';
@@ -130,4 +132,78 @@ export async function rgba(page: Page, png: Buffer): Promise<{ width: number; da
 export async function alphaAt(page: Page, file: string, x: number, y: number): Promise<number> {
   const { width, data } = await rgba(page, readFileSync(file));
   return data[(y * width + x) * 4 + 3];
+}
+
+/**
+ * The RGBA of a PNG file's pixel at each of `points`, or an empty array for a point past
+ * its last row. The PNG is decoded a row at a time, so a capture too large for a page to
+ * decode is read too. It reads the 8-bit, non-interlaced RGB and RGBA PNGs Chromium writes.
+ */
+export async function pngPixels(file: string, points: { x: number; y: number }[]): Promise<number[][]> {
+  const png = readFileSync(file);
+  let width = 0;
+  let channels = 0;
+  const idat: Buffer[] = [];
+  for (let at = 8; at < png.length; ) {
+    const length = png.readUInt32BE(at);
+    const type = png.toString('latin1', at + 4, at + 8);
+    const body = png.subarray(at + 8, at + 8 + length);
+    if (type === 'IHDR') {
+      assert.ok(body[8] === 8 && (body[9] === 2 || body[9] === 6) && body[12] === 0, `${file} is not an 8-bit, non-interlaced RGB or RGBA PNG`);
+      width = body.readUInt32BE(0);
+      channels = body[9] === 6 ? 4 : 3;
+    } else if (type === 'IDAT') {
+      idat.push(body);
+    }
+    at += 12 + length;
+  }
+  const stride = width * channels;
+  const wanted = new Map<number, number[]>();
+  points.forEach(({ y }, i) => wanted.set(y, [...(wanted.get(y) ?? []), i]));
+  const found: number[][] = points.map(() => []);
+  // Each row is a filter byte and the row's bytes, which the filter gives as a difference
+  // from a prediction made of the byte to the left (a), the one above (b), and the one
+  // above that one (c). Bytes left of the first pixel, and above the first row, are 0.
+  let above = Buffer.alloc(stride);
+  let row = Buffer.alloc(stride);
+  const line = Buffer.alloc(stride + 1);
+  let filled = 0;
+  let y = 0;
+  for await (const chunk of Readable.from(idat).pipe(createInflate({ chunkSize: 1 << 20 })) as AsyncIterable<Buffer>) {
+    for (let at = 0; at < chunk.length; ) {
+      const n = chunk.copy(line, filled, at, at + stride + 1 - filled);
+      at += n;
+      filled += n;
+      if (filled < line.length) break;
+      filled = 0;
+      const filter = line[0];
+      const d = line.subarray(1);
+      if (filter === 0) {
+        d.copy(row);
+      } else if (filter === 1) {
+        for (let x = 0; x < stride; x++) row[x] = (d[x] + (x >= channels ? row[x - channels] : 0)) & 255;
+      } else if (filter === 2) {
+        for (let x = 0; x < stride; x++) row[x] = (d[x] + above[x]) & 255;
+      } else if (filter === 3) {
+        for (let x = 0; x < stride; x++) row[x] = (d[x] + (((x >= channels ? row[x - channels] : 0) + above[x]) >> 1)) & 255;
+      } else {
+        for (let x = 0; x < stride; x++) {
+          const a = x >= channels ? row[x - channels] : 0;
+          const b = above[x];
+          const c = x >= channels ? above[x - channels] : 0;
+          const pa = Math.abs(b - c);
+          const pb = Math.abs(a - c);
+          const pc = Math.abs(a + b - 2 * c);
+          row[x] = (d[x] + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+        }
+      }
+      for (const i of wanted.get(y) ?? []) {
+        const px = points[i].x * channels;
+        found[i] = [row[px], row[px + 1], row[px + 2], channels === 4 ? row[px + 3] : 255];
+      }
+      [above, row] = [row, above];
+      y++;
+    }
+  }
+  return found;
 }
