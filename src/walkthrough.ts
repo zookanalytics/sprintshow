@@ -12,10 +12,10 @@
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { chromium, type Browser } from 'playwright';
+import { chromium, type Browser, type Page } from 'playwright';
 
 import { parseDemoScript, outputSlug, type Demo, type DemoStep } from './demo-script.ts';
-import { requireFfmpeg, run, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
+import { requireFfmpeg, run, probeDuration, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
 import { installPointer, runStep, openSurface, chromiumLaunchArgs, VIEWPORT, type Surface } from './browser.ts';
 import { showCaption, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
 import type { CaptureResult } from './capture.ts';
@@ -44,24 +44,80 @@ export interface CaptureWalkthroughOptions {
   log?: (m: string) => void;
 }
 
-interface SegMark {
+/** Where a segment appears: ms from the start of the recording. */
+export interface SegMark {
   narration: string;
   at: number;
 }
 
-async function walkStep(page: import('playwright').Page, base: string, step: DemoStep, total: number, log: (m: string) => void): Promise<boolean> {
-  const { proved } = await runStep(page, base, step, total, true, log, () => showCaption(page, step.index, total, step.narration, false));
+/** What the narration says over a stretch of the recording, in seconds from its start. */
+export interface NarrationSlot {
+  narration: string;
+  start: number;
+  duration: number;
+}
+
+/**
+ * The narration slots of a recording `endMs` long whose segments appear at `marks`. A
+ * silent slot runs from the start of the recording to the first mark, each segment's slot
+ * runs from its mark to the next one, and the last runs to the end. The slots tile the
+ * recording, so each clip starts when its segment appears and the track ends where the
+ * recording does. Each bound is held to the recording and rounded to the ms the track is
+ * cut in. A slot of no length is dropped, since ffmpeg encodes one as an empty file.
+ */
+export function narrationSlots(marks: SegMark[], endMs: number): NarrationSlot[] {
+  const end = Math.round(endMs);
+  const bounds = [{ narration: '', at: 0 }, ...marks].map((m) => ({ narration: m.narration, at: Math.min(Math.max(Math.round(m.at), 0), end) }));
+  return bounds
+    .map((m, i) => ({ narration: m.narration, start: m.at / 1000, duration: ((bounds[i + 1]?.at ?? end) - m.at) / 1000 }))
+    .filter((s) => s.duration > 0);
+}
+
+/** The frames of a page's recording, each by the wall-clock time in ms the browser drew it at. */
+export interface RecordingFrames {
+  /** The first frame, where the video starts, or null while none has arrived. */
+  start(): number | null;
+  /** The first frame drawn at or after `wall`, or null when none has been. */
+  firstFrom(wall: number): number | null;
+}
+
+/**
+ * Watch the frames of `page`'s recording. The video opens on the first frame the page
+ * shows, which can come well after the page opens, because a page that has not painted
+ * may show none. A change the page makes shows from the next frame the browser draws,
+ * which under load can also come well after the change. The recording places each frame
+ * at the wall-clock time it was drawn, and a screencast client is sent each frame with
+ * that time, so this client keeps the times. A client that joins after a frame is sent
+ * the last frame shown, which is still the first until the page draws again, so start
+ * watching before anything is drawn in the page.
+ */
+export async function watchRecording(page: Page): Promise<RecordingFrames> {
+  const drawn: number[] = [];
+  await page.screencast.start({ onFrame: ({ timestamp }) => void drawn.push(timestamp) }).catch(() => {});
+  const earliest = (times: number[]): number | null => (times.length ? Math.min(...times) : null);
+  return {
+    start: () => earliest(drawn),
+    firstFrom: (wall) => earliest(drawn.filter((t) => t >= wall)),
+  };
+}
+
+/** Walk one step, and resolve with whether its proof held and when the browser first showed its caption. */
+async function walkStep(page: Page, base: string, step: DemoStep, total: number, log: (m: string) => void): Promise<{ proved: boolean; shownAt: number }> {
+  let shownAt = Date.now();
+  const { proved } = await runStep(page, base, step, total, true, log, async () => {
+    shownAt = await showCaption(page, step.index, total, step.narration, false);
+  });
   if (!proved) {
     await showCaption(page, step.index, total, step.narration, true);
     await page.waitForTimeout(FAIL_HOLD_MS);
   }
-  return proved;
+  return { proved, shownAt };
 }
 
 /**
- * Drive `demo` against a fresh recorded context and finish the MP4. Records the start
- * time of each segment (cover, each step, the closing card), so the optional narration
- * track can be laid down aligned to what is on screen.
+ * Drive `demo` against a fresh recorded context and finish the MP4. Records where each
+ * segment (cover, each step, the closing card) appears in the recording, so the optional
+ * narration track can be laid on the recording's own timeline.
  */
 export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -77,34 +133,43 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
   const browser = opts.browser ?? (await chromium.launch({ headless: !opts.headed, args: chromiumLaunchArgs() }));
   const context = await browser.newContext({ viewport: VIEWPORT, recordVideo: { dir: capturesDir, size: VIEWPORT } });
   const page = await context.newPage();
+  const recording = await watchRecording(page);
+  const openedAt = Date.now();
   await installPointer(page);
 
-  const marks: SegMark[] = [];
-  const t0 = Date.now();
-  const at = (): number => Date.now() - t0;
+  // Each segment, with a wall-clock time: for a step, when the browser first showed its
+  // caption; for the cover and the closing card, when the page added the card; for a tail
+  // with no card, which draws nothing, when it began.
+  const segments: { narration: string; wall: number; card: boolean }[] = [];
   let failures = 0;
   let webmPath: string | null = null;
+  let flushedAt = 0;
   let surface: Surface | null = null;
 
   try {
     surface = await openSurface(page, demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, backdrop: true, log });
-    marks.push({ narration: demo.title, at: at() });
-    await showCardOverlay(page, coverInnerHtml(BRAND, demo.title, demo.description, `${demo.steps.length} steps`), COVER_MS);
+    const cover = await showCardOverlay(page, coverInnerHtml(BRAND, demo.title, demo.description, `${demo.steps.length} steps`), COVER_MS);
+    segments.push({ narration: demo.title, wall: cover, card: true });
 
     for (const step of demo.steps) {
-      marks.push({ narration: step.narration, at: at() });
-      const proved = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
+      const { proved, shownAt } = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
+      segments.push({ narration: step.narration, wall: shownAt, card: false });
       if (!proved) failures++;
     }
 
-    marks.push({ narration: demo.scrutiny.length ? 'What to check critically' : '', at: at() });
-    if (demo.scrutiny.length) await showCardOverlay(page, scrutinyInnerHtml(demo.scrutiny), Math.min(14000, Math.max(6000, demo.scrutiny.length * 2500)));
-    else await page.waitForTimeout(TAIL_MS);
+    if (demo.scrutiny.length) {
+      const card = await showCardOverlay(page, scrutinyInnerHtml(demo.scrutiny), Math.min(14000, Math.max(6000, demo.scrutiny.length * 2500)));
+      segments.push({ narration: 'What to check critically', wall: card, card: true });
+    } else {
+      segments.push({ narration: '', wall: Date.now(), card: false });
+      await page.waitForTimeout(TAIL_MS);
+    }
   } finally {
     try {
       // Closing the context is what flushes the .webm; the path resolves after.
       const video = page.video();
       await context.close();
+      flushedAt = Date.now();
       webmPath = video ? await video.path() : null;
     } finally {
       // The surface ends once the recording is flushed, so a program slow to end is not filmed.
@@ -112,12 +177,21 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
       if (launched) await browser.close();
     }
   }
-  const endMs = at();
 
   if (!webmPath) throw new Error('walkthrough: recording produced no video (recordVideo did not write a file)');
 
-  // Segment durations (seconds) between consecutive marks; the last runs to the end.
-  const durations = marks.map((m, i) => Math.max(0.5, ((marks[i + 1]?.at ?? endMs) - m.at) / 1000));
+  const firstFrame = recording.start();
+  if (firstFrame === null) log('walkthrough: no frame of the recording reached the engine, so the narration is timed from when the page opened');
+  const start = firstFrame ?? openedAt;
+  // A segment starts with the frame that first shows it, so neither the time an evaluate
+  // takes to reach a busy page nor the time a loaded browser takes to draw counts against
+  // its clip. A caption's frame is the one the browser reported. A card can fade in, and
+  // the browser reports no frame for text it first paints unseen, so a card starts with
+  // the first frame the browser drew after the page added it. That is the card's frame
+  // unless the page was drawing frames of its own then. The page, the browser and the
+  // engine all tell the host's wall-clock time, so every time is read against the
+  // recording's start.
+  const marks = segments.map((s) => ({ narration: s.narration, at: ((s.card ? recording.firstFrom(s.wall) : null) ?? s.wall) - start }));
 
   const tmp = mkdtempSync(path.join(tmpdir(), 'sprintshow-wt-'));
   try {
@@ -125,10 +199,16 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
     log(`walkthrough: transcoding recording → ${path.basename(opts.outputPath)}`);
     run(['-y', '-i', webmPath, '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p', '-c:v', 'libx264', '-crf', '22', '-preset', 'slow', '-an', silent]);
 
+    // The transcode is the picture the MP4 shows, so its length ends the last slot. ffmpeg
+    // prints the length of a file it wrote, and the time the flush ended stands in only
+    // when the probe reads none.
+    const endMs = Math.round(probeDuration(silent) * 1000) || flushedAt - start;
+    const slots = narrationSlots(marks, endMs);
+
     let audioPath: string | null = null;
     let narrated = false;
     if (!opts.noNarrate) {
-      const track = await buildNarration(marks.map((m, i) => ({ narration: m.narration, minDuration: durations[i] })), { stretch: false }, tmp, log);
+      const track = await buildNarration(slots.map((s) => ({ narration: s.narration, minDuration: s.duration })), { stretch: false }, tmp, log);
       audioPath = track?.audioPath ?? null;
       narrated = Boolean(track);
     }
@@ -144,7 +224,7 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
     // Write a manifest for the kept working dir so a run is inspectable.
     writeFileSync(
       path.join(capturesDir, 'manifest.json'),
-      JSON.stringify({ title: demo.title, mode: 'walkthrough', video: path.basename(webmPath), segments: marks.map((m, i) => ({ narration: m.narration, duration: durations[i] })), ...(demo.scrutiny.length ? { scrutiny: demo.scrutiny } : {}) }, null, 2),
+      JSON.stringify({ title: demo.title, mode: 'walkthrough', video: path.basename(webmPath), segments: slots, ...(demo.scrutiny.length ? { scrutiny: demo.scrutiny } : {}) }, null, 2),
     );
 
     const keep = opts.keep || failures > 0;
