@@ -192,32 +192,6 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
     }
   });
 
-  test('--full-page keeps the top of a page taller than Chromium draws in one capture, and says so', async () => {
-    const site = await serveSite({ 'bands.html': BANDS_HTML });
-    const page = await browser!.newPage({ deviceScaleFactor: 2 });
-    try {
-      const out = path.join(site.dir, 'bands.png');
-      const lines: string[] = [];
-      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: BANDS, outputPath: out, fullPage: true, log: (m) => lines.push(m) });
-      const limit = captureHeightLimit(1280, 2);
-      assert.equal(lines.at(-1), `screenshot: capturing the page's top ${limit} of its 30000 CSS pixels, the most one capture holds at scale 2 → bands.png`);
-      assert.deepEqual(pngSize(out), { width: 2560, height: limit * 2 });
-      // Chromium drew every band down to the capture's last row, where the band it cuts through shows.
-      const ys = [...Array.from({ length: Math.floor(limit / 100) }, (_, n) => (n * 100 + 50) * 2), limit * 2 - 1];
-      const drawn = await pngPixels(out, ys.map((y) => ({ x: 2550, y })));
-      const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
-      const wrong = ys.flatMap((y, i) => {
-        const n = Math.floor(y / 200);
-        const [red, green, blue] = drawn[i];
-        return near(red, n % 256) && near(green, Math.floor(n / 256)) && near(blue, 200) ? [] : [`band ${n} at y ${y}: rgba(${drawn[i].join(', ')})`];
-      });
-      assert.deepEqual(wrong, []);
-    } finally {
-      await page.close();
-      await site.close();
-    }
-  });
-
   test('--transparent keeps the corners of a rounded element transparent where the page paints nothing', async () => {
     const site = await serveSite({ 'card.html': CARD_HTML });
     const page = await browser!.newPage();
@@ -349,4 +323,32 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
       cleanup();
     }
   });
+});
+
+// On a busy host a capture near the most Chromium draws in one takes tens of seconds, and
+// the tests running beside it time out, so this one runs once they are done.
+test('--full-page keeps the top of a page taller than Chromium draws in one capture, and says so', { skip }, async () => {
+  const site = await serveSite({ 'bands.html': BANDS_HTML });
+  const page = await browser!.newPage({ deviceScaleFactor: 2 });
+  try {
+    const out = path.join(site.dir, 'bands.png');
+    const lines: string[] = [];
+    await captureScreenshot({ page, baseUrl: site.baseUrl, demo: BANDS, outputPath: out, fullPage: true, log: (m) => lines.push(m) });
+    const limit = captureHeightLimit(1280, 2);
+    assert.equal(lines.at(-1), `screenshot: capturing the page's top ${limit} of its 30000 CSS pixels, the most one capture holds at scale 2 → bands.png`);
+    assert.deepEqual(pngSize(out), { width: 2560, height: limit * 2 });
+    // Chromium drew every band down to the capture's last row, where the band it cuts through shows.
+    const ys = [...Array.from({ length: Math.floor(limit / 100) }, (_, n) => (n * 100 + 50) * 2), limit * 2 - 1];
+    const drawn = await pngPixels(out, ys.map((y) => ({ x: 2550, y })));
+    const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
+    const wrong = ys.flatMap((y, i) => {
+      const n = Math.floor(y / 200);
+      const [red, green, blue] = drawn[i];
+      return near(red, n % 256) && near(green, Math.floor(n / 256)) && near(blue, 200) ? [] : [`band ${n} at y ${y}: rgba(${drawn[i].join(', ')})`];
+    });
+    assert.deepEqual(wrong, []);
+  } finally {
+    await page.close();
+    await site.close();
+  }
 });

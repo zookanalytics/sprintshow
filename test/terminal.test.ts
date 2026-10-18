@@ -431,50 +431,6 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     }
   });
 
-  test("--full-page keeps the session's last lines when the whole session is more than Chromium draws in one capture", async () => {
-    // At scale 3, a thousand lines of an 80-column terminal are more than Chromium draws in
-    // one capture, whatever the height the font gives a row.
-    const scale = 3;
-    const md = `# Demo: Bars\n\n**Terminal:** 80x24\n\n## Steps\n\n1. **A thousand numbered bars**\n   \`run bash bars.sh 1000 79\`\n   _Prove:_ the last bar is on screen — \`screen ~ /^1000$/\`\n`;
-    const { dir, cleanup } = scratchDir();
-    writeFiles(dir, { 'bars.sh': BARS });
-    const page = await browser!.newPage({ deviceScaleFactor: scale });
-    try {
-      const out = path.join(dir, 'bars.png');
-      const lines: string[] = [];
-      const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: out, fullPage: true, log: (m) => lines.push(m) });
-      assert.equal(res.failures, 0, lines.join('\n'));
-      const held = await page.evaluate((win) => {
-        const w = (document.querySelector(win) as HTMLElement).getBoundingClientRect();
-        const s = (document.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect();
-        const t = (window as unknown as { __ss_term: { cursor(): { rows: number }; row(n: number): string | null } }).__ss_term;
-        const rows = t.cursor().rows;
-        return { width: w.width, height: w.height, top: s.top - w.top, left: s.left - w.left, cell: { width: s.width / 80, height: s.height / rows }, rows, last: t.row(-1) };
-      }, TERMINAL_WINDOW);
-      // The session is `$ bash bars.sh 1000 79`, the bars, and the prompt after them.
-      assert.equal(lines.at(-1), `screenshot: capturing the session's last ${held.rows} of its 1002 lines, the most one capture holds at scale ${scale} → bars.png`);
-      // The window holds as many rows as fit the limit, and one more would pass it.
-      const limit = captureHeightLimit(held.width, scale);
-      assert.ok(held.height <= limit && held.height + held.cell.height > limit, `a ${held.height} px window is not the most rows a ${limit} px capture holds`);
-      assert.deepEqual(pngSize(out), { width: Math.ceil(held.width) * scale, height: Math.ceil(held.height) * scale });
-      // Chromium drew every row, the bottom ones too, and they are the session's last
-      // lines: the bars from the one its first row shows, then the prompt.
-      const bars = Array.from({ length: held.rows - 1 }, (_, r) => 1002 - held.rows + r);
-      const x = Math.round((held.left + 76.5 * held.cell.width) * scale);
-      const drawn = await pngPixels(out, bars.map((_, r) => ({ x, y: Math.round((held.top + (r + 0.5) * held.cell.height) * scale) })));
-      const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
-      const wrong = bars.flatMap((n, r) => {
-        const [red, green, blue, alpha] = drawn[r];
-        return near(red, n % 256) && near(green, Math.floor(n / 256)) && near(blue, 200) && alpha === 255 ? [] : [`row ${r + 1}, bar ${n}: rgba(${drawn[r].join(', ')})`];
-      });
-      assert.deepEqual(wrong, []);
-      assert.equal(held.last, '$');
-    } finally {
-      await page.close();
-      cleanup();
-    }
-  });
-
   test('the shell, and every program it still runs, end before the capture returns, even one that handles SIGHUP', async () => {
     const md = `# Demo: Hold
 
@@ -672,6 +628,52 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
       cleanup();
     }
   });
+});
+
+// On a busy host a capture near the most Chromium draws in one takes tens of seconds, and
+// the tests running beside it time out, so this one runs once they are done.
+test("--full-page keeps the session's last lines when the whole session is more than Chromium draws in one capture", { skip }, async () => {
+  // At scale 3, a thousand lines of an 80-column terminal are more than Chromium draws in
+  // one capture, whatever the height the font gives a row.
+  const scale = 3;
+  const md = `# Demo: Bars\n\n**Terminal:** 80x24\n\n## Steps\n\n1. **A thousand numbered bars**\n   \`run bash bars.sh 1000 79\`\n   _Prove:_ the last bar is on screen — \`screen ~ /^1000$/\`\n`;
+  const { dir, cleanup } = scratchDir();
+  writeFiles(dir, { 'bars.sh': BARS });
+  const page = await browser!.newPage({ deviceScaleFactor: scale });
+  try {
+    const out = path.join(dir, 'bars.png');
+    const lines: string[] = [];
+    const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: out, fullPage: true, log: (m) => lines.push(m) });
+    assert.equal(res.failures, 0, lines.join('\n'));
+    const held = await page.evaluate((win) => {
+      const w = (document.querySelector(win) as HTMLElement).getBoundingClientRect();
+      const s = (document.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect();
+      const t = (window as unknown as { __ss_term: { cursor(): { rows: number }; row(n: number): string | null } }).__ss_term;
+      const rows = t.cursor().rows;
+      return { width: w.width, height: w.height, top: s.top - w.top, left: s.left - w.left, cell: { width: s.width / 80, height: s.height / rows }, rows, last: t.row(-1) };
+    }, TERMINAL_WINDOW);
+    // The session is `$ bash bars.sh 1000 79`, the bars, and the prompt after them.
+    assert.equal(lines.at(-1), `screenshot: capturing the session's last ${held.rows} of its 1002 lines, the most one capture holds at scale ${scale} → bars.png`);
+    // The window holds as many rows as fit the limit, and one more would pass it.
+    const limit = captureHeightLimit(held.width, scale);
+    assert.ok(held.height <= limit && held.height + held.cell.height > limit, `a ${held.height} px window is not the most rows a ${limit} px capture holds`);
+    assert.deepEqual(pngSize(out), { width: Math.ceil(held.width) * scale, height: Math.ceil(held.height) * scale });
+    // Chromium drew every row, the bottom ones too, and they are the session's last
+    // lines: the bars from the one its first row shows, then the prompt.
+    const bars = Array.from({ length: held.rows - 1 }, (_, r) => 1002 - held.rows + r);
+    const x = Math.round((held.left + 76.5 * held.cell.width) * scale);
+    const drawn = await pngPixels(out, bars.map((_, r) => ({ x, y: Math.round((held.top + (r + 0.5) * held.cell.height) * scale) })));
+    const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
+    const wrong = bars.flatMap((n, r) => {
+      const [red, green, blue, alpha] = drawn[r];
+      return near(red, n % 256) && near(green, Math.floor(n / 256)) && near(blue, 200) && alpha === 255 ? [] : [`row ${r + 1}, bar ${n}: rgba(${drawn[r].join(', ')})`];
+    });
+    assert.deepEqual(wrong, []);
+    assert.equal(held.last, '$');
+  } finally {
+    await page.close();
+    cleanup();
+  }
 });
 
 test('a terminal script refuses a server, a selector, or a missing directory before anything starts', async () => {
