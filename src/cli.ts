@@ -43,7 +43,9 @@ screenshot options:
                               Where the pages come from, as for run.
   -o, --output <file.png>     Output path (required).
   --full-page                 Capture the whole scrollable page instead of the viewport,
-                              or a terminal script's whole session instead of its screen.
+                              or a terminal script's whole session instead of its screen,
+                              up to what Chromium draws in one capture: a page keeps its
+                              top, and a session its last lines.
   --selector <css>            Capture one element, its first match, once it is visible.
   --scale <n>                 Device scale factor (default 1). At 2, text stays sharp in
                               a PNG shown at half its size.

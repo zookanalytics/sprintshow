@@ -116,6 +116,12 @@ element, its first match, once that element is visible. `--scale <n>` sets the d
 factor. `--transparent` leaves out the page's default white background, so on a page that
 paints no background of its own, an element with rounded corners keeps transparent corners.
 
+Chromium draws one capture in tiles, and holds only so many of them at once: about 120
+million device pixels' worth. A `--full-page` capture larger than that holds what fits.
+A page keeps its top and a terminal session keeps its last lines, and the log says how
+much the capture holds. At `--scale 2`, a 1280-pixel-wide page keeps about its top 22,000
+CSS pixels, and an 80-column terminal about its last 870 lines.
+
 ## Terminal demos
 
 A script that declares `**Terminal:**` drives a bash session instead of a page. The engine
@@ -185,8 +191,9 @@ A matcher is as in a page script's `text` assertion, and a `/regex/` is tested w
 
 **Captures.** `sprintshow screenshot` saves the terminal window, title bar included, with
 its rounded corners transparent. `--full-page` captures the whole session instead of the
-screen: one row for each line it holds, scrollback included. `--selector` is for page
-scripts. The videos show the window on a dark backdrop, above the caption bar. Every
+screen: one row for each line it holds, scrollback included. A session longer than one
+capture holds keeps its last lines (see [Capture a screenshot](#capture-a-screenshot)).
+`--selector` is for page scripts. The videos show the window on a dark backdrop, above the caption bar. Every
 capture draws the window at the largest font size, up to 24 px, at which it fits a video
 frame above the caption bar, so a very wide or tall terminal draws small. Once a capture
 is done, the shell and every program it still runs are ended, and a program that ignores

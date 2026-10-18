@@ -10,7 +10,8 @@
 // encodes each key for the terminal's cursor-key mode, that a full-screen program's
 // alternate screen, cursor addressing and colours are drawn as it sent them, and that
 // quitting it restores the shell's screen. They pin the captures: the still is the
-// terminal window with transparent corners, `--full-page` holds the whole session, and a
+// terminal window with transparent corners, `--full-page` holds the whole session, or
+// its last lines, each one drawn, when the session is more than one capture holds, and a
 // terminal script refuses a server, a selector, or a directory that does not exist before
 // a browser is spent. A video frame shows every cell of a terminal at each limit of the
 // sizes the parser accepts, clear of the caption bar. The shell and every program it
@@ -30,9 +31,9 @@ import type { Page } from 'playwright';
 import { parseDemoScript, parseAssertion, parseKeys, parseMatcher, TERMINAL_COLS, TERMINAL_ROWS, type Assertion, type Demo } from '../src/demo-script.ts';
 import { openSurface, runStep, runAction, checkAssertion, awaitAssertion, ACTION_TIMEOUT, COMMAND_TIMEOUT, VIEWPORT, type StepProof, type Surface } from '../src/browser.ts';
 import { showCaption } from '../src/overlay.ts';
-import { captureScreenshot } from '../src/screenshot.ts';
-import { TERMINAL_WINDOW, terminalPress, terminalRun, terminalWaitForScreen } from '../src/terminal.ts';
-import { launchBrowser, scratchDir, writeFiles, runCli, stepLines, stubFfmpeg, pngSize, rgba, alphaAt, REPO } from './browser-fixture.ts';
+import { captureHeightLimit, captureScreenshot } from '../src/screenshot.ts';
+import { TERMINAL_WINDOW, expandToSession, terminalPress, terminalRun, terminalWaitForScreen } from '../src/terminal.ts';
+import { launchBrowser, scratchDir, writeFiles, runCli, stepLines, stubFfmpeg, pngSize, pngPixels, rgba, alphaAt, REPO } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
 after(() => browser?.close());
@@ -144,6 +145,13 @@ async function drawnCell(page: Page, colour: string): Promise<{ row: number; col
     return null;
   }, colour);
 }
+
+/**
+ * `bash bars.sh <n> <width>`: n lines, each a bar `width` cells wide that begins with its
+ * number and whose background colour encodes it: n % 256 red, n / 256 green, blue 200.
+ */
+const BARS = `for ((n = 1; n <= $1; n++)); do printf '\\033[48;2;%d;%d;200m%-*s\\033[0m\\n' $((n % 256)) $((n / 256)) "$2" "$n"; done
+`;
 
 /** The corners of the range of sizes the parser accepts: its most and fewest columns, each with its most and fewest rows. */
 const SIZE_LIMITS = [TERMINAL_COLS.max, TERMINAL_COLS.min].flatMap((cols) => [TERMINAL_ROWS.max, TERMINAL_ROWS.min].map((rows) => ({ cols, rows })));
@@ -396,6 +404,71 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
       // `$ seq 1 30` and the lines the clear left in the scrollback, then the prompt it moved to the top.
       assert.deepEqual(drawn, ['$ seq 1 30', ...Array.from({ length: 22 }, (_, i) => String(i + 1)), '$']);
       assert.equal(slider, 'rgba(0, 0, 0, 0)', 'the scrollbar xterm shows once the window scrolls draws nothing');
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test('a window grown to the session holds its last lines when the session is more than the window may hold', async () => {
+    const md = `# Demo: Long\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **Fifty lines**\n   \`run seq 1 50\`\n`;
+    const { dir, cleanup } = scratchDir();
+    try {
+      await withTerminal(md, dir, async (page, demo, lines) => {
+        await runSteps(page, demo, lines);
+        const { frame, row } = await page.evaluate((win) => {
+          const w = (document.querySelector(win) as HTMLElement).getBoundingClientRect();
+          const s = (document.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect();
+          return { frame: w.height - s.height, row: s.height / 10 };
+        }, TERMINAL_WINDOW);
+        // Room for twenty and a half rows, where the session is `$ seq 1 50`, the fifty lines, and the prompt.
+        assert.deepEqual(await expandToSession(page, frame + 20.5 * row), { rows: 20, lines: 52 });
+        const drawn = await page.evaluate(() => [...document.querySelectorAll('.xterm-rows > div')].map((r) => (r.textContent ?? '').trimEnd()));
+        assert.deepEqual(drawn, [...Array.from({ length: 19 }, (_, i) => String(32 + i)), '$']);
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("--full-page keeps the session's last lines when the whole session is more than Chromium draws in one capture", async () => {
+    // At scale 3, a thousand lines of an 80-column terminal are more than Chromium draws in
+    // one capture, whatever the height the font gives a row.
+    const scale = 3;
+    const md = `# Demo: Bars\n\n**Terminal:** 80x24\n\n## Steps\n\n1. **A thousand numbered bars**\n   \`run bash bars.sh 1000 79\`\n   _Prove:_ the last bar is on screen — \`screen ~ /^1000$/\`\n`;
+    const { dir, cleanup } = scratchDir();
+    writeFiles(dir, { 'bars.sh': BARS });
+    const page = await browser!.newPage({ deviceScaleFactor: scale });
+    try {
+      const out = path.join(dir, 'bars.png');
+      const lines: string[] = [];
+      const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: out, fullPage: true, log: (m) => lines.push(m) });
+      assert.equal(res.failures, 0, lines.join('\n'));
+      const held = await page.evaluate((win) => {
+        const w = (document.querySelector(win) as HTMLElement).getBoundingClientRect();
+        const s = (document.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect();
+        const t = (window as unknown as { __ss_term: { cursor(): { rows: number }; row(n: number): string | null } }).__ss_term;
+        const rows = t.cursor().rows;
+        return { width: w.width, height: w.height, top: s.top - w.top, left: s.left - w.left, cell: { width: s.width / 80, height: s.height / rows }, rows, last: t.row(-1) };
+      }, TERMINAL_WINDOW);
+      // The session is `$ bash bars.sh 1000 79`, the bars, and the prompt after them.
+      assert.equal(lines.at(-1), `screenshot: capturing the session's last ${held.rows} of its 1002 lines, the most one capture holds at scale ${scale} → bars.png`);
+      // The window holds as many rows as fit the limit, and one more would pass it.
+      const limit = captureHeightLimit(held.width, scale);
+      assert.ok(held.height <= limit && held.height + held.cell.height > limit, `a ${held.height} px window is not the most rows a ${limit} px capture holds`);
+      assert.deepEqual(pngSize(out), { width: Math.ceil(held.width) * scale, height: Math.ceil(held.height) * scale });
+      // Chromium drew every row, the bottom ones too, and they are the session's last
+      // lines: the bars from the one its first row shows, then the prompt.
+      const bars = Array.from({ length: held.rows - 1 }, (_, r) => 1002 - held.rows + r);
+      const x = Math.round((held.left + 76.5 * held.cell.width) * scale);
+      const drawn = await pngPixels(out, bars.map((_, r) => ({ x, y: Math.round((held.top + (r + 0.5) * held.cell.height) * scale) })));
+      const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
+      const wrong = bars.flatMap((n, r) => {
+        const [red, green, blue, alpha] = drawn[r];
+        return near(red, n % 256) && near(green, Math.floor(n / 256)) && near(blue, 200) && alpha === 255 ? [] : [`row ${r + 1}, bar ${n}: rgba(${drawn[r].join(', ')})`];
+      });
+      assert.deepEqual(wrong, []);
+      assert.equal(held.last, '$');
     } finally {
       await page.close();
       cleanup();

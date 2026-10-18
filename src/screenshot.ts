@@ -14,6 +14,11 @@
 // paints nothing around the window, and the default white background is always left
 // out, so the window's rounded corners are transparent. With `fullPage`, the window holds
 // the whole session instead of the screen.
+//
+// Chromium draws a capture in tiles and holds only so many of them, so a full-page
+// capture holds no more than it draws whole (captureHeightLimit). A page keeps its top,
+// and a terminal session its last lines. specs/ss-vyii/capture-limit.md records how the
+// limit was found.
 
 import path from 'node:path';
 import type { Page } from 'playwright';
@@ -21,6 +26,65 @@ import type { Page } from 'playwright';
 import { parseDemoScript, type Demo } from './demo-script.ts';
 import { runStep, openSurface, ACTION_TIMEOUT, VIEWPORT } from './browser.ts';
 import { expandToSession, TERMINAL_WINDOW } from './terminal.ts';
+
+/**
+ * Chromium rasterizes a capture in tiles of 256 device pixels, laid every 254, and holds
+ * at most 512 MiB of them, 2048 tiles. That is its least on a desktop host, and a larger
+ * screen raises it. A capture that spans more comes out with the tiles past the budget
+ * unpainted, transparent in a terminal still and the page's background in a page
+ * capture. A capture that stops above the end of the page is sometimes drawn up to 24
+ * tiles short of the budget, so a capture spends at most 15/16 of it.
+ */
+const TILE_STEP = 254;
+const TILE_BUDGET = (2048 * 15) / 16;
+/** The time a capture is given for each tile it spans, on top of ACTION_TIMEOUT: rasterizing and encoding it take time in proportion to its tiles. */
+const TILE_TIME_MS = 100;
+
+/** The tiles that `length` CSS pixels of a capture span, from the page's edge, at `scale` device pixels per CSS pixel. */
+function tileSpan(length: number, scale: number): number {
+  return Math.ceil((Math.ceil(length) * scale) / TILE_STEP);
+}
+
+/**
+ * The tallest capture, in CSS pixels, that Chromium draws whole when it is `width` CSS
+ * pixels wide at `scale` device pixels per CSS pixel and starts at the page's top-left
+ * corner, where the tiles start.
+ */
+export function captureHeightLimit(width: number, scale: number): number {
+  return Math.floor((Math.floor(TILE_BUDGET / tileSpan(width, scale)) * TILE_STEP) / scale);
+}
+
+/** A capture's size in CSS pixels, and the device pixels per CSS pixel it is drawn at. */
+interface Extent {
+  width: number;
+  height: number;
+  scale: number;
+}
+
+/** How long a capture is given. */
+function captureTimeout({ width, height, scale }: Extent): number {
+  return ACTION_TIMEOUT + TILE_TIME_MS * tileSpan(width, scale) * tileSpan(height, scale);
+}
+
+/** The terminal window's extent. */
+function windowExtent(page: Page): Promise<Extent> {
+  return page.evaluate((sel) => {
+    const box = (document.querySelector(sel) as HTMLElement).getBoundingClientRect();
+    return { width: box.width, height: box.height, scale: devicePixelRatio };
+  }, TERMINAL_WINDOW);
+}
+
+/** The whole page's extent, measured as Playwright measures it for a full-page capture. */
+function pageExtent(page: Page): Promise<Extent> {
+  return page.evaluate(() => {
+    const els = [document.body, document.documentElement].filter(Boolean);
+    return {
+      width: Math.max(...els.flatMap((e) => [e.scrollWidth, e.offsetWidth, e.clientWidth])),
+      height: Math.max(...els.flatMap((e) => [e.scrollHeight, e.offsetHeight, e.clientHeight])),
+      scale: devicePixelRatio,
+    };
+  });
+}
 
 export interface CaptureScreenshotOptions {
   /**
@@ -91,29 +155,53 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
     // A step whose proof failed is the likeliest reason the page lacks what the capture
     // needs, so a capture that fails says how many did. Each one's ✗ line is in the log.
     const failed = failures > 0 ? ` (${failures} step(s) failed their proof)` : '';
-    const attempt = async (what: string, act: () => Promise<unknown>): Promise<void> => {
+    const attempt = async <T>(what: string, act: () => Promise<T>): Promise<T> => {
       try {
-        await act();
+        return await act();
       } catch (e) {
         throw new Error(`screenshot: ${what}${failed}: ${(e as Error).message.split('\n')[0]}`);
       }
     };
+    // Said after the area of a full-page capture that stops short.
+    const limited = (scale: number): string => `, the most one capture holds at scale ${scale}`;
 
     const shot = { path: opts.outputPath, type: 'png' as const, omitBackground: Boolean(opts.transparent), timeout: ACTION_TIMEOUT };
     if (demo.terminal) {
-      const area = opts.fullPage ? 'the whole terminal session' : 'the terminal window';
-      if (opts.fullPage) await attempt('could not hold the whole session in the window', () => expandToSession(page));
-      log(`screenshot: capturing ${area} → ${path.basename(opts.outputPath)}`);
-      await attempt(`could not capture ${area}`, () => page.locator(TERMINAL_WINDOW).screenshot({ ...shot, omitBackground: true }));
+      let area = 'the terminal window';
+      let note = '';
+      let timeout = ACTION_TIMEOUT;
+      if (opts.fullPage) {
+        // A still's window sits at the page's top-left corner, and grows down from there.
+        const { width, scale } = await windowExtent(page);
+        const held = await attempt('could not grow the window to the session', () => expandToSession(page, captureHeightLimit(width, scale)));
+        area = held.rows < held.lines ? `the session's last ${held.rows} of its ${held.lines} lines` : 'the whole terminal session';
+        if (held.rows < held.lines) note = limited(scale);
+        timeout = captureTimeout(await windowExtent(page));
+      }
+      log(`screenshot: capturing ${area}${note} → ${path.basename(opts.outputPath)}`);
+      await attempt(`could not capture ${area}`, () => page.locator(TERMINAL_WINDOW).screenshot({ ...shot, omitBackground: true, timeout }));
     } else if (selector) {
       const el = page.locator(selector).first();
       await attempt(`no visible \`${selector}\` to capture`, () => el.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT }));
       log(`screenshot: capturing \`${selector}\` → ${path.basename(opts.outputPath)}`);
       await attempt(`could not capture \`${selector}\``, () => el.screenshot(shot));
     } else {
-      const area = opts.fullPage ? 'the full page' : 'the viewport';
-      log(`screenshot: capturing ${area} → ${path.basename(opts.outputPath)}`);
-      await attempt(`could not capture ${area}`, () => page.screenshot({ ...shot, fullPage: Boolean(opts.fullPage) }));
+      let area = opts.fullPage ? 'the full page' : 'the viewport';
+      let note = '';
+      let timeout = ACTION_TIMEOUT;
+      let clip: { x: number; y: number; width: number; height: number } | undefined;
+      if (opts.fullPage) {
+        const full = await pageExtent(page);
+        const limit = captureHeightLimit(full.width, full.scale);
+        if (full.height > limit) {
+          clip = { x: 0, y: 0, width: full.width, height: limit };
+          area = `the page's top ${limit} of its ${full.height} CSS pixels`;
+          note = limited(full.scale);
+        }
+        timeout = captureTimeout({ ...full, height: Math.min(full.height, limit) });
+      }
+      log(`screenshot: capturing ${area}${note} → ${path.basename(opts.outputPath)}`);
+      await attempt(`could not capture ${area}`, () => page.screenshot({ ...shot, timeout, fullPage: Boolean(opts.fullPage), clip }));
     }
     return { outputPath: opts.outputPath, failures };
   } finally {
