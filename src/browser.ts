@@ -3,7 +3,8 @@
 // assertion evaluator that checks a `_Prove:_` / `_Fail if:_` contract against the live
 // DOM or terminal, the step runner that runs one demo step's actions and then checks its
 // proof, and openSurface, which brings up what a script drives: the app at its start
-// path, or the engine's own terminal (terminal.ts).
+// path, past Vercel's sign-in when the app is behind it (vercel.ts), or the engine's own
+// terminal (terminal.ts).
 //
 // The pointer is a DOM element the engine moves, so a click or a keystroke reads on
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
@@ -13,6 +14,7 @@
 import type { Page } from 'playwright';
 import type { Assertion, Demo, DemoAction, DemoStep, Matcher } from './demo-script.ts';
 import { openTerminal, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
+import { passVercelSignIn } from './vercel.ts';
 
 export const VIEWPORT = { width: 1280, height: 900 };
 export const ACTION_TIMEOUT = 15000; // per waitFor/waitForText/click/type, and a terminal's waitForScreen
@@ -293,10 +295,12 @@ export interface OpenSurfaceOptions {
 
 /**
  * Bring up what `demo` drives in `page`: for a page script, navigate to its start path on
- * `baseUrl`; for a terminal script, write the engine's terminal page and start its shell
- * (terminal.ts). The caller closes the surface once the capture no longer shows it.
+ * `baseUrl`, once the page's context can pass Vercel's sign-in if the app answers with it
+ * (vercel.ts); for a terminal script, write the engine's terminal page and start its
+ * shell (terminal.ts). The caller closes the surface once the capture no longer shows it.
  */
 export async function openSurface(page: Page, demo: Demo, opts: OpenSurfaceOptions): Promise<Surface> {
+  const log = opts.log ?? ((m: string) => console.log(m));
   if (demo.terminal) {
     return openTerminal(page, {
       spec: demo.terminal,
@@ -304,10 +308,12 @@ export async function openSurface(page: Page, demo: Demo, opts: OpenSurfaceOptio
       cwd: opts.cwd,
       backdrop: Boolean(opts.backdrop),
       readyTimeout: ACTION_TIMEOUT,
-      log: opts.log ?? ((m: string) => console.log(m)),
+      log,
     });
   }
   if (!opts.baseUrl) throw new Error('a page script needs a base URL to join its **Start:** path onto');
-  await page.goto(joinUrl(opts.baseUrl, demo.start), { waitUntil: 'load' });
+  const start = joinUrl(opts.baseUrl, demo.start);
+  await passVercelSignIn(page, start, log);
+  await page.goto(start, { waitUntil: 'load' });
   return { settle: async () => {}, close: async () => {} };
 }
