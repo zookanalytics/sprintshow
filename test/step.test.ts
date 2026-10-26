@@ -214,19 +214,23 @@ describe('the step runner', { concurrency: true, skip }, () => {
       await page.goto(joinUrl(site.baseUrl, '/'));
       const box = (await page.locator('#open').boundingBox())!;
       const around = { x: box.x - 6, y: box.y - 6, width: box.width + 12, height: box.height + 12 };
-      const unfocused = await page.screenshot({ clip: around });
       const ringed = (): Promise<boolean> => page.evaluate(() => document.activeElement?.matches('#open:focus-visible') ?? false);
 
       await page.click('#open');
       await page.evaluate(() => (document.getElementById('dialog') as HTMLDialogElement).close());
+      // The button's hover style alone moves more of its edge than the ring test allows, so
+      // the pointer the click left on it moves off before either capture.
+      await page.mouse.move(0, 0);
       assert.equal(await checkAssertion(page, parseAssertion('focused #open')!), true, 'the click focused the button');
       assert.equal(await ringed(), false, 'a click draws no ring');
+      const clicked = await page.screenshot({ clip: around });
 
       await runAction(page, site.baseUrl, parseAction('press Shift+Tab Tab')!, false, () => {});
       assert.equal(await checkAssertion(page, parseAssertion('focused #open')!), true, 'the keys moved focus off the button and back');
       assert.equal(await ringed(), true, 'keys draw the ring');
-      // The ring runs round the button: far more pixels than the few that anti-aliasing can shift.
-      assert.ok((await pixelsApart(page, unfocused, await page.screenshot({ clip: around }), 32)) > 40, 'the capture shows no ring round the button');
+      // The button has focus in both captures, so they differ by the ring, which runs round
+      // the button: far more pixels than the few that anti-aliasing can shift.
+      assert.ok((await pixelsApart(page, clicked, await page.screenshot({ clip: around }), 32)) > 40, 'the capture shows no ring round the button');
     } finally {
       await page.close();
       await site.close();
