@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseDemoScript, parseAction, parseAssertion, parseMatcher, parseKeys, parseTerminalSpec, surfaceOf, slugify, outputSlug, DEFAULT_TERMINAL } from '../src/demo-script.ts';
+import { parseDemoScript, parseAction, parseAssertion, parseMatcher, parseKeys, parseTerminalSpec, parseDeviceSpec, parseViewportSize, deviceName, unknownDevice, surfaceOf, slugify, outputSlug, DEFAULT_TERMINAL } from '../src/demo-script.ts';
 
 const SCRIPT = `# Demo: Task Board
 
@@ -312,4 +312,50 @@ test('terminal: press splits keys from quoted text, and refuses an open or empty
   assert.deepEqual(parseKeys('ArrowDown ArrowDown Enter'), [{ key: 'ArrowDown' }, { key: 'ArrowDown' }, { key: 'Enter' }]);
   assert.deepEqual(parseKeys('":wq" Enter " "'), [{ text: ':wq' }, { key: 'Enter' }, { text: ' ' }]);
   for (const bad of ['', '"open', '""', '"a"b', 'a"b']) assert.equal(parseKeys(bad), null, bad);
+});
+
+// ── A page script's device ──
+//
+// `**Device:**` names a device as Playwright's registry names it, or a viewport size, and
+// `resize` changes the size mid-script. The parser checks a size and keeps a name as
+// written, since the registry is the capture's and the linter's to look in.
+
+test('device: **Device:** names a device, kept as written, or a size in CSS pixels', () => {
+  assert.deepEqual(parseDemoScript('# Demo: X\n**Start:** /\n**Device:** iPhone 15\n## Steps\n1. **s**\n').device, { name: 'iPhone 15' });
+  assert.deepEqual(parseDemoScript('# Demo: X\n**Device:** `375x812`\n**Start:** /\n## Steps\n1. **s**\n').device, { viewport: { width: 375, height: 812 } });
+  assert.deepEqual(parseDeviceSpec('1280 × 800'), { viewport: { width: 1280, height: 800 } });
+  assert.deepEqual(parseDeviceSpec('  Galaxy S9+ '), { name: 'Galaxy S9+' });
+  assert.equal(parseDemoScript(SCRIPT).device, undefined);
+  assert.equal(parseDemoScript('# Demo: X\n**Start:** /\n**Device:** iPhone 15\n## Steps\n1. **s**\n').description, '', 'the line stays out of the cover subtitle');
+});
+
+test('device: a size that does not parse or has a side out of range is refused, and so is an empty line', () => {
+  const refused = /demo script: \*\*Device:\*\* takes a device Playwright names, such as "iPhone 15", or a size, <width>x<height>, each side from 200 to 3840 CSS pixels \(got "/;
+  for (const bad of ['375x', '375 by 812', '375x812px', '199x812', '375x3841', '']) assert.throws(() => parseDeviceSpec(bad), refused, bad);
+  assert.throws(() => parseDemoScript('# Demo: X\n**Start:** /\n**Device:** 3750x8120\n## Steps\n1. **s**\n'), /\(got "3750x8120"\)$/);
+  assert.deepEqual(parseViewportSize('200x3840'), { width: 200, height: 3840 });
+  for (const bad of ['3841x200', '200x199', '-375x812', '375.5x812', 'x812']) assert.equal(parseViewportSize(bad), null, bad);
+});
+
+test('device: resize takes a size, and one that does not parse is kept for the linter', () => {
+  const [step] = parseDemoScript('# Demo: X\n**Start:** /\n## Steps\n1. **s**\n   `resize 1280x800`\n   `resize 1280x80O`\n   The `resize` event fires.\n').steps;
+  assert.deepEqual(step.actions, [{ verb: 'resize', target: '1280x800', size: { width: 1280, height: 800 }, raw: 'resize 1280x800' }]);
+  assert.deepEqual(step.droppedCodes, ['resize 1280x80O', 'resize']);
+});
+
+test('device: a terminal script keeps a **Device:** line for the linter, and reads resize as prose', () => {
+  const d = parseDemoScript('# Demo: X\n**Terminal:** 80x24\n**Device:** iPhone 15\n## Steps\n1. **s**\n   `run ls`\n   `resize 375x812`\n');
+  assert.deepEqual(d.device, { name: 'iPhone 15' });
+  assert.deepEqual(d.steps[0].droppedCodes, ['resize 375x812']);
+  assert.equal(parseAction('resize 375x812', 'terminal'), null);
+});
+
+test('deviceName finds a registry name regardless of case and spacing; unknownDevice names the nearest three', () => {
+  const names = ['iPhone 15', 'iPhone 15 Pro', 'Pixel 7', 'iPad Mini'];
+  assert.equal(deviceName('iPhone 15', names), 'iPhone 15');
+  assert.equal(deviceName('iphone   15 PRO', names), 'iPhone 15 Pro');
+  assert.equal(deviceName('iPhone15', names), null);
+  assert.equal(unknownDevice('iPhone15', names), '**Device:** "iPhone15" is not a device Playwright describes; the nearest it describes are "iPhone 15", "iPhone 15 Pro", "Pixel 7"');
+  assert.equal(unknownDevice('Pixel 8', names).split('; ')[1], 'the nearest it describes are "Pixel 7", "iPhone 15", "iPad Mini"');
+  assert.equal(unknownDevice('iPhone 15', []), '**Device:** "iPhone 15" is not a device Playwright describes');
 });

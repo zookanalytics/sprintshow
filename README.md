@@ -147,8 +147,9 @@ It takes the server options `run` takes (`--base-url`, `--serve`, `--serve-dir`,
 `--cwd`), and `-o` names the PNG. It captures the viewport unless told otherwise.
 `--full-page` captures the whole scrollable page, and `--selector <css>` captures one
 element, its first match, once that element is visible. `--scale <n>` sets the device scale
-factor. `--transparent` leaves out the page's default white background, so on a page that
-paints no background of its own, an element with rounded corners keeps transparent corners.
+factor, which is otherwise that of the device the script names, or 1. `--transparent` leaves
+out the page's default white background, so on a page that paints no background of its own,
+an element with rounded corners keeps transparent corners.
 
 Chromium draws one capture in tiles, and holds only so many of them at once: about 120
 million device pixels' worth. A `--full-page` capture larger than that holds what fits,
@@ -255,6 +256,7 @@ The exit code of `run` and `screenshot` says what was saved:
 # Demo: <title>
 
 **Start:** `/path?query`          ← joined onto the server origin (a page script)
+**Device:** iPhone 15             ← optional: a device, or a size such as 375x812
 **Terminal:** 100x30              ← or this, for a terminal script
 
 <free prose → the cover subtitle>
@@ -274,8 +276,9 @@ The exit code of `run` and `screenshot` says what was saved:
 **Actions:** `goto <path>` · `wait <ms>` · `waitFor <selector>` ·
 `waitForText <selector> ~ <substring>` · `click <selector>` · `type <selector> ~ <text>` ·
 `scroll <selector>` (centre a below-the-fold element so the frame shows it) ·
-`press <keys>`. A terminal script has [its own](#terminal-demos), and each kind of script
-reads only its own actions and assertions.
+`press <keys>` · `resize <width>x<height>` (see [Devices](#devices)). A terminal script has
+[its own](#terminal-demos), and each kind of script reads only its own actions and
+assertions.
 
 `press <keys>` presses each key in turn, as it does in a terminal script: a key as
 Playwright names it (`Tab`, `Shift+Tab`, `Enter`, `Escape`, `ArrowDown`, `Space`), or a
@@ -302,6 +305,46 @@ section, and prose-only `_Prove:_`/`_Fail if:_` — parses and runs unedited (it
 *manual* proofs). Adapting it is additive: add actions and assertions, never restructure the
 file. `demos/sample.md` is a worked example.
 
+### Devices
+
+A page script is driven at 1280x900 unless its `**Device:**` line names another size, so a
+layout that shows only on a phone or a tablet can be captured.
+
+- A device named as Playwright's device registry names it, such as `iPhone 15`, `Pixel 7`
+  or `iPad Mini`, is emulated as the registry describes it: its viewport, scale factor and
+  user agent, and touch on a device that has it. The page renders the layout it shows that
+  device. Letter case and the spaces between words do not matter.
+- A size, `<width>x<height>` in CSS pixels with each side from 200 to 3840, is that
+  viewport at scale 1, with no touch. `**Device:** 375x812` renders a page's phone layout.
+- A `resize <width>x<height>` step changes the viewport's size from that step on, which is
+  how a page that changes as its window widens is shown. The device's scale factor, user
+  agent and touch stay as they were.
+
+```markdown
+# Demo: Navigation at phone and desktop widths
+
+**Start:** `/`
+**Device:** 375x812
+
+## Steps
+
+1. **At phone width, a menu button opens the navigation**
+   `click #menu`
+   _Prove:_ the drawer is open — `visible #drawer`
+
+2. **On a desktop, the navigation is a sidebar**
+   `resize 1280x800`
+   _Prove:_ the sidebar shows — `visible #sidebar`
+```
+
+A video is as wide as the widest viewport its script shows and as tall as the tallest. A
+smaller viewport sits at the video's top-left corner, on gray, as a recording draws it, and
+proof mode lays out its frames the same way. A screenshot is taken at the size the last step
+leaves the viewport, at the device's scale factor unless `--scale` names another. The linter
+refuses a device the registry does not describe and a size that is not one, and names the
+nearest devices it does describe. A terminal script's size is its `**Terminal:**` columns
+and rows, so its captures ignore `**Device:**`, and the linter says so.
+
 ## As a library
 
 The drivers are importable. `captureProof` takes a page you have already prepared — the
@@ -321,10 +364,12 @@ const result = await captureProof({
 
 `captureScreenshot` takes the same kind of page and saves one PNG in place of the MP4.
 `runDemo` and `runScreenshot` bring up the server and the browser themselves, as the CLI
-does. A custom driver that runs its steps through `runStep` checks each proof as the
-built-in captures do. For a terminal script, a driver takes a `cwd` in place of a
-`baseUrl`, and `openSurface` brings up what any script drives: the app at its start path,
-or the engine's terminal and its shell.
+does. A script that names a device needs a page made as that device: make its context with
+`contextOptions(demo)`, as they do. The drivers set the page's viewport to the one the
+script starts at, and the rest of the device is the context's. A custom driver that runs its
+steps through `runStep` checks each proof as the built-in captures do. For a terminal
+script, a driver takes a `cwd` in place of a `baseUrl`, and `openSurface` brings up what any
+script drives: the app at its start path, or the engine's terminal and its shell.
 
 ## The agent / MCP path
 

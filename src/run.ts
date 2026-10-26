@@ -1,8 +1,9 @@
 // The one-command orchestrators behind `sprintshow run` and `sprintshow screenshot`:
 // bring up the server, drive the demo, tear the server down. The walkthrough driver
 // opens its own recorded context. The proof and screenshot drivers take a plain page,
-// which this layer launches a browser for. A terminal script takes no server: its steps
-// run in the engine's own terminal, whose shell starts in `cwd`.
+// which this layer launches a browser for and makes as the script's device
+// (contextOptions). A terminal script takes no server: its steps run in the engine's own
+// terminal, whose shell starts in `cwd`.
 
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -13,7 +14,7 @@ import { ensureServer, type ServeOptions, type ServerHandle } from './server.ts'
 import { captureProof, type CaptureResult } from './capture.ts';
 import { captureWalkthrough } from './walkthrough.ts';
 import { captureScreenshot, AREA_CONFLICT, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
-import { chromiumLaunchArgs, VIEWPORT } from './browser.ts';
+import { chromiumLaunchArgs, contextOptions } from './browser.ts';
 import { shellDir } from './terminal.ts';
 
 export type CaptureMode = 'proof' | 'walkthrough';
@@ -76,6 +77,8 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
   const mode: CaptureMode = opts.mode ?? 'walkthrough';
   const outputPath = opts.outputPath ?? path.join(process.cwd(), 'demos', `${name}.mp4`);
   log(`demo: "${demo.title}" — ${demo.steps.length} steps · ${mode} mode`);
+  // Checked before a server or a browser is spent: a device the registry does not hold throws here.
+  const device = contextOptions(demo);
 
   const server = await serverFor(demo, opts);
   try {
@@ -93,7 +96,7 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
       });
     }
 
-    return await withHeadlessPage({ viewport: VIEWPORT }, (page) =>
+    return await withHeadlessPage(device, (page) =>
       captureProof({
         page,
         baseUrl: server.baseUrl,
@@ -114,29 +117,34 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
 export interface RunScreenshotOptions extends ServeOptions, Pick<CaptureScreenshotOptions, 'outputPath' | 'fullPage' | 'selector' | 'transparent' | 'log'> {
   /** Path to a demo-script markdown file, or the parsed demo. */
   script: string | Demo;
-  /** Device scale factor (default 1): PNG pixels per CSS pixel along each axis. At 2, text stays sharp in a PNG shown at half its size. */
+  /**
+   * Device scale factor: PNG pixels per CSS pixel along each axis. By default, the scale
+   * factor of the device the script names, or 1. At 2, text stays sharp in a PNG shown at
+   * half its size.
+   */
   scale?: number;
 }
 
 /**
- * Bring up the server, drive the demo's steps in a fresh headless page at `scale`, save
- * the state the last step leaves as a PNG, and tear the server down. A failed proof
- * still saves the PNG and is counted in `failures`. A terminal script's PNG is its
- * terminal window (see captureScreenshot).
+ * Bring up the server, drive the demo's steps in a fresh headless page made as the
+ * script's device at `scale`, save the state the last step leaves as a PNG, and tear the
+ * server down. A failed proof still saves the PNG and is counted in `failures`. A
+ * terminal script's PNG is its terminal window (see captureScreenshot).
  */
 export async function runScreenshot(opts: RunScreenshotOptions): Promise<ScreenshotResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
-  const scale = opts.scale ?? 1;
+  const { scale } = opts;
   // Checked before a server or a browser is spent on a capture that cannot happen.
-  if (!(Number.isFinite(scale) && scale > 0)) throw new Error(`screenshot: the scale must be a positive number (got ${opts.scale})`);
+  if (scale !== undefined && !(Number.isFinite(scale) && scale > 0)) throw new Error(`screenshot: the scale must be a positive number (got ${scale})`);
   if (opts.fullPage && opts.selector) throw new Error(AREA_CONFLICT);
   const { demo } = loadDemo(opts.script);
   if (demo.terminal && opts.selector) throw new Error(TERMINAL_SELECTOR);
+  const device = contextOptions(demo);
   log(`demo: "${demo.title}" — ${demo.steps.length} steps · screenshot`);
 
   const server = await serverFor(demo, opts);
   try {
-    return await withHeadlessPage({ viewport: VIEWPORT, deviceScaleFactor: scale }, (page) =>
+    return await withHeadlessPage({ ...device, deviceScaleFactor: scale ?? device.deviceScaleFactor ?? 1 }, (page) =>
       captureScreenshot({
         page,
         baseUrl: server.baseUrl,

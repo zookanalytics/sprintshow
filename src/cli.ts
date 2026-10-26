@@ -47,8 +47,8 @@ screenshot options:
                               up to what Chromium draws in one capture: a page keeps its
                               top, and a session its last lines.
   --selector <css>            Capture one element, its first match, once it is visible.
-  --scale <n>                 Device scale factor (default 1). At 2, text stays sharp in
-                              a PNG shown at half its size.
+  --scale <n>                 Device scale factor (default: the script's device's, or 1).
+                              At 2, text stays sharp in a PNG shown at half its size.
   --transparent               Leave out the page's default white background.
   Each step's proof is checked as proof mode checks it, with no caption drawn, and
   neither ffmpeg nor OPENAI_API_KEY is needed.

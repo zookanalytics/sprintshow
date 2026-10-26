@@ -7,14 +7,18 @@
 // or arms the app, then hands the page in), so it owns neither the browser nor the
 // server — the caller does. A terminal script needs neither: the driver opens the
 // engine's terminal in the page, and ends its shell once the steps are done.
+//
+// The driver sets the page's viewport to the one the script starts at. The rest of a
+// device the script names, its scale factor, user agent and touch, belongs to the page's
+// context, which the caller makes with contextOptions (browser.ts), as runDemo does.
 
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { parseDemoScript, slugify, outputSlug, type Demo, type DemoStep } from './demo-script.ts';
+import { parseDemoScript, slugify, outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
 import { assembleVideo, type Frame, type Manifest } from './assemble.ts';
-import { runStep, openSurface, VIEWPORT, type Surface } from './browser.ts';
+import { runStep, openSurface, contextOptions, videoFrame, type Surface } from './browser.ts';
 import { showCaption, removeCaption, coverInnerHtml, scrutinyInnerHtml, cardDocument } from './overlay.ts';
 
 const BRAND = 'sprintshow · proof';
@@ -103,6 +107,9 @@ async function captureScrutiny(page: Page, items: string[], capturesDir: string)
 export async function captureProof(opts: CaptureProofOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
   const demo = typeof opts.demo === 'string' ? parseDemoScript(opts.demo) : opts.demo;
+  // Read before anything is written: a device the registry does not hold throws here.
+  const start = contextOptions(demo).viewport as ViewportSize;
+  const frameSize = videoFrame(demo);
   const { page, baseUrl } = opts;
 
   const slug = outputSlug(path.basename(opts.outputPath, path.extname(opts.outputPath)));
@@ -110,7 +117,7 @@ export async function captureProof(opts: CaptureProofOptions): Promise<CaptureRe
   mkdirSync(capturesDir, { recursive: true });
   mkdirSync(path.dirname(path.resolve(opts.outputPath)), { recursive: true });
 
-  await page.setViewportSize(VIEWPORT).catch(() => {});
+  await page.setViewportSize(start).catch(() => {});
   const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, backdrop: true, log });
 
   const frames: Frame[] = [];
@@ -127,6 +134,8 @@ export async function captureProof(opts: CaptureProofOptions): Promise<CaptureRe
   }
   const failures = issues.length;
 
+  // The cards fill the frame, which a script that resizes is wider or taller than at some steps.
+  await page.setViewportSize(frameSize).catch(() => {});
   const cover = await captureCover(page, demo, capturesDir);
   const scrutinyFrame = demo.scrutiny.length ? await captureScrutiny(page, demo.scrutiny, capturesDir) : null;
   const manifest: Manifest = {

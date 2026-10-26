@@ -26,8 +26,9 @@ export { ensureServer, DEFAULT_PORT, type ServeOptions, type ServerHandle } from
 
 // Browser primitives for the seed-test bootstrap and custom drivers. A custom driver that
 // runs its steps through `runStep` checks each proof as the built-in captures do, and one
-// that brings its script up with `openSurface` drives a terminal script as they do.
-export { installPointer, glideAndClick, glideAndType, glideTo, runAction, runStep, checkAssertion, awaitAssertion, chromiumLaunchArgs, openSurface, VIEWPORT, type StepProof, type Surface, type OpenSurfaceOptions } from './browser.ts';
+// that brings its script up with `openSurface` drives a terminal script as they do. A
+// page made with `contextOptions` is the device the script names, as theirs is.
+export { installPointer, glideAndClick, glideAndType, glideTo, runAction, runStep, checkAssertion, awaitAssertion, chromiumLaunchArgs, openSurface, contextOptions, videoFrame, VIEWPORT, type StepProof, type Surface, type OpenSurfaceOptions } from './browser.ts';
 
 // ffmpeg plumbing, for callers assembling audio themselves.
 export { ffmpegBin, probeDuration, buildNarration, mixMusicBed, type NarrationSegment, type NarrationTrack } from './ffmpeg.ts';

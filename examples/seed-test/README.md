@@ -10,6 +10,10 @@ given.
 A non-zero `failures` means a step's `_Prove:_` did not hold — fail the test on it and the
 demo doubles as a check.
 
+A script that names a `**Device:**` needs a page made as that device: give the test the
+same Playwright device, or make its context with `contextOptions(demo)`. The engine sets
+only the page's viewport, to the one the script starts at.
+
 See [`example.spec.ts`](example.spec.ts). It expects `@playwright/test` and this package:
 
 ```bash
