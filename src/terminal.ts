@@ -25,6 +25,7 @@ import type { IPty } from '@lydell/node-pty';
 import { errors, type Page } from 'playwright';
 
 import type { Assertion, Matcher, PressKey, TerminalSpec } from './demo-script.ts';
+import { pressKeys, type PressPace } from './keyboard.ts';
 import { esc, ACCENT, ACCENT_FAIL, BG, FG, MUTED, FONT } from './overlay.ts';
 
 /** The window a still captures: the title bar and the terminal below it. */
@@ -629,6 +630,11 @@ export async function openTerminal(page: Page, o: TerminalOptions): Promise<Term
   };
 }
 
+/** Whether a terminal session the engine opened is open in `page`, so what the page types reaches its shell. */
+export function hasTerminalSession(page: Page): boolean {
+  return inputs.has(page);
+}
+
 /** The terminal page's API, or an error naming that the page has none. */
 async function requireTerminal(page: Page): Promise<void> {
   if (!(await page.evaluate(() => Boolean((window as unknown as Partial<TermWindow>).__ss_term)))) throw new Error('this page has no terminal');
@@ -697,25 +703,11 @@ export async function terminalRun(page: Page, command: string, pace: RunPace, lo
   if (pace.pause > 0) await page.waitForTimeout(pace.pause);
 }
 
-export interface PressPace {
-  /** Milliseconds between typed characters. */
-  typeDelay: number;
-  /** A pause between keys, so a recording shows each one land. */
-  keyPause: number;
-  /** A pause after the last key, so its effect reads in a recording. */
-  pause: number;
-}
-
-/** `press <keys>`: press each key in turn, or type a quoted key's text. It waits for nothing the keys cause. */
+/** `press <keys>`: focus the terminal, then press each key in turn, or type a quoted key's text, into it. It waits for nothing the keys cause. */
 export async function terminalPress(page: Page, keys: PressKey[], pace: PressPace): Promise<void> {
   await requireTerminal(page);
   await page.evaluate(() => (window as unknown as TermWindow).__ss_term.focus());
-  for (const [i, k] of keys.entries()) {
-    if ('text' in k) await page.keyboard.type(k.text, { delay: pace.typeDelay });
-    else await page.keyboard.press(k.key);
-    const pause = i + 1 < keys.length ? pace.keyPause : pace.pause;
-    if (pause > 0) await page.waitForTimeout(pause);
-  }
+  await pressKeys(page, keys, pace);
 }
 
 /** `waitForScreen <matcher>`: wait until the screen's text matches. */

@@ -76,6 +76,12 @@ test('parseAction: each verb, and a non-verb rejected', () => {
   assert.equal(parseAction('waitForText #a .b ~ hi there')?.text, 'hi there');
   assert.deepEqual(parseAction('type #new-task ~ hello world'), { verb: 'type', target: '#new-task', text: 'hello world', raw: 'type #new-task ~ hello world' });
   assert.deepEqual(parseAction('scroll #panel'), { verb: 'scroll', target: '#panel', raw: 'scroll #panel' });
+  assert.deepEqual(parseAction('press Shift+Tab "a title" Enter'), {
+    verb: 'press',
+    target: 'Shift+Tab "a title" Enter',
+    keys: [{ key: 'Shift+Tab' }, { text: 'a title' }, { key: 'Enter' }],
+    raw: 'press Shift+Tab "a title" Enter',
+  });
   assert.equal(parseAction('#just-a-selector'), null);
   assert.equal(parseAction('frobnicate #x'), null);
 });
@@ -108,9 +114,17 @@ test('parseMatcher: regex, quoted substring, bare substring', () => {
   assert.deepEqual(parseMatcher('plain words'), { type: 'substr', value: 'plain words' });
 });
 
-test('visible/hidden keep the whole remainder as the selector (spaces allowed)', () => {
+test('visible/hidden/focused keep the whole remainder as the selector (spaces allowed)', () => {
   assert.equal(parseAssertion('visible #board .task.done')?.selector, '#board .task.done');
   assert.equal(parseAssertion('hidden .empty')?.kind, 'hidden');
+  assert.deepEqual(parseAssertion('focused .task .done-btn'), { kind: 'focused', selector: '.task .done-btn', raw: 'focused .task .done-btn' });
+});
+
+test('a page script reads press with the key grammar a terminal script reads it with, and drops a malformed one', () => {
+  const [step] = parseDemoScript(`# Demo: X\n**Start:** /\n## Steps\n1. **Keys**\n   \`press Tab Shift+Tab Enter Escape\`\n   \`press "open\`\n   \`press\`\n`).steps;
+  assert.deepEqual(step.actions, [parseAction('press Tab Shift+Tab Enter Escape', 'terminal')]);
+  assert.deepEqual(step.actions[0].keys, [{ key: 'Tab' }, { key: 'Shift+Tab' }, { key: 'Enter' }, { key: 'Escape' }]);
+  assert.deepEqual(step.droppedCodes, ['press "open', 'press']);
 });
 
 test('a prove line with no recognised assertion stays prose-only', () => {
@@ -266,13 +280,13 @@ test('terminal: run, press, waitForScreen and wait parse; a page directive stays
   assert.deepEqual(two.droppedCodes, ['click #ignored']);
 });
 
-test('terminal: a page script keeps the terminal verbs as prose, so existing scripts parse as before', () => {
-  const d = parseDemoScript(`# Demo: X\n**Start:** /\n## Steps\n1. **s**\n   Then \`run npm test\` and \`press Enter\`.\n   \`click #add\`\n`);
+test('terminal: a page script keeps the verbs only a terminal has as prose', () => {
+  const d = parseDemoScript(`# Demo: X\n**Start:** /\n## Steps\n1. **s**\n   Then \`run npm test\` and \`waitForScreen /ok/\`.\n   \`click #add\`\n`);
   assert.deepEqual(
     d.steps[0].actions.map((a) => a.verb),
     ['click'],
   );
-  assert.deepEqual(d.steps[0].droppedCodes, ['run npm test', 'press Enter']);
+  assert.deepEqual(d.steps[0].droppedCodes, ['run npm test', 'waitForScreen /ok/']);
   assert.equal(parseAction('run ls'), null);
   assert.equal(parseAction('click #a', 'terminal'), null);
   assert.equal(parseAction('run', 'terminal'), null);
@@ -287,6 +301,7 @@ test('terminal: screen, row, cursor and exit assertions parse; a page assertion 
   assert.deepEqual(three.prove?.assertion, { kind: 'row', row: -1, matcher: { type: 'regex', value: '2 of 3 done' }, raw: 'row -1 ~ /2 of 3 done/' });
 
   assert.equal(parseAssertion('visible #board', 'terminal'), null);
+  assert.equal(parseAssertion('focused #board', 'terminal'), null);
   assert.equal(parseAssertion('screen ~ x'), null);
   for (const bad of ['screen x', 'row 0 ~ x', 'row one ~ x', 'cursor 0 1', 'cursor 1 0', 'cursor 1', 'exit 0', 'exit != 0', 'exit == -1']) {
     assert.equal(parseAssertion(bad, 'terminal'), null, bad);
