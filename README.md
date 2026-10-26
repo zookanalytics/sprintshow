@@ -265,14 +265,29 @@ The exit code of `run` and `screenshot` says what was saved:
 
 **Actions:** `goto <path>` · `wait <ms>` · `waitFor <selector>` ·
 `waitForText <selector> ~ <substring>` · `click <selector>` · `type <selector> ~ <text>` ·
-`scroll <selector>` (centre a below-the-fold element so the frame shows it). A terminal
-script has [its own](#terminal-demos), and each kind of script reads only its own actions
-and assertions.
+`scroll <selector>` (centre a below-the-fold element so the frame shows it) ·
+`press <keys>`. A terminal script has [its own](#terminal-demos), and each kind of script
+reads only its own actions and assertions.
+
+`press <keys>` presses each key in turn, as it does in a terminal script: a key as
+Playwright names it (`Tab`, `Shift+Tab`, `Enter`, `Escape`, `ArrowDown`, `Space`), or a
+`"quoted string"`, which it types. The keys go wherever the page's focus is, as a user's
+do, so `Tab` and `Shift+Tab` move focus, and `Enter` and `Escape` reach the control that
+has it. A capture shows where focus is through the page's own focus ring, which the
+browser draws where keys move focus, unless the page's style hides it.
+`demos/keyboard.md` drives the sample app with keys alone:
+
+```markdown
+6. **Escape closes the dialog, and focus returns to Clear done**
+   `press Escape`
+   _Prove:_ focus is back on the button that opened the dialog — `focused #clear-done`
+```
 
 **Assertions** (in `_Prove:_` / `_Fail if:_`): `visible <sel>` · `hidden <sel>` ·
-`count <sel> <op> <n>` (`>= > == <= <`) · `text <sel> ~ <matcher>` · `eval <js>`. A matcher
-is `/regex/`, `"substring"`, or a bare substring. `_Prove:_` must hold (polled); `_Fail if:_`
-fails the step if it matches.
+`focused <sel>` (an element the selector matches has focus) · `count <sel> <op> <n>`
+(`>= > == <= <`) · `text <sel> ~ <matcher>` · `eval <js>`. A matcher is `/regex/`,
+`"substring"`, or a bare substring. `_Prove:_` must hold (polled); `_Fail if:_` fails the
+step if it matches.
 
 A draft in the generic `demo:capture` dialect — an `**Auth:**` line, a `## Scrutiny`
 section, and prose-only `_Prove:_`/`_Fail if:_` — parses and runs unedited (its steps record

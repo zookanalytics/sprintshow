@@ -86,6 +86,28 @@ test('a step that clicks is not flagged as idle, even with no start query', () =
   assert.equal(messagesFor(md).filter((f) => /no query and no step performs an action/.test(f.message)).length, 0);
 });
 
+test('a page script that drives the page with keys and proves where focus is is quiet, and so is the keyboard sample', () => {
+  const steps = [1, 2, 3, 4, 5].map((i) => `${i}. **Key ${i} moves focus**\n   \`press Tab\`\n   _Prove:_ a button has focus — \`focused button\`\n`);
+  assert.deepEqual(
+    messagesFor(`# Demo: X\n\n**Start:** /\n\n## Steps\n\n${steps.join('\n')}`).filter((f) => f.severity !== 'info'),
+    [],
+  );
+  const sample = readFileSync(path.join(import.meta.dirname, '..', 'demos', 'keyboard.md'), 'utf8');
+  assert.deepEqual(
+    messagesFor(sample).filter((f) => f.severity !== 'info'),
+    [],
+  );
+});
+
+test('a press whose keys do not parse is reported in a page script as in a terminal script', () => {
+  const findings = (head: string): string[] =>
+    messagesFor(`# Demo: X\n\n${head}\n\n## Steps\n\n1. **Keys that do not parse**\n   \`press "open\`\n`)
+      .filter((f) => f.step === 1 && f.message.startsWith('`press "open`'))
+      .map((f) => f.message);
+  assert.deepEqual(findings('**Start:** /'), ['`press "open` has malformed arguments: a quote is left open or sits inside a word, a string is empty, or there are no keys — it is IGNORED at capture time.']);
+  assert.deepEqual(findings('**Start:** /'), findings('**Terminal:**'));
+});
+
 test('an unknown scenario is an ERROR only when a registry is supplied', () => {
   const md = ADAPTED_SCRIPT.replace('/?seed=board', '/?demo=typo-scenario');
   // No registry (default): the scenario check is off — no error.
@@ -214,6 +236,8 @@ test("a directive or an assertion of the other surface is named as that surface'
 `).filter((f) => f.step === 1);
   assert.ok(inTerminal.some((f) => /`click #add` is a page directive in a terminal script — it is IGNORED at capture time \(verbs: run, press, waitForScreen, wait\)/.test(f.message)));
   assert.ok(inTerminal.some((f) => /carries `visible #board`, a page assertion in a terminal script — the step is NOT checked. Assertions are screen\/row\/cursor\/exit/.test(f.message)));
+  const focusInTerminal = messagesFor(`# Demo: X\n\n**Terminal:**\n\n## Steps\n\n1. **Focus is a page's**\n   \`run ls\`\n   _Prove:_ focus — \`focused #a\`\n`);
+  assert.ok(focusInTerminal.some((f) => /carries `focused #a`, a page assertion in a terminal script/.test(f.message)));
 
   const inPage = messagesFor(`# Demo: X
 
@@ -277,5 +301,6 @@ test('looksLikeAssertion knows both surfaces', () => {
   assert.equal(looksLikeAssertion('screen x'), true);
   assert.equal(looksLikeAssertion('exit 0'), true);
   assert.equal(looksLikeAssertion('Visible #x'), true);
+  assert.equal(looksLikeAssertion('Focused #x'), true);
   assert.equal(looksLikeAssertion('#board'), false);
 });

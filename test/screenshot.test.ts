@@ -22,7 +22,7 @@ import type { Page } from 'playwright';
 
 import { captureHeightLimit, captureScreenshot, AREA_CONFLICT } from '../src/screenshot.ts';
 import { ensureServer } from '../src/server.ts';
-import { launchBrowser, serveSite, scratchDir, writeFiles, runCli, stepLines, pngSize, pngPixels, rgba, alphaAt, HIGH_DPI_ARGS, REPO } from './browser-fixture.ts';
+import { launchBrowser, serveSite, scratchDir, writeFiles, runCli, stepLines, pngSize, pngPixels, pixelsApart, alphaAt, HIGH_DPI_ARGS, REPO } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
 after(() => browser?.close());
@@ -30,21 +30,6 @@ after(() => browser?.close());
 const SAMPLE = path.join(REPO, 'demos', 'sample.md');
 const SAMPLE_APP = path.join(REPO, 'examples', 'sample-app');
 const quiet = (): void => {};
-
-/**
- * How many pixels of two same-size PNGs differ by more than `tolerance` in any channel.
- * Chromium's anti-aliasing of a rounded edge can vary by a level between two captures
- * of one unchanged page, so equal bytes are not the test of an unchanged page.
- */
-async function pixelsApart(page: Page, a: Buffer, b: Buffer, tolerance: number): Promise<number> {
-  const [pa, pb] = [(await rgba(page, a)).data, (await rgba(page, b)).data];
-  assert.equal(pa.length, pb.length, 'the PNGs differ in size');
-  let n = 0;
-  for (let i = 0; i < pa.length; i += 4) {
-    if (Math.max(Math.abs(pa[i] - pb[i]), Math.abs(pa[i + 1] - pb[i + 1]), Math.abs(pa[i + 2] - pb[i + 2]), Math.abs(pa[i + 3] - pb[i + 3])) > tolerance) n++;
-  }
-  return n;
-}
 
 /** Drive the bundled sample with `captureScreenshot` on a fresh page at scale 1, then hand the page to `inspect`. */
 async function captureSample(opts: { selector?: string }, inspect: (page: Page, png: string, lines: string[], failures: number) => Promise<void>): Promise<void> {

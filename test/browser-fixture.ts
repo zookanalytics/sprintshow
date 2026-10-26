@@ -136,6 +136,21 @@ export async function rgba(page: Page, png: Buffer): Promise<{ width: number; da
   return { width, data: Buffer.from(b64, 'base64') };
 }
 
+/**
+ * How many pixels of two same-size PNGs differ by more than `tolerance` in any channel.
+ * Chromium's anti-aliasing of a rounded edge can vary by a level between two captures
+ * of one unchanged page, so equal bytes are not the test of an unchanged page.
+ */
+export async function pixelsApart(page: Page, a: Buffer, b: Buffer, tolerance: number): Promise<number> {
+  const [pa, pb] = [(await rgba(page, a)).data, (await rgba(page, b)).data];
+  assert.equal(pa.length, pb.length, 'the PNGs differ in size');
+  let n = 0;
+  for (let i = 0; i < pa.length; i += 4) {
+    if (Math.max(Math.abs(pa[i] - pb[i]), Math.abs(pa[i + 1] - pb[i + 1]), Math.abs(pa[i + 2] - pb[i + 2]), Math.abs(pa[i + 3] - pb[i + 3])) > tolerance) n++;
+  }
+  return n;
+}
+
 /** The alpha of the pixel at (x, y) of a PNG file. */
 export async function alphaAt(page: Page, file: string, x: number, y: number): Promise<number> {
   const { width, data } = await rgba(page, readFileSync(file));
