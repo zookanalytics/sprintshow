@@ -3,9 +3,9 @@
 // assertion evaluator that checks a `_Prove:_` / `_Fail if:_` contract against the live
 // DOM or terminal, the step runner that runs one demo step's actions and then checks its
 // proof, and openSurface, which brings up what a script drives: the app at its start
-// path, or the engine's own terminal (terminal.ts). contextOptions and videoFrame say
-// what page a capture drives a script in: the device the script names, and the frame
-// its video is filmed in.
+// path, past Vercel's sign-in when the app is behind it (vercel.ts), or the engine's own
+// terminal (terminal.ts). contextOptions and videoFrame say what page a capture drives a
+// script in: the device the script names, and the frame its video is filmed in.
 //
 // The pointer is a DOM element the engine moves, so a click or a keystroke reads on
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
@@ -18,6 +18,7 @@ import { devices, type BrowserContextOptions, type Page } from 'playwright';
 import { deviceName, unknownDevice, type Assertion, type Demo, type DemoAction, type DemoStep, type Matcher, type ViewportSize } from './demo-script.ts';
 import { pressKeys } from './keyboard.ts';
 import { openTerminal, hasTerminalSession, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
+import { passVercelSignIn } from './vercel.ts';
 
 /** The viewport a script that names no device is driven at, and every terminal script's frame. */
 export const VIEWPORT = { width: 1280, height: 900 };
@@ -343,10 +344,12 @@ export interface OpenSurfaceOptions {
 
 /**
  * Bring up what `demo` drives in `page`: for a page script, navigate to its start path on
- * `baseUrl`; for a terminal script, write the engine's terminal page and start its shell
- * (terminal.ts). The caller closes the surface once the capture no longer shows it.
+ * `baseUrl`, once the page's context can pass Vercel's sign-in if the app answers with it
+ * (vercel.ts); for a terminal script, write the engine's terminal page and start its
+ * shell (terminal.ts). The caller closes the surface once the capture no longer shows it.
  */
 export async function openSurface(page: Page, demo: Demo, opts: OpenSurfaceOptions): Promise<Surface> {
+  const log = opts.log ?? ((m: string) => console.log(m));
   if (demo.terminal) {
     return openTerminal(page, {
       spec: demo.terminal,
@@ -354,10 +357,12 @@ export async function openSurface(page: Page, demo: Demo, opts: OpenSurfaceOptio
       cwd: opts.cwd,
       backdrop: Boolean(opts.backdrop),
       readyTimeout: ACTION_TIMEOUT,
-      log: opts.log ?? ((m: string) => console.log(m)),
+      log,
     });
   }
   if (!opts.baseUrl) throw new Error('a page script needs a base URL to join its **Start:** path onto');
-  await page.goto(joinUrl(opts.baseUrl, demo.start), { waitUntil: 'load' });
+  const start = joinUrl(opts.baseUrl, demo.start);
+  await passVercelSignIn(page, start, log);
+  await page.goto(start, { waitUntil: 'load' });
   return { settle: async () => {}, close: async () => {} };
 }

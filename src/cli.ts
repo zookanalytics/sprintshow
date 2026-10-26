@@ -71,7 +71,13 @@ assemble options:
   --no-narrate                Force a silent video.
 
 Narration is optional: set OPENAI_API_KEY to voice the steps (tts-1/nova; override with
-DEMO_TTS_MODEL / DEMO_TTS_VOICE). Without it the mp4 is silent and captioned.`;
+DEMO_TTS_MODEL / DEMO_TTS_VOICE). Without it the mp4 is silent and captioned.
+
+An app behind Vercel's sign-in: set VERCEL_AUTOMATION_BYPASS_SECRET to the project's
+Protection Bypass for Automation key. When the start path, or a URL it redirects to on the
+base URL's origin or on its host over https, answers with Vercel's sign-in, the key is sent
+once, to that URL alone, and the browser carries the cookie it earns. Without the key, such
+a capture stops and says it reached the sign-in.`;
 
 const BOOLEAN_FLAGS = new Set(['no-narrate', 'keep', 'headed', 'strict', 'full-page', 'transparent']);
 

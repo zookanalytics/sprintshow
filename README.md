@@ -89,6 +89,40 @@ override with `DEMO_TTS_MODEL` / `DEMO_TTS_VOICE`) and mixed in. Without a key â
 synthesis failure â€” the video is **silent and captioned**. Narration is best-effort and
 can never break the video.
 
+### An app behind Vercel's sign-in
+
+A deployment behind Vercel's Deployment Protection answers a browser with Vercel's sign-in,
+a redirect to `vercel.com/sso-api`. With `VERCEL_AUTOMATION_BYPASS_SECRET` set to the
+project's [Protection Bypass for Automation](https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/protection-bypass-automation)
+key, a capture of a page script passes the sign-in, in a video or a screenshot alike:
+
+```bash
+# the key comes from the environment; no flag takes it
+sprintshow run demo.md --base-url https://my-app-git-my-branch-my-team.vercel.app
+```
+
+Before the browser opens the start path, the engine requests it without the key and
+follows the redirects it answers with, one request at a time, as the browser's navigation
+will follow them. So the engine meets Vercel's sign-in wherever the browser would, also
+behind a redirect, such as the one from a deployment's `http://` URL to its `https://`
+URL. Only an answer that is the sign-in brings the key out, and only when it comes from
+the base URL's origin or from its host over https. The key goes in one request for the URL
+that answered with the sign-in, which follows no redirect, as the
+`x-vercel-protection-bypass` header with `x-vercel-set-bypass-cookie: true`. Vercel
+answers by setting its bypass cookie. The engine follows the redirects again to check that
+the cookie passes the sign-in, and then the browser opens the page and sends the cookie
+with its own requests to the app. The browser never sends the key, so no other origin the
+page loads receives it. The engine writes the key nowhere: not to the log, a caption, the
+narration, a URL or the `.captures/` working dir.
+
+Without the key, a capture of an app behind the sign-in fails and says it reached Vercel's
+sign-in, instead of filming the sign-in page. A key the deployment refuses fails it the
+same way, and so does a sign-in on an origin the key does not go to, whose message names
+the origin to give as `--base-url`. Each of these captures saves nothing and exits 1. A
+start path the engine cannot request at all, such as one whose connection is refused, is
+left to the browser. `specs/ss-azul/vercel-bypass.md` records how Vercel and Playwright
+were measured to behave, and why the key is sent this way.
+
 ### Lint before you capture
 
 A script can parse and run yet capture nothing worth watching. The linter reads a script
