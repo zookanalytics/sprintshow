@@ -9,10 +9,13 @@
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
 // The still-frame and screenshot paths skip it and drive the page directly, for speed and
 // determinism. A terminal needs no pointer: what is typed shows where the shell echoes it.
+// Nor does a page's `press`: its keys go wherever the page's focus is, and where keys
+// move focus the browser draws the page's own focus ring, unless the page's style hides it.
 
 import type { Page } from 'playwright';
 import type { Assertion, Demo, DemoAction, DemoStep, Matcher } from './demo-script.ts';
-import { openTerminal, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
+import { pressKeys } from './keyboard.ts';
+import { openTerminal, hasTerminalSession, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
 
 export const VIEWPORT = { width: 1280, height: 900 };
 export const ACTION_TIMEOUT = 15000; // per waitFor/waitForText/click/type, and a terminal's waitForScreen
@@ -21,8 +24,8 @@ export const COMMAND_TIMEOUT = 60000; // how long a terminal `run` waits for its
 const POLL_MS = 200;
 const GLIDE_MS = 480; // pointer travel time; matches the CSS transition below
 const TYPE_DELAY_MS = 55; // per keystroke in humanized typing
-const KEY_PAUSE_MS = 400; // between the keys a terminal `press` presses, in humanized driving
-const READ_PAUSE_MS = 1000; // once a terminal `run` or `press` is done, in humanized driving, so its effect reads
+const KEY_PAUSE_MS = 400; // between the keys a `press` presses, in humanized driving
+const READ_PAUSE_MS = 1000; // once a `press` or a terminal `run` is done, in humanized driving, so its effect reads
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -158,9 +161,14 @@ export async function runAction(page: Page, base: string, act: DemoAction, human
           log,
         );
         return;
-      case 'press':
-        await terminalPress(page, act.keys ?? [], { typeDelay: humanize ? TYPE_DELAY_MS : 0, keyPause: humanize ? KEY_PAUSE_MS : 0, pause: humanize ? READ_PAUSE_MS : 0 });
+      case 'press': {
+        // A terminal script's keys go to its shell. A page script's go to the app, wherever
+        // its focus is: the engine moves no focus of its own before it presses.
+        const pace = { typeDelay: humanize ? TYPE_DELAY_MS : 0, keyPause: humanize ? KEY_PAUSE_MS : 0, pause: humanize ? READ_PAUSE_MS : 0 };
+        if (hasTerminalSession(page)) await terminalPress(page, act.keys ?? [], pace);
+        else await pressKeys(page, act.keys ?? [], pace);
         return;
+      }
       case 'waitForScreen':
         await terminalWaitForScreen(page, act.matcher as Matcher, ACTION_TIMEOUT);
         return;
@@ -197,6 +205,9 @@ export async function checkAssertion(page: Page, a: Assertion): Promise<boolean>
         }
         return true;
       }
+      case 'focused':
+        // One element at most has focus, so the assertion holds when any match has it.
+        return await page.locator(a.selector as string).evaluateAll((els) => els.some((el) => el.matches(':focus')));
       case 'count': {
         const c = await page.locator(a.selector as string).count();
         return compare(c, a.op as string, a.n as number);
