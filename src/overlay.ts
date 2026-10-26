@@ -160,10 +160,15 @@ export function scrutinyInnerHtml(items: string[]): string {
   );
 }
 
-/** Wrap card inner-HTML into a full document for `page.setContent` (the still-frame path). */
+/**
+ * Wrap card inner-HTML into a full document for `page.setContent` (the still-frame path).
+ * The viewport tag lays the card out at a mobile device's own width. A mobile device lays
+ * out a page that has none at a desktop's width and zooms it out to fit.
+ */
 export function cardDocument(inner: string): string {
   return (
-    `<!doctype html><html><body style="margin:0;height:100vh;display:flex;flex-direction:column;justify-content:center;gap:20px;padding:0 8vw;` +
+    `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>` +
+    `<body style="margin:0;height:100vh;display:flex;flex-direction:column;justify-content:center;gap:20px;padding:0 8vw;` +
     `background:${BG};color:${FG};font-family:${FONT};">${inner}</body></html>`
   );
 }

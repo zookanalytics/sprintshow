@@ -3,7 +3,9 @@
 // assertion evaluator that checks a `_Prove:_` / `_Fail if:_` contract against the live
 // DOM or terminal, the step runner that runs one demo step's actions and then checks its
 // proof, and openSurface, which brings up what a script drives: the app at its start
-// path, or the engine's own terminal (terminal.ts).
+// path, or the engine's own terminal (terminal.ts). contextOptions and videoFrame say
+// what page a capture drives a script in: the device the script names, and the frame
+// its video is filmed in.
 //
 // The pointer is a DOM element the engine moves, so a click or a keystroke reads on
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
@@ -12,11 +14,12 @@
 // Nor does a page's `press`: its keys go wherever the page's focus is, and where keys
 // move focus the browser draws the page's own focus ring, unless the page's style hides it.
 
-import type { Page } from 'playwright';
-import type { Assertion, Demo, DemoAction, DemoStep, Matcher } from './demo-script.ts';
+import { devices, type BrowserContextOptions, type Page } from 'playwright';
+import { deviceName, unknownDevice, type Assertion, type Demo, type DemoAction, type DemoStep, type Matcher, type ViewportSize } from './demo-script.ts';
 import { pressKeys } from './keyboard.ts';
 import { openTerminal, hasTerminalSession, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
 
+/** The viewport a script that names no device is driven at, and every terminal script's frame. */
 export const VIEWPORT = { width: 1280, height: 900 };
 export const ACTION_TIMEOUT = 15000; // per waitFor/waitForText/click/type, and a terminal's waitForScreen
 export const PROVE_TIMEOUT = 10000; // how long a `_Prove:_` assertion is polled before failing
@@ -25,7 +28,7 @@ const POLL_MS = 200;
 const GLIDE_MS = 480; // pointer travel time; matches the CSS transition below
 const TYPE_DELAY_MS = 55; // per keystroke in humanized typing
 const KEY_PAUSE_MS = 400; // between the keys a `press` presses, in humanized driving
-const READ_PAUSE_MS = 1000; // once a `press` or a terminal `run` is done, in humanized driving, so its effect reads
+const READ_PAUSE_MS = 1000; // once a `press`, a terminal `run` or a `resize` is done, in humanized driving, so its effect reads
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -47,6 +50,37 @@ export function joinUrl(base: string, pathAndQuery: string): string {
 export function chromiumLaunchArgs(): string[] {
   const rootful = process.getuid?.() === 0;
   return rootful || process.env.PW_NO_SANDBOX === '1' ? ['--no-sandbox'] : [];
+}
+
+/**
+ * The options a capture of `demo` makes its browser context with. A device a page script
+ * names is emulated as Playwright's registry describes it: its viewport, screen, scale
+ * factor and user agent, and whether it is a mobile device and has touch. A size is that
+ * viewport at scale 1, with no touch. A page script that names no device, and every
+ * terminal script, gets VIEWPORT. Throws when the name is not in the registry, before
+ * anything is started.
+ */
+export function contextOptions(demo: Demo): BrowserContextOptions {
+  const device = demo.terminal ? undefined : demo.device;
+  if (!device) return { viewport: { ...VIEWPORT } };
+  if ('viewport' in device) return { viewport: { ...device.viewport } };
+  const names = Object.keys(devices);
+  const name = deviceName(device.name, names);
+  if (!name) throw new Error(`demo script: ${unknownDevice(device.name, names)}`);
+  // Captures drive Chromium whatever browser the device ships with.
+  const { defaultBrowserType: _browser, viewport, ...rest } = devices[name];
+  return { ...rest, viewport: { ...viewport } };
+}
+
+/**
+ * The frame a video of `demo` is filmed in: as wide as the widest viewport the script
+ * shows and as tall as the tallest, counting the one it starts at and each `resize`. A
+ * recording draws a viewport smaller than its frame at the frame's top-left corner, on
+ * gray, and the still-frame assembly lays out a smaller frame the same way.
+ */
+export function videoFrame(demo: Demo): ViewportSize {
+  const sizes = [contextOptions(demo).viewport as ViewportSize, ...demo.steps.flatMap((s) => s.actions.flatMap((a) => (a.size ? [a.size] : [])))];
+  return { width: Math.max(...sizes.map((s) => s.width)), height: Math.max(...sizes.map((s) => s.height)) };
 }
 
 /** Init script (re-run on every navigation) that installs the pointer and its `window.__ss` API. */
@@ -115,10 +149,10 @@ export async function glideAndType(page: Page, selector: string, text: string): 
 
 /**
  * Execute one parsed action. `humanize` routes clicks and typing through the pointer
- * glide, and paces a terminal's typing and keys for a viewer; without it the page is
- * driven directly. An action timeout is logged, not thrown — the step's `_Prove:_` is the
- * real gate, so a genuinely stuck step still shows a frame and fails its proof rather
- * than aborting the run.
+ * glide, paces a terminal's typing and keys for a viewer, and holds a resized page for a
+ * beat; without it the page is driven directly. An action timeout is logged, not thrown —
+ * the step's `_Prove:_` is the real gate, so a genuinely stuck step still shows a frame
+ * and fails its proof rather than aborting the run.
  */
 export async function runAction(page: Page, base: string, act: DemoAction, humanize: boolean, log: (m: string) => void): Promise<void> {
   try {
@@ -152,6 +186,11 @@ export async function runAction(page: Page, base: string, act: DemoAction, human
         // passes its DOM assertion but is off-screen).
         await page.locator(act.target).first().evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'nearest' }));
         await page.waitForTimeout(150);
+        return;
+      case 'resize':
+        // The viewport only: a device's scale factor, user agent and touch stay as the context made them.
+        await page.setViewportSize(act.size as ViewportSize);
+        if (humanize) await page.waitForTimeout(READ_PAUSE_MS);
         return;
       case 'run':
         await terminalRun(

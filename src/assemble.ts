@@ -4,12 +4,14 @@
 // Turns captured proof frames (NN-*.png) + manifest.json into an MP4: a plain concat +
 // libx264 pass, optionally narrated and scored. Captions are already burned into each
 // frame as a DOM overlay by the driver (crisp text in the app's own font), so no
-// `drawtext`/freetype is needed here.
+// `drawtext`/freetype is needed here. The video is the size of the largest frame, and a
+// smaller frame sits at its top-left corner on gray, as a recording draws a viewport
+// smaller than its frame.
 //
 // The silent video is the contract; narration and music are add-ons layered over it,
 // and any failure in either keeps the silent cut.
 
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -68,6 +70,40 @@ function writeConcat(listPath: string, frames: { abs: string; duration: number }
   writeFileSync(listPath, lines.join('\n') + '\n');
 }
 
+/** Width and height from a PNG's header, or null for a file that is not a PNG. */
+function pngSize(file: string): { width: number; height: number } | null {
+  const head = Buffer.alloc(24);
+  const fd = openSync(file, 'r');
+  try {
+    readSync(fd, head, 0, head.length, 0);
+  } finally {
+    closeSync(fd);
+  }
+  return head.toString('latin1', 1, 4) === 'PNG' && head.toString('latin1', 12, 16) === 'IHDR' ? { width: head.readUInt32BE(16), height: head.readUInt32BE(20) } : null;
+}
+
+/**
+ * The frames `files` names, each as large as the largest: as wide as the widest and as tall
+ * as the tallest. A smaller frame, such as one a script took before it resized its
+ * viewport, is copied into `tmp` with gray added along its right and bottom edges. ffmpeg
+ * encodes a concat whose frames change size at the first frame's size, squeezing each
+ * later frame into it. The sizes are read from the PNG headers, and when a frame is not a
+ * PNG, the frames are taken as they are.
+ */
+function framesOfOneSize(files: string[], tmp: string): string[] {
+  const sizes = files.map(pngSize);
+  if (sizes.some((s) => s === null)) return files;
+  const known = sizes as { width: number; height: number }[];
+  const width = Math.max(...known.map((s) => s.width));
+  const height = Math.max(...known.map((s) => s.height));
+  return files.map((file, i) => {
+    if (known[i].width === width && known[i].height === height) return file;
+    const padded = path.join(tmp, `frame-${i}.png`);
+    run(['-y', '-i', file, '-vf', `pad=${width}:${height}:0:0:color=gray`, padded]);
+    return padded;
+  });
+}
+
 /**
  * Assemble the captured frames into an MP4 at `outputPath`. Encodes the silent video
  * first, then muxes narration and/or a music bed over it when available; any failure in
@@ -100,10 +136,11 @@ export async function assembleVideo(opts: AssembleOptions): Promise<AssembleResu
       if (narration) durations = narration.durations;
     }
 
+    const files = framesOfOneSize(manifest.frames.map((f) => path.join(opts.capturesDir, f.file)), tmp);
     const concatList = path.join(tmp, 'frames.txt');
     writeConcat(
       concatList,
-      manifest.frames.map((f, i) => ({ abs: path.join(opts.capturesDir, f.file), duration: durations[i] })),
+      files.map((abs, i) => ({ abs, duration: durations[i] })),
     );
 
     // Even dimensions (yuv420p/libx264 require them) + a constant 30fps still track.

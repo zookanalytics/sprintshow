@@ -12,12 +12,16 @@
 // surface's directives and assertions. One written for the other surface is dropped as
 // prose, so the linter names the surface it belongs to. A directive whose verb is its
 // own surface's is dropped only when its arguments do not parse, and the linter says so.
+//
+// A device a page script names is checked against the device names in the environment,
+// which the CLI reads from Playwright's registry, the one a capture looks it up in.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { devices } from 'playwright';
 
-import { parseDemoScript, ACTION_VERBS, ASSERTION_KINDS, TERMINAL_VERBS, TERMINAL_ASSERTION_KINDS, outputSlug, surfaceOf, type Demo, type SurfaceKind } from './demo-script.ts';
+import { parseDemoScript, deviceName, unknownDevice, ACTION_VERBS, ASSERTION_KINDS, TERMINAL_VERBS, TERMINAL_ASSERTION_KINDS, VIEWPORT_SIZE_FORM, outputSlug, surfaceOf, type Demo, type SurfaceKind } from './demo-script.ts';
 
 /** Step-count window from the demo-authoring contract: under 5 is thin, over 12 spans too much. */
 const MIN_STEPS = 5;
@@ -48,6 +52,8 @@ export interface LintEnv {
   lfsTracked: boolean;
   /** OPENAI_API_KEY present → the capture will narrate; absent → silent MP4. */
   narration: boolean;
+  /** The device names a `**Device:**` line may name: those in the registry a capture looks a device up in. */
+  devices: readonly string[];
 }
 
 /** The scenario named by a `?demo=` query, or null when the start URL has none. */
@@ -96,6 +102,7 @@ const ARGUMENTS: Record<string, string> = {
   run: 'it needs a command line',
   press: 'a quote is left open or sits inside a word, a string is empty, or there are no keys',
   waitForScreen: 'it needs a matcher',
+  resize: `it needs a size, ${VIEWPORT_SIZE_FORM}`,
 };
 
 /** The verb a code span opens with, read as the parser reads it, when it is one of `surface`'s. */
@@ -171,6 +178,13 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
     );
   }
 
+  // ── Device: one the capture can emulate, on a surface that has one ──
+  if (demo.device && surface === 'terminal') {
+    add('warn', null, `**Device:** is ignored — a terminal script is filmed in the engine's own frame, and its size is its **Terminal:** columns and rows.`);
+  } else if (demo.device && 'name' in demo.device && !deviceName(demo.device.name, env.devices)) {
+    add('error', null, `${unknownDevice(demo.device.name, env.devices)} — the capture would refuse the script.`);
+  }
+
   // ── Shape: the step-count window ──
   if (demo.steps.length < MIN_STEPS) {
     add('warn', null, `${demo.steps.length} steps — under ${MIN_STEPS}. Add context-setting steps, or fold this into another demo.`);
@@ -204,6 +218,12 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
     for (const code of step.droppedCodes.filter(looksLikeDirective)) {
       const own = ownVerb(code, surface);
       const other = otherSurface(code, surface, 'verbs');
+      // A dropped resize leaves every step after it at the size before it, a layout the
+      // script did not mean to show, so a size that does not parse is an error.
+      if (own === 'resize' && code.trim() !== own) {
+        add('error', step.index, `\`${code}\` does not name a size, ${VIEWPORT_SIZE_FORM} — it is IGNORED at capture time, and the steps after it run at the size before it.`);
+        continue;
+      }
       add(
         'warn',
         step.index,
@@ -290,6 +310,7 @@ export function lintCli(scriptArg: string | undefined, strict: boolean): number 
     lfsInstalled: gitOk(['lfs', 'version']),
     lfsTracked: lfsTracked(out),
     narration: Boolean(process.env.OPENAI_API_KEY),
+    devices: Object.keys(devices),
   });
 
   console.log(`${path.relative(process.cwd(), scriptPath)} → ${path.relative(process.cwd(), out)}`);
