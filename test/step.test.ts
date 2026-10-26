@@ -8,6 +8,11 @@
 // pin that against a real page, and pin that proof mode and the screenshot capture report
 // the same script's steps alike.
 //
+// A page's `press` sends each key wherever the page's focus is, so Tab and Shift+Tab move
+// focus, Enter and Escape reach the control that has it, and the browser draws the focus
+// ring that keys move. `focused` proves where focus is. The bundled keyboard demo drives
+// the sample app that way, and each of its proofs holds.
+//
 // They need a headless Chromium and skip without one (see browser-fixture.ts).
 
 import { test, describe, after } from 'node:test';
@@ -15,9 +20,10 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { parseDemoScript } from '../src/demo-script.ts';
-import { runStep, joinUrl, PROVE_TIMEOUT } from '../src/browser.ts';
-import { launchBrowser, serveSite, scratchDir, writeFiles, stubFfmpeg, runCli, stepLines } from './browser-fixture.ts';
+import { parseDemoScript, parseAction, parseAssertion } from '../src/demo-script.ts';
+import { runStep, runAction, checkAssertion, joinUrl, PROVE_TIMEOUT } from '../src/browser.ts';
+import { ensureServer } from '../src/server.ts';
+import { launchBrowser, serveSite, scratchDir, writeFiles, stubFfmpeg, runCli, stepLines, pixelsApart, REPO } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
 after(() => browser?.close());
@@ -53,6 +59,51 @@ const SCRIPT = `# Demo: Step runner
 
 3. **A step with no machine assertion records a manual proof**
    _Prove:_ the list reads well
+`;
+
+/** A page driven by keys: a field whose Enter shows what was typed, a button that opens a modal dialog, and the dialog. */
+const KEYS_APP = `<!doctype html><html><body>
+<input id="field">
+<button id="open">Open</button>
+<p id="said"></p>
+<dialog id="dialog"><button id="close">Close</button></dialog>
+<script>
+  const dialog = document.getElementById('dialog');
+  document.getElementById('open').addEventListener('click', () => dialog.showModal());
+  document.getElementById('close').addEventListener('click', () => dialog.close());
+  document.getElementById('field').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('said').textContent = e.target.value;
+  });
+</script>
+</body></html>`;
+
+/** One step per key of a keyboard flow, each proving the focus it moves or the reaction it causes. */
+const KEYS_SCRIPT = `# Demo: Keys
+
+**Start:** \`/\`
+
+## Steps
+
+1. **Tab moves focus into the field, and a quoted string types there**
+   \`press Tab "hello" Enter\`
+   _Prove:_ Enter in the field shows what was typed — \`text #said ~ "hello"\`
+
+2. **Tab moves focus to the button**
+   \`press Tab\`
+   _Prove:_ the button has focus — \`focused #open\`
+
+3. **Enter presses the button, and the dialog takes focus**
+   \`press Enter\`
+   _Prove:_ focus moved into the dialog — \`focused #close\`
+
+4. **Escape closes the dialog, and focus returns to the button**
+   \`press Escape\`
+   _Prove:_ the button has focus again — \`focused #open\`
+   _Fail if:_ the dialog still shows — \`visible #dialog\`
+
+5. **Shift+Tab moves focus back to the field**
+   \`press Shift+Tab\`
+   _Prove:_ the field has focus — \`focused #field\`
 `;
 
 // Each test drives a page and a site of its own, so they run side by side.
@@ -130,6 +181,74 @@ describe('the step runner', { concurrency: true, skip }, () => {
     } finally {
       await page.close();
       await site.close();
+    }
+  });
+
+  test('runStep: a page press sends each key wherever the page focus is, and focused proves where that is', async () => {
+    const site = await serveSite({ 'index.html': KEYS_APP });
+    const page = await browser!.newPage();
+    try {
+      await page.goto(joinUrl(site.baseUrl, '/'));
+      const demo = parseDemoScript(KEYS_SCRIPT);
+      const lines: string[] = [];
+      const results = [];
+      for (const step of demo.steps) results.push(await runStep(page, site.baseUrl, step, demo.steps.length, false, (m) => lines.push(m)));
+      assert.deepEqual(results, Array(5).fill({ proved: true, manual: false, reason: '' }), lines.join('\n'));
+
+      // One element has focus, so focused holds for a selector when any of its matches has it.
+      await runAction(page, site.baseUrl, parseAction('press Tab')!, false, () => {});
+      const focused = (selector: string): Promise<boolean> => checkAssertion(page, parseAssertion(`focused ${selector}`)!);
+      assert.equal(await focused('input, button'), true, 'the button, the second match, has focus');
+      assert.equal(await focused('input'), false);
+      assert.equal(await focused('#missing'), false);
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
+
+  test("a page press moves focus as a user's keys do, so the browser draws the focus ring a capture shows, which a click does not", async () => {
+    const site = await serveSite({ 'index.html': KEYS_APP });
+    const page = await browser!.newPage();
+    try {
+      await page.goto(joinUrl(site.baseUrl, '/'));
+      const box = (await page.locator('#open').boundingBox())!;
+      const around = { x: box.x - 6, y: box.y - 6, width: box.width + 12, height: box.height + 12 };
+      const unfocused = await page.screenshot({ clip: around });
+      const ringed = (): Promise<boolean> => page.evaluate(() => document.activeElement?.matches('#open:focus-visible') ?? false);
+
+      await page.click('#open');
+      await page.evaluate(() => (document.getElementById('dialog') as HTMLDialogElement).close());
+      assert.equal(await checkAssertion(page, parseAssertion('focused #open')!), true, 'the click focused the button');
+      assert.equal(await ringed(), false, 'a click draws no ring');
+
+      await runAction(page, site.baseUrl, parseAction('press Shift+Tab Tab')!, false, () => {});
+      assert.equal(await checkAssertion(page, parseAssertion('focused #open')!), true, 'the keys moved focus off the button and back');
+      assert.equal(await ringed(), true, 'keys draw the ring');
+      // The ring runs round the button: far more pixels than the few that anti-aliasing can shift.
+      assert.ok((await pixelsApart(page, unfocused, await page.screenshot({ clip: around }), 32)) > 40, 'the capture shows no ring round the button');
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
+
+  test('the bundled keyboard demo drives the sample app with Tab, Shift+Tab, Enter and Escape, and each step proves what it shows', async () => {
+    const server = await ensureServer({ serveDir: path.join(REPO, 'examples', 'sample-app'), log: () => {} });
+    const page = await browser!.newPage();
+    try {
+      const demo = parseDemoScript(readFileSync(path.join(REPO, 'demos', 'keyboard.md'), 'utf8'));
+      const pressed = new Set(demo.steps.flatMap((s) => s.actions.flatMap((a) => (a.keys ?? []).flatMap((k) => ('key' in k ? [k.key] : [])))));
+      for (const key of ['Tab', 'Shift+Tab', 'Enter', 'Escape']) assert.ok(pressed.has(key), `the demo presses ${key}`);
+      await page.goto(joinUrl(server.baseUrl, demo.start));
+      const lines: string[] = [];
+      for (const step of demo.steps) {
+        const { proved, manual } = await runStep(page, server.baseUrl, step, demo.steps.length, false, (m) => lines.push(m));
+        assert.ok(proved && !manual, lines.join('\n'));
+      }
+    } finally {
+      await page.close();
+      await server.stop();
     }
   });
 

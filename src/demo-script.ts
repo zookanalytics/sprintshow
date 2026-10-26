@@ -32,9 +32,10 @@
 // A page script drives an app in a browser page, and its `**Start:**` path is joined
 // onto the app's origin. A script that declares `**Terminal:**` drives a bash session in
 // the engine's own terminal instead, and needs no `**Start:**`. Each surface has its own
-// actions and assertions, and the parser reads only the declared surface's. A directive
-// or an assertion of the other surface stays prose, as any unrecognised code span does,
-// and the linter reports it.
+// actions and assertions, and the parser reads only the declared surface's. `wait` and
+// `press` are actions of both, and `press` reads its keys the same way on each. A
+// directive or an assertion of the other surface stays prose, as any unrecognised code
+// span does, and the linter reports it.
 //
 // ── The generic demo:capture dialect is a subset ──
 //
@@ -49,8 +50,8 @@
 //   • `## Scrutiny` bullets are parsed into `Demo.scrutiny` and rendered as a closing
 //     card, so the section a generated draft ships survives into the video.
 //
-// Page actions:         goto <path> · wait <ms> · waitFor <selector> · waitForText <selector> ~ <substr> · click <selector> · type <selector> ~ <text> · scroll <selector>
-// Page assertions:      visible <sel> · hidden <sel> · count <sel> <op> <n> · text <sel> ~ <matcher> · eval <js>
+// Page actions:         goto <path> · wait <ms> · waitFor <selector> · waitForText <selector> ~ <substr> · click <selector> · type <selector> ~ <text> · scroll <selector> · press <key or "text"> …
+// Page assertions:      visible <sel> · hidden <sel> · focused <sel> · count <sel> <op> <n> · text <sel> ~ <matcher> · eval <js>
 // Terminal actions:     run <command line> · press <key or "text"> … · waitForScreen <matcher> · wait <ms>
 // Terminal assertions:  screen ~ <matcher> · row <n> ~ <matcher> · cursor <row> <col> · exit <op> <n>
 //   <op> ∈ >= > == <= <   ·   <matcher> = /regex/ or "substring" or bare substring
@@ -58,11 +59,11 @@
 /** What a script drives: an app in a browser page, or a shell in the engine's terminal. */
 export type SurfaceKind = 'page' | 'terminal';
 
-export type PageVerb = 'goto' | 'wait' | 'waitFor' | 'waitForText' | 'click' | 'type' | 'scroll';
+export type PageVerb = 'goto' | 'wait' | 'waitFor' | 'waitForText' | 'click' | 'type' | 'scroll' | 'press';
 export type TerminalVerb = 'run' | 'press' | 'waitForScreen' | 'wait';
 export type ActionVerb = PageVerb | TerminalVerb;
 /** A page script's actions. */
-export const ACTION_VERBS: readonly PageVerb[] = ['goto', 'wait', 'waitFor', 'waitForText', 'click', 'type', 'scroll'];
+export const ACTION_VERBS: readonly PageVerb[] = ['goto', 'wait', 'waitFor', 'waitForText', 'click', 'type', 'scroll', 'press'];
 /** A terminal script's actions. */
 export const TERMINAL_VERBS: readonly TerminalVerb[] = ['run', 'press', 'waitForScreen', 'wait'];
 
@@ -87,11 +88,11 @@ export interface DemoAction {
   raw: string;
 }
 
-export type PageAssertionKind = 'visible' | 'hidden' | 'count' | 'text' | 'eval';
+export type PageAssertionKind = 'visible' | 'hidden' | 'focused' | 'count' | 'text' | 'eval';
 export type TerminalAssertionKind = 'screen' | 'row' | 'cursor' | 'exit';
 export type AssertionKind = PageAssertionKind | TerminalAssertionKind;
 /** A page script's assertions. */
-export const ASSERTION_KINDS: readonly PageAssertionKind[] = ['visible', 'hidden', 'count', 'text', 'eval'];
+export const ASSERTION_KINDS: readonly PageAssertionKind[] = ['visible', 'hidden', 'focused', 'count', 'text', 'eval'];
 /** A terminal script's assertions. */
 export const TERMINAL_ASSERTION_KINDS: readonly TerminalAssertionKind[] = ['screen', 'row', 'cursor', 'exit'];
 export type CountOp = '>=' | '>' | '==' | '<=' | '<';
@@ -104,7 +105,7 @@ export interface Matcher {
 
 export interface Assertion {
   kind: AssertionKind;
-  /** Present for visible/hidden/count/text. */
+  /** Present for visible/hidden/focused/count/text. */
   selector?: string;
   /** count and exit. */
   op?: CountOp;
@@ -202,9 +203,9 @@ function proseOf(line: string): string {
 
 /**
  * Parse one action directive of `surface`: on a page, `goto /x`, `waitFor #y`,
- * `waitForText #z ~ hi`, `wait 500`, `click #b`, `type #i ~ hello`; in a terminal,
- * `run ls -la`, `press ArrowDown "text" Enter`, `waitForScreen /ready/`, `wait 500`.
- * Returns null for anything else, another surface's verbs included.
+ * `waitForText #z ~ hi`, `wait 500`, `click #b`, `type #i ~ hello`, `press Shift+Tab`;
+ * in a terminal, `run ls -la`, `press ArrowDown "text" Enter`, `waitForScreen /ready/`,
+ * `wait 500`. Returns null for anything else, another surface's verbs included.
  */
 export function parseAction(code: string, surface: SurfaceKind = 'page'): DemoAction | null {
   const raw = code.trim();
@@ -232,8 +233,9 @@ export function parseAction(code: string, surface: SurfaceKind = 'page'): DemoAc
 
 /**
  * The keys of a `press`, split on whitespace: a double-quoted string is text to type, and
- * any other word is a key name (`Enter`, `ArrowDown`, `Control+C`, `q`). Null when a quote
- * is left open or sits inside a word, a string is empty, or there are no keys at all.
+ * any other word is a key name (`Enter`, `Shift+Tab`, `ArrowDown`, `Control+C`, `q`). Null
+ * when a quote is left open or sits inside a word, a string is empty, or there are no keys
+ * at all.
  */
 export function parseKeys(spec: string): PressKey[] | null {
   const keys: PressKey[] = [];
@@ -275,6 +277,7 @@ export function parseAssertion(code: string, surface: SurfaceKind = 'page'): Ass
   switch (kind) {
     case 'visible':
     case 'hidden':
+    case 'focused':
       return { kind, selector: rest, raw };
     case 'eval':
       return { kind, expr: rest, raw };

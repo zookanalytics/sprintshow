@@ -56,8 +56,24 @@
         border-radius: 7px; padding: 6px 10px; font-size: 13px; cursor: pointer;
       }
       .task.done .done-btn { border-color: var(--accent); color: var(--accent); }
-      #summary { margin-top: 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
+      .foot { margin-top: 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      #summary { color: var(--muted); font-variant-numeric: tabular-nums; }
       #summary b { color: var(--fg); }
+      #clear-done {
+        background: transparent; border: 1px solid var(--line); color: var(--muted);
+        border-radius: 7px; padding: 6px 10px; font-size: 13px; cursor: pointer;
+      }
+      #confirm {
+        background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+        border-radius: 14px; padding: 20px 22px; width: 340px;
+      }
+      #confirm p { margin: 0 0 18px; }
+      .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+      .confirm-actions button {
+        background: transparent; border: 1px solid var(--line); color: var(--fg);
+        border-radius: 9px; padding: 8px 14px; font-size: 14px; font-weight: 700; cursor: pointer;
+      }
+      #confirm-remove { background: var(--accent); border-color: var(--accent); color: #08130c; }
     </style>
   </head>
   <body>
@@ -73,8 +89,19 @@
         </div>
         <div id="empty-hint">No tasks yet — add one to get started.</div>
         <ul id="tasks"></ul>
-        <div id="summary"><b>0</b> tasks · <b>0</b> done</div>
+        <div class="foot">
+          <div id="summary"><b>0</b> tasks · <b>0</b> done</div>
+          <button id="clear-done">Clear done</button>
+        </div>
       </section>
+
+      <dialog id="confirm">
+        <p id="confirm-text"></p>
+        <div class="confirm-actions">
+          <button id="confirm-cancel">Cancel</button>
+          <button id="confirm-remove">Remove</button>
+        </div>
+      </dialog>
     </main>
 
     <script>
@@ -115,6 +142,21 @@
       document.getElementById('add').addEventListener('click', () => addTask(input.value));
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') addTask(input.value);
+      });
+
+      // Clearing the done tasks asks first, in a modal dialog: it takes focus when it
+      // opens, Escape closes it, and focus returns to the button that opened it.
+      const confirmEl = document.getElementById('confirm');
+      document.getElementById('clear-done').addEventListener('click', () => {
+        const n = tasksEl.querySelectorAll('.task.done').length;
+        document.getElementById('confirm-text').textContent = `Remove ${n} done task${n === 1 ? '' : 's'}?`;
+        confirmEl.showModal();
+      });
+      document.getElementById('confirm-cancel').addEventListener('click', () => confirmEl.close());
+      document.getElementById('confirm-remove').addEventListener('click', () => {
+        tasksEl.querySelectorAll('.task.done').forEach((li) => li.remove());
+        confirmEl.close();
+        refresh();
       });
       refresh();
     </script>

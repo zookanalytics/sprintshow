@@ -73,7 +73,6 @@ const DIRECTIVE_WORDS = new Set([
   'sleep',
   'pause',
   'fill',
-  'press',
   'hover',
   'select',
   'check',
