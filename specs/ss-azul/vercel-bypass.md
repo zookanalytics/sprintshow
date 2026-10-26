@@ -5,18 +5,19 @@ description: How Vercel's Deployment Protection answered the previews SprintShow
 
 # Passing Vercel's sign-in
 
-A growth-factor pull request's preview answers a browser with Vercel's sign-in, so a
-capture with `--base-url <preview>` would film Vercel's sign-in page. The city holds a
-Protection Bypass for Automation key as `VERCEL_AUTOMATION_BYPASS_SECRET`, valid on
-growth-factor's and Signal Loom's Vercel projects. Before the engine was taught to use
-it, Vercel's answers and Playwright's handling of headers, redirects and cookies were
-measured, and the design follows from what they showed.
+A preview behind Vercel's Deployment Protection answers a browser with Vercel's sign-in,
+so a capture with `--base-url <preview>` would film Vercel's sign-in page. A project's
+Protection Bypass for Automation key, held in the environment as
+`VERCEL_AUTOMATION_BYPASS_SECRET`, the name Vercel gives it, lets automation past the
+sign-in. Before the engine was taught to use it, Vercel's answers and Playwright's
+handling of headers, redirects and cookies were measured, and the design follows from
+what they showed.
 
 ## How Vercel answers
 
-Measured on 2026-10-26 from the agent host, against the previews of growth-factor's PRs
-#28 and #30, at `/` and at a deep path with a query, with Node's `fetch` following no
-redirect and asking for a page:
+Measured on 2026-10-26 against two preview deployments behind Deployment Protection, at
+`/` and at a deep path with a query, with Node's `fetch` following no redirect and asking
+for a page:
 
 | The request carries | Vercel answers |
 |---|---|
@@ -32,8 +33,8 @@ like no key. The sign-in is told apart by its redirect target alone.
 
 A request for the deployment's `http://` URL, carrying nothing, gets a 308 to the same URL
 on `https://`, path and query kept, and only the `https://` URL answers with the sign-in.
-Measured against PR #28's preview at `/capacity?week=1` on 2026-10-26 at 05:57Z, and with
-curl at `/` and at `/capacity?week=1` at 07:45Z.
+Measured on 2026-10-26 with Node's `fetch` at a deep path with a query, and with curl at
+`/` and at the same deep path.
 
 ## How Playwright carries a header
 
@@ -103,10 +104,10 @@ driver all pass the sign-in the same way.
 
 ## How it was checked
 
-Against the PR #28 preview, with the key from `~/.gc/secrets.env`: the first request got
-the 302, the request carrying the key got the 307 and the cookie, the check got a 200,
-and the page opened on Growth Factor's daily brief. None of the 14 requests the browser
-then made, 13 to the preview and 1 to `vercel.live`, carried a Vercel header.
+Against a protected preview, with the key in the environment: the first request got the
+302, the request carrying the key got the 307 and the cookie, the check got a 200, and the
+page opened on the app. None of the requests the browser then made, to the preview or to
+`vercel.live`, carried a Vercel header.
 
 `test/vercel.test.ts` runs the same exchange against a stub that answers as the table
 above does. The capture sends the key once, to the app's origin, and the page's script and
