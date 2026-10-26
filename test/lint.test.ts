@@ -47,7 +47,7 @@ const DRAFT = `# Demo: Draft
    _Prove:_ A row appears
 `;
 
-const ENV: LintEnv = { scenarios: [], lfsInstalled: true, lfsTracked: true, narration: false };
+const ENV: LintEnv = { scenarios: [], lfsInstalled: true, lfsTracked: true, narration: false, devices: ['iPhone 15', 'Pixel 7', 'iPad Mini'] };
 
 const messagesFor = (md: string, env: Partial<LintEnv> = {}) => lintDemo(parseDemoScript(md), { ...ENV, ...env });
 
@@ -278,4 +278,67 @@ test('looksLikeAssertion knows both surfaces', () => {
   assert.equal(looksLikeAssertion('exit 0'), true);
   assert.equal(looksLikeAssertion('Visible #x'), true);
   assert.equal(looksLikeAssertion('#board'), false);
+});
+
+// ── A page script's device ──
+//
+// A device must be one the registry describes, and a size must be one, wherever it is
+// written: on the `**Device:**` line, where the parser refuses a malformed size, or in a
+// `resize` step, which the parser drops for the linter to report.
+
+/** ADAPTED_SCRIPT with a `**Device:**` line under its start. */
+const onDevice = (device: string): string => ADAPTED_SCRIPT.replace('**Start:** `/?seed=board`', `**Start:** \`/?seed=board\`\n**Device:** ${device}`);
+
+test('a device the registry describes, in any letter case, or a size, lints clean', () => {
+  for (const device of ['iPhone 15', 'ipad   mini', '375x812']) {
+    assert.deepEqual(
+      messagesFor(onDevice(device)).filter((f) => f.severity !== 'info'),
+      [],
+      device,
+    );
+  }
+});
+
+test('a device the registry does not describe is an ERROR naming the nearest it does', () => {
+  const errors = messagesFor(onDevice('Pixel 8')).filter((f) => f.severity === 'error');
+  assert.deepEqual(errors, [
+    { severity: 'error', step: null, message: '**Device:** "Pixel 8" is not a device Playwright describes; the nearest it describes are "Pixel 7", "iPhone 15", "iPad Mini" — the capture would refuse the script.' },
+  ]);
+});
+
+test('a malformed size on the **Device:** line is refused as the parser refuses it', () => {
+  assert.throws(() => parseDemoScript(onDevice('375x')), /\*\*Device:\*\* takes a device Playwright names/);
+});
+
+test('a resize whose size does not parse is an ERROR; a bare resize and a well-formed one are not', () => {
+  const md = `# Demo: X
+
+**Start:** \`/?seed=board\`
+
+## Steps
+
+1. **A resize with a typo**
+   \`resize 1280x80O\`
+   \`resize 99999x800\`
+   _Prove:_ the board shows — \`visible #board\`
+
+2. **A resize that names a size, and prose that cites the verb**
+   \`resize 1280x800\`
+   The \`resize\` handler re-lays the board out.
+   _Prove:_ the board shows — \`visible #board\`
+`;
+  const findings = messagesFor(md).filter((f) => f.step !== null);
+  const form = '<width>x<height>, each side from 200 to 3840 CSS pixels';
+  assert.deepEqual(
+    findings.filter((f) => f.severity === 'error'),
+    ['resize 1280x80O', 'resize 99999x800'].map((code) => ({ severity: 'error', step: 1, message: `\`${code}\` does not name a size, ${form} — it is IGNORED at capture time, and the steps after it run at the size before it.` })),
+  );
+  assert.deepEqual(findings.filter((f) => f.step === 2), [{ severity: 'warn', step: 2, message: `\`resize\` has malformed arguments: it needs a size, ${form} — it is IGNORED at capture time.` }]);
+});
+
+test('a terminal script that names a device is warned that its captures ignore it', () => {
+  const warns = messagesFor(TERMINAL_SCRIPT.replace('**Terminal:** 80x24', '**Terminal:** 80x24\n**Device:** Nokia 3310')).filter((f) => f.severity !== 'info');
+  assert.deepEqual(warns, [
+    { severity: 'warn', step: null, message: "**Device:** is ignored — a terminal script is filmed in the engine's own frame, and its size is its **Terminal:** columns and rows." },
+  ]);
 });

@@ -15,6 +15,7 @@
 //
 //   # Demo: <title>            (or "# <title>")
 //   **Start:** `<url path + query>`        (a page script)
+//   **Device:** <device name> or <width>x<height>   (a page script; optional, 1280x900 by default)
 //   **Terminal:** <cols>x<rows>            (a terminal script; the size is optional)
 //   **Auth:** yes|no           (optional; accepted and ignored — see below)
 //   <free prose>               (becomes the cover subtitle / description)
@@ -36,6 +37,15 @@
 // or an assertion of the other surface stays prose, as any unrecognised code span does,
 // and the linter reports it.
 //
+// ── A page script's device ──
+//
+// A page is driven at 1280x900 unless its script names a device: a device as Playwright's
+// registry names it, such as `iPhone 15`, or a viewport size. No device name starts with a
+// digit, so a value that does is read as a size. The parser checks a size and keeps a
+// name as written; the capture looks the name up (browser.ts), and the linter checks it
+// against the registry it is given. A `resize` step changes the viewport's size from there
+// on. A terminal script's frame is the engine's, so its captures ignore a device.
+//
 // ── The generic demo:capture dialect is a subset ──
 //
 // A draft in the generic `demo:capture` format — an `**Auth:**` line, a `## Scrutiny`
@@ -49,7 +59,7 @@
 //   • `## Scrutiny` bullets are parsed into `Demo.scrutiny` and rendered as a closing
 //     card, so the section a generated draft ships survives into the video.
 //
-// Page actions:         goto <path> · wait <ms> · waitFor <selector> · waitForText <selector> ~ <substr> · click <selector> · type <selector> ~ <text> · scroll <selector>
+// Page actions:         goto <path> · wait <ms> · waitFor <selector> · waitForText <selector> ~ <substr> · click <selector> · type <selector> ~ <text> · scroll <selector> · resize <width>x<height>
 // Page assertions:      visible <sel> · hidden <sel> · count <sel> <op> <n> · text <sel> ~ <matcher> · eval <js>
 // Terminal actions:     run <command line> · press <key or "text"> … · waitForScreen <matcher> · wait <ms>
 // Terminal assertions:  screen ~ <matcher> · row <n> ~ <matcher> · cursor <row> <col> · exit <op> <n>
@@ -58,11 +68,11 @@
 /** What a script drives: an app in a browser page, or a shell in the engine's terminal. */
 export type SurfaceKind = 'page' | 'terminal';
 
-export type PageVerb = 'goto' | 'wait' | 'waitFor' | 'waitForText' | 'click' | 'type' | 'scroll';
+export type PageVerb = 'goto' | 'wait' | 'waitFor' | 'waitForText' | 'click' | 'type' | 'scroll' | 'resize';
 export type TerminalVerb = 'run' | 'press' | 'waitForScreen' | 'wait';
 export type ActionVerb = PageVerb | TerminalVerb;
 /** A page script's actions. */
-export const ACTION_VERBS: readonly PageVerb[] = ['goto', 'wait', 'waitFor', 'waitForText', 'click', 'type', 'scroll'];
+export const ACTION_VERBS: readonly PageVerb[] = ['goto', 'wait', 'waitFor', 'waitForText', 'click', 'type', 'scroll', 'resize'];
 /** A terminal script's actions. */
 export const TERMINAL_VERBS: readonly TerminalVerb[] = ['run', 'press', 'waitForScreen', 'wait'];
 
@@ -84,6 +94,8 @@ export interface DemoAction {
   keys?: PressKey[];
   /** For waitForScreen: what the screen's text must match. */
   matcher?: Matcher;
+  /** For resize: the viewport's new size. */
+  size?: ViewportSize;
   raw: string;
 }
 
@@ -132,6 +144,21 @@ export const DEFAULT_TERMINAL: TerminalSpec = { cols: 100, rows: 30 };
 export const TERMINAL_COLS = { min: 20, max: 300 };
 export const TERMINAL_ROWS = { min: 5, max: 100 };
 
+/** A viewport's size, in CSS pixels. */
+export interface ViewportSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * The sides a viewport size may name, in CSS pixels: from narrower than the narrowest
+ * phone to the width of a 4K screen. A side outside them is refused.
+ */
+export const VIEWPORT_SIDE = { min: 200, max: 3840 };
+
+/** What a `**Device:**` line names: a device as Playwright's registry names it, or a viewport size. */
+export type DeviceSpec = { name: string } | { viewport: ViewportSize };
+
 /** A `_Prove:_` / `_Fail if:_` contract line: human prose plus an optional machine assertion. */
 export interface Contract {
   prose: string;
@@ -174,6 +201,8 @@ export interface Demo {
   scrutiny: string[];
   /** Set when the script declares `**Terminal:**`: its steps drive a shell in a terminal of this size, not a page. */
   terminal?: TerminalSpec;
+  /** Set when the script declares `**Device:**`: the device a page script's captures emulate. A terminal script's captures ignore it. */
+  device?: DeviceSpec;
 }
 
 /** The surface a parsed script drives. */
@@ -202,8 +231,8 @@ function proseOf(line: string): string {
 
 /**
  * Parse one action directive of `surface`: on a page, `goto /x`, `waitFor #y`,
- * `waitForText #z ~ hi`, `wait 500`, `click #b`, `type #i ~ hello`; in a terminal,
- * `run ls -la`, `press ArrowDown "text" Enter`, `waitForScreen /ready/`, `wait 500`.
+ * `waitForText #z ~ hi`, `wait 500`, `click #b`, `type #i ~ hello`, `resize 1280x800`; in a
+ * terminal, `run ls -la`, `press ArrowDown "text" Enter`, `waitForScreen /ready/`, `wait 500`.
  * Returns null for anything else, another surface's verbs included.
  */
 export function parseAction(code: string, surface: SurfaceKind = 'page'): DemoAction | null {
@@ -227,6 +256,10 @@ export function parseAction(code: string, surface: SurfaceKind = 'page'): DemoAc
     return keys ? { verb, target: rest, keys, raw } : null;
   }
   if (verb === 'waitForScreen') return rest ? { verb, target: rest, matcher: parseMatcher(rest), raw } : null;
+  if (verb === 'resize') {
+    const size = parseViewportSize(rest);
+    return size ? { verb, target: rest, size, raw } : null;
+  }
   return { verb: verb as ActionVerb, target: rest, raw };
 }
 
@@ -344,6 +377,64 @@ export function parseTerminalSpec(value: string): TerminalSpec {
   return { cols, rows };
 }
 
+/** How a viewport size is written, for a message that refuses one. */
+export const VIEWPORT_SIZE_FORM = `<width>x<height>, each side from ${VIEWPORT_SIDE.min} to ${VIEWPORT_SIDE.max} CSS pixels`;
+
+/** Read a viewport size, `<width>x<height>`, each side within VIEWPORT_SIDE. Null for anything else. */
+export function parseViewportSize(value: string): ViewportSize | null {
+  const m = value.trim().match(/^(\d+)\s*[x×]\s*(\d+)$/i);
+  if (!m) return null;
+  const [width, height] = [Number(m[1]), Number(m[2])];
+  const fits = (side: number): boolean => side >= VIEWPORT_SIDE.min && side <= VIEWPORT_SIDE.max;
+  return fits(width) && fits(height) ? { width, height } : null;
+}
+
+/**
+ * Read a `**Device:**` line's value: a viewport size when it starts with a digit, else a
+ * device's name, kept as written. Throws on an empty value, and on a size that
+ * parseViewportSize refuses.
+ */
+export function parseDeviceSpec(value: string): DeviceSpec {
+  const v = value.replace(/`/g, '').trim();
+  if (/^\d/.test(v)) {
+    const viewport = parseViewportSize(v);
+    if (viewport) return { viewport };
+  } else if (v) {
+    return { name: v };
+  }
+  throw new Error(`demo script: **Device:** takes a device Playwright names, such as "iPhone 15", or a size, ${VIEWPORT_SIZE_FORM} (got "${v}")`);
+}
+
+/**
+ * The name `names` gives the device `written` names: the same name, or one that differs
+ * from it only in case or in the spaces between its words. Null when none does.
+ */
+export function deviceName(written: string, names: readonly string[]): string | null {
+  const key = (name: string): string => name.trim().replace(/\s+/g, ' ').toLowerCase();
+  return names.find((n) => n === written) ?? names.find((n) => key(n) === key(written)) ?? null;
+}
+
+/** How many single characters must be inserted, removed or replaced to turn `a` into `b`. */
+function editDistance(a: string, b: string): number {
+  let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    row = next;
+  }
+  return row[b.length];
+}
+
+/** Why a `**Device:**` name that `names` does not hold is refused, naming the three of `names` nearest to it. */
+export function unknownDevice(written: string, names: readonly string[]): string {
+  const near = names
+    .map((name) => ({ name, distance: editDistance(written.toLowerCase(), name.toLowerCase()) }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, 3)
+    .map((n) => `"${n.name}"`);
+  return `**Device:** "${written}" is not a device Playwright describes${near.length ? `; the nearest it describes are ${near.join(', ')}` : ''}`;
+}
+
 /** `/re/` → regex; `"str"` → substring; bare → substring. */
 export function parseMatcher(rhs: string): Matcher {
   if (rhs.length >= 2 && rhs.startsWith('/') && rhs.endsWith('/')) {
@@ -373,6 +464,7 @@ function parseContract(body: string, surface: SurfaceKind): Contract {
 const H1 = /^#\s+(?:Demo:\s*)?(.+)$/i;
 const START = /^\*\*Start:\*\*\s*(.+)$/i;
 const TERMINAL = /^\*\*Terminal:\*\*\s*(.*)$/i;
+const DEVICE = /^\*\*Device:\*\*\s*(.*)$/i;
 /** Generic-dialect header line; accepted so it never lands in the cover subtitle. */
 const AUTH = /^\*\*Auth:\*\*/i;
 /** A `##` section heading (`###` and deeper stay prose). */
@@ -399,13 +491,15 @@ function bulletText(s: string): string {
  * step description prose; a `_Prove:_` without a recognised assertion is kept as a
  * prose-only (manual) contract. Throws only when the document has no title, no steps,
  * or no `**Start:**` in a page script — the things the driver cannot run without — or
- * when `**Terminal:**` names a size a terminal is not drawn at.
+ * when `**Terminal:**` names a size a terminal is not drawn at, or `**Device:**` names
+ * neither a device nor a viewport size.
  */
 export function parseDemoScript(md: string): Demo {
   const lines = md.split(/\r?\n/);
   let title = '';
   let start = '';
   let terminal: TerminalSpec | undefined;
+  let device: DeviceSpec | undefined;
   const descParts: string[] = [];
   const steps: DemoStep[] = [];
   const scrutiny: string[] = [];
@@ -450,6 +544,11 @@ export function parseDemoScript(md: string): Demo {
       const t = line.match(TERMINAL);
       if (t) {
         terminal = parseTerminalSpec(t[1]);
+        continue;
+      }
+      const dv = line.match(DEVICE);
+      if (dv) {
+        device = parseDeviceSpec(dv[1]);
         continue;
       }
       if (AUTH.test(line)) continue; // generic-dialect field; auth is arranged by the caller
@@ -516,7 +615,7 @@ export function parseDemoScript(md: string): Demo {
   if (!start && !terminal) throw new Error('demo script: missing "**Start:** <url>" (or "**Terminal:**" for a terminal script)');
   if (steps.length === 0) throw new Error('demo script: no steps found under "## Steps"');
 
-  return { title, start, description: descParts.join(' ').replace(/\s+/g, ' ').trim(), steps, scrutiny, ...(terminal ? { terminal } : {}) };
+  return { title, start, description: descParts.join(' ').replace(/\s+/g, ' ').trim(), steps, scrutiny, ...(terminal ? { terminal } : {}), ...(device ? { device } : {}) };
 }
 
 /**

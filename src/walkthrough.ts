@@ -8,6 +8,10 @@
 // shows on screen (a red caption badge) and in the result, rather than being papered
 // over by a nice-looking video. A terminal script is filmed the same way, in the engine's
 // terminal, with its typing paced for a viewer.
+//
+// The recorded context emulates the device the script names (contextOptions), and its
+// video is filmed in videoFrame's frame, so a script that resizes its viewport keeps
+// every size whole in one frame.
 
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,7 +20,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 
 import { parseDemoScript, outputSlug, type Demo, type DemoStep } from './demo-script.ts';
 import { requireFfmpeg, run, probeDuration, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
-import { installPointer, runStep, openSurface, chromiumLaunchArgs, VIEWPORT, type Surface } from './browser.ts';
+import { installPointer, runStep, openSurface, chromiumLaunchArgs, contextOptions, videoFrame, type Surface } from './browser.ts';
 import { showCaption, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
 import type { CaptureResult } from './capture.ts';
 
@@ -123,6 +127,9 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
   const log = opts.log ?? ((m: string) => console.log(m));
   requireFfmpeg(); // fail early with the provisioning hint
   const demo = typeof opts.demo === 'string' ? parseDemoScript(opts.demo) : opts.demo;
+  // Read before anything is written or launched: a device the registry does not hold throws here.
+  const device = contextOptions(demo);
+  const frameSize = videoFrame(demo);
 
   const slug = outputSlug(path.basename(opts.outputPath, path.extname(opts.outputPath)));
   const capturesDir = path.join(opts.captureRoot ?? process.cwd(), '.captures', `${slug}-${Date.now()}`);
@@ -131,7 +138,7 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
 
   const launched = !opts.browser;
   const browser = opts.browser ?? (await chromium.launch({ headless: !opts.headed, args: chromiumLaunchArgs() }));
-  const context = await browser.newContext({ viewport: VIEWPORT, recordVideo: { dir: capturesDir, size: VIEWPORT } });
+  const context = await browser.newContext({ ...device, recordVideo: { dir: capturesDir, size: frameSize } });
   const page = await context.newPage();
   const recording = await watchRecording(page);
   const openedAt = Date.now();

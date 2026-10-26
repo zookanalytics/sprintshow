@@ -7,8 +7,9 @@
 // because it shows what failed.
 //
 // Like the proof driver it takes a ready page, so it owns neither the browser nor the
-// server. The device scale factor belongs to the page's context, so the caller sets it
-// where the page is created; `runScreenshot` (run.ts) does that for the CLI.
+// server. The device scale factor belongs to the page's context, as do a device's user
+// agent and touch, so the caller sets them where the page is created; `runScreenshot`
+// (run.ts) does that for the CLI, from contextOptions (browser.ts).
 //
 // A terminal script's PNG is the terminal window, not the viewport. The terminal page
 // paints nothing around the window, and the default white background is always left
@@ -24,8 +25,8 @@
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { parseDemoScript, type Demo } from './demo-script.ts';
-import { runStep, openSurface, ACTION_TIMEOUT, VIEWPORT } from './browser.ts';
+import { parseDemoScript, type Demo, type ViewportSize } from './demo-script.ts';
+import { runStep, openSurface, contextOptions, ACTION_TIMEOUT } from './browser.ts';
 import { expandToSession, TERMINAL_WINDOW } from './terminal.ts';
 
 /**
@@ -101,8 +102,8 @@ function pageExtent(page: Page): Promise<Extent> {
 export interface CaptureScreenshotOptions {
   /**
    * A ready page, already authenticated or on the right origin if the demo needs it. Its
-   * viewport is set to VIEWPORT, the size the video drivers drive at, so each proof is
-   * checked against the layout a video shows.
+   * viewport is set to the one the script starts at, as the video drivers' is, so each
+   * proof is checked against the layout a video shows.
    */
   page: Page;
   /** Origin a page script's start path is joined onto. A terminal script needs none. */
@@ -143,10 +144,11 @@ export const TERMINAL_SELECTOR = 'screenshot: a terminal script captures its ter
 
 /**
  * Drive `demo` against `page`, checking each step's proof, then save the state the last
- * step leaves as a PNG at `outputPath`. Throws, saving nothing, when the page cannot be
- * driven, the selector never becomes visible, a full-page capture cannot hold one row of
- * the page or one line of the session at its scale, or the PNG cannot be written. An
- * error raised once the steps have run counts the steps whose proof failed.
+ * step leaves as a PNG at `outputPath`. Throws, saving nothing, when the script names a
+ * device Playwright does not describe, the page cannot be driven, the selector never
+ * becomes visible, a full-page capture cannot hold one row of the page or one line of the
+ * session at its scale, or the PNG cannot be written. An error raised once the steps have
+ * run counts the steps whose proof failed.
  */
 export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise<ScreenshotResult> {
   if (opts.fullPage && opts.selector) throw new Error(AREA_CONFLICT);
@@ -155,7 +157,7 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
   if (demo.terminal && opts.selector) throw new Error(TERMINAL_SELECTOR);
   const { page, baseUrl, selector } = opts;
 
-  await page.setViewportSize(VIEWPORT).catch(() => {});
+  await page.setViewportSize(contextOptions(demo).viewport as ViewportSize).catch(() => {});
   const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, backdrop: false, log });
   try {
     let failures = 0;
