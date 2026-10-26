@@ -1,6 +1,6 @@
 ---
 name: Passing Vercel's sign-in — what ss-azul found
-description: How Vercel's Deployment Protection answered the previews SprintShow had to capture, with and without the bypass key and its cookie; the Playwright behaviours that decided how the engine sends the key; and the design it takes from them.
+description: How Vercel's Deployment Protection answered the previews SprintShow had to capture, with and without the bypass key and its cookie; the Playwright and Chromium behaviours that decided how the engine finds the sign-in and sends the key; and the design it takes from them.
 ---
 
 # Passing Vercel's sign-in
@@ -30,6 +30,11 @@ redirect and asking for a page:
 The cookie alone passes the sign-in for every path on the host. A wrong key reads exactly
 like no key. The sign-in is told apart by its redirect target alone.
 
+A request for the deployment's `http://` URL, carrying nothing, gets a 308 to the same URL
+on `https://`, path and query kept, and only the `https://` URL answers with the sign-in.
+Measured against PR #28's preview at `/capacity?week=1` on 2026-10-26 at 05:57Z, and with
+curl at `/` and at `/capacity?week=1` at 07:45Z.
+
 ## How Playwright carries a header
 
 Measured with Playwright 1.63 and its Chromium headless shell, against two local stub
@@ -44,6 +49,18 @@ servers on different origins:
   lands in the cookie jar the page uses, and the page's next navigation carries it.
 - A `page.request` call that fails throws an error whose call log lists the request's
   headers, the key among them. The error's first line lists none.
+- A `page.request` call with `maxRedirects: 0` returns any 3xx answer as it came, its
+  `Location` unfollowed.
+
+## How a navigation follows redirects
+
+Measured with the same Chromium, navigating a fresh page to a local stub:
+
+- A navigation follows a 301, 302, 303, 307 or 308 to its `Location`, and no other status.
+  A 300, 305 or 306 with a `Location` is shown as the page, and a 304 aborts the
+  navigation.
+- A navigation follows 19 redirects. At the 20th it fails with `ERR_TOO_MANY_REDIRECTS`,
+  so it makes at most 20 requests for one page.
 
 ## What the engine does
 
@@ -51,24 +68,34 @@ servers on different origins:
 script's start path, so the walkthrough, the proof cut, the screenshot and a library
 driver all pass the sign-in the same way.
 
-- **It asks first, without the key.** The engine requests the start path with
-  `page.request`, following no redirect. An answer that is not a redirect to
-  `vercel.com/sso-api` ends the check, and the key stays unsent. A target the engine
-  cannot ask at all is left to the browser, whose navigation says why. A page a library
-  caller serves from a route, on an origin no server answers, still opens.
-- **The key travels in one request, which follows no redirect.** A second request for the
-  start path carries `x-vercel-protection-bypass` and `x-vercel-set-bypass-cookie: true`.
-  Vercel's 307 is not followed, so the key reaches the app's origin and no other. The
-  cookie that answer sets lands in the jar the page shares, and the page's own requests
-  carry the cookie, never the key. A route that added the header to the page's requests
-  would leak it through a redirect, and the context-wide `extraHTTPHeaders` that Vercel's
-  documentation shows sends it to every origin the page loads.
-- **It checks that the cookie passes before the page opens.** A third request, carrying
-  only what the context now holds, must not answer with the sign-in. A key the deployment
-  refuses is caught here, before the browser could film the sign-in.
-- **It stops instead of filming the sign-in.** With no key, or a refused one, or a request
-  that fails once the target is known to be protected, the capture fails with a message
-  that says it reached Vercel's sign-in, and saves nothing.
+- **It walks the way first, without the key.** The engine requests the start path with
+  `page.request`, following no redirect, and then requests each URL a redirect names, by
+  the rules a navigation follows: only the five redirect statuses, only to an `http` or
+  `https` URL, and for at most 20 requests. So it meets the sign-in wherever the browser
+  would, behind a redirect such as Vercel's from `http://` to `https://` as well. A way
+  that ends without the sign-in ends the check, and the key stays unsent. A target the
+  engine cannot ask at all, or a way it cannot follow to its end, is left to the browser,
+  whose navigation says why. A page a library caller serves from a route, on an origin no
+  server answers, still opens.
+- **The key travels in one request, which follows no redirect.** The request goes to the
+  URL that answered with the sign-in, and carries `x-vercel-protection-bypass` and
+  `x-vercel-set-bypass-cookie: true`. Vercel's 307 is not followed, so the key reaches that
+  URL's origin and no other. That origin must be the start URL's, or the start URL's host
+  over https, the one Vercel redirects `http://` to. A sign-in on any other origin the way
+  leads to stops the capture with the key unsent. The cookie the 307 sets lands in the jar
+  the page shares, and the page's own requests carry the cookie, never the key. A route
+  that added the header to the page's requests would leak it through a redirect, and the
+  context-wide `extraHTTPHeaders` that Vercel's documentation shows sends it to every
+  origin the page loads.
+- **It checks that the cookie passes before the page opens.** The engine walks the way
+  again, carrying only what the context now holds, and the way must not meet the sign-in.
+  A key the deployment refuses is caught here, before the browser could film the sign-in.
+  So is a second sign-in on another origin past the one the key passed. The key is not
+  sent a second time.
+- **It stops instead of filming the sign-in.** With no key, or a refused one, or a sign-in
+  on an origin the key does not go to, or a request that fails once the way is known to
+  meet the sign-in, the capture fails with a message that says where it reached Vercel's
+  sign-in, and saves nothing.
 - **It writes the key nowhere.** The key comes from the environment and from no flag. No
   log line, caption, narration line, URL or working file holds it. An error from these
   requests keeps only its first line, so Playwright's call log never carries the key into
@@ -86,4 +113,8 @@ above does. The capture sends the key once, to the app's origin, and the page's 
 image from another origin arrive without it. The key is in no output and in no file of
 the kept working directory. Without the key, or with a refused one, the capture stops
 before the page asks for the app. A request carrying the key that fails stops it with an
-error that lists no header.
+error that lists no header. A start path the stub redirects with a 308 before its
+protection, as Vercel redirects `http://`, is passed with the key sent to the URL the
+redirect leads to, and without the key the capture stops there. A sign-in on another host,
+before the key is sent or after it passed the first, stops the capture with the key
+unsent there. A redirect loop ends the walk after 20 requests, with the key unsent.

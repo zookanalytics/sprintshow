@@ -4,10 +4,11 @@
 // answers as Vercel was measured to answer. A request with neither the key nor the bypass
 // cookie gets a 302 to vercel.com/sso-api. One with the key and x-vercel-set-bypass-cookie
 // gets a 307 to the same URL that sets _vercel_jwt. One with the cookie, or with the key
-// alone, gets the app. The app's page loads a script and an image from a second stub
-// server, on another origin. Each stub records the requests it is sent, and whether the
-// browser made each one: a request the browser makes carries Sec-Fetch-Mode, and one the
-// engine makes outside the page carries none.
+// alone, gets the app. A path the stub has moved gets a 308 before any of that, as Vercel
+// answers a deployment's http:// URL with its https:// URL. The app's page loads a script
+// and an image from a second stub server, on another origin. Each stub records the
+// requests it is sent, and whether the browser made each one: a request the browser makes
+// carries Sec-Fetch-Mode, and one the engine makes outside the page carries none.
 //
 // The capture tests run the CLI with the key in its environment, as a session carries it.
 // A capture that passes the sign-in, or stops at it, never follows the redirect to
@@ -22,7 +23,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 
-import { isVercelSignIn, passVercelSignIn, VERCEL_BYPASS_VAR } from '../src/vercel.ts';
+import { isVercelSignIn, mayReceiveKey, passVercelSignIn, VERCEL_BYPASS_VAR } from '../src/vercel.ts';
 import { openSurface } from '../src/browser.ts';
 import { parseDemoScript } from '../src/demo-script.ts';
 import { launchBrowser, runCli, scratchDir, stubFfmpeg, writeFiles, stepLines } from './browser-fixture.ts';
@@ -83,14 +84,27 @@ function appPage(other: string): string {
   return `<!doctype html><title>An app behind Vercel's sign-in</title><h1 id="app">The app</h1><img src="${other}/pixel.svg"><script src="${other}/widget.js"></script>`;
 }
 
-/**
- * A deployment behind Vercel's Deployment Protection whose bypass key is `key`, serving
- * `page` to a request that passes. With `protect: false` every request passes. With
- * `onKey: 'drop'` a request that carries a key has its connection dropped unanswered.
- */
-function deployment(key: string, page: string, opts: { protect?: boolean; onKey?: 'drop' } = {}): (req: IncomingMessage, res: ServerResponse) => void {
+interface DeploymentOptions {
+  /** Let every request pass. */
+  protect?: boolean;
+  /** Drop the connection of a request that carries a key, unanswered. */
+  onKey?: 'drop';
+  /** Paths answered with a 308 to the URL each maps to, before the protection answers. */
+  moved?: Record<string, string>;
+  /** Answer a request that passes with a 302 to this URL, instead of the page. */
+  onward?: string;
+}
+
+/** A deployment behind Vercel's Deployment Protection whose bypass key is `key`, serving `page` to a request that passes. */
+function deployment(key: string, page: string, opts: DeploymentOptions = {}): (req: IncomingMessage, res: ServerResponse) => void {
   const token = randomUUID();
   return (req, res) => {
+    const moved = opts.moved?.[req.url ?? ''];
+    if (moved !== undefined) {
+      res.writeHead(308, { location: moved });
+      res.end();
+      return;
+    }
     const sent = req.headers['x-vercel-protection-bypass'];
     if (sent !== undefined && opts.onKey === 'drop') {
       req.socket.destroy();
@@ -108,13 +122,18 @@ function deployment(key: string, page: string, opts: { protect?: boolean; onKey?
       res.end();
       return;
     }
+    if (opts.onward) {
+      res.writeHead(302, { location: opts.onward });
+      res.end();
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(page);
   };
 }
 
 /** A deployment on 127.0.0.1 whose page loads from a stub on localhost, another origin; `use` gets both, and both are closed after. */
-async function withDeployment(key: string, opts: { protect?: boolean; onKey?: 'drop' }, use: (app: Stub, other: Stub) => Promise<void>): Promise<void> {
+async function withDeployment(key: string, opts: DeploymentOptions, use: (app: Stub, other: Stub) => Promise<void>): Promise<void> {
   const other = await stub('localhost', otherOrigin);
   const app = await stub('127.0.0.1', deployment(key, appPage(other.origin), opts));
   try {
@@ -126,6 +145,8 @@ async function withDeployment(key: string, opts: { protect?: boolean; onKey?: 'd
 }
 
 const START = '/board?view=week';
+/** Where a deployment that has moved its start path redirects a request for it. */
+const MOVED = '/boards/week';
 
 const DEMO = `# Demo: An app behind Vercel's sign-in
 
@@ -159,6 +180,7 @@ test('the sign-in is a redirect to vercel.com/sso-api, and no other answer is', 
   assert.equal(isVercelSignIn(302, 'https://vercel.com/sso-api?url=https%3A%2F%2Fapp-git-branch-team.vercel.app%2Fboard&nonce=n', url), true);
   assert.equal(isVercelSignIn(307, 'https://vercel.com/sso-api', url), true);
   assert.equal(isVercelSignIn(200, 'https://vercel.com/sso-api', url), false);
+  assert.equal(isVercelSignIn(300, 'https://vercel.com/sso-api', url), false);
   assert.equal(isVercelSignIn(302, undefined, url), false);
   assert.equal(isVercelSignIn(302, '/sso-api', url), false);
   assert.equal(isVercelSignIn(302, 'https://vercel.com/login', url), false);
@@ -166,6 +188,17 @@ test('the sign-in is a redirect to vercel.com/sso-api, and no other answer is', 
   assert.equal(isVercelSignIn(302, 'https://vercel.com.example/sso-api', url), false);
   assert.equal(isVercelSignIn(302, 'https://example.com/?next=https://vercel.com/sso-api', url), false);
   assert.equal(isVercelSignIn(302, 'http://[', url), false);
+});
+
+test("the key may go to the start URL's origin and to its host over https, and to no other origin", () => {
+  const start = 'http://app-git-branch-team.vercel.app/board?view=week';
+  assert.equal(mayReceiveKey(start, start), true);
+  assert.equal(mayReceiveKey(start, 'http://app-git-branch-team.vercel.app/boards/week'), true);
+  assert.equal(mayReceiveKey(start, 'https://app-git-branch-team.vercel.app/board?view=week'), true);
+  assert.equal(mayReceiveKey(start, 'http://app-git-branch-team.vercel.app:8080/board'), false);
+  assert.equal(mayReceiveKey(start, 'https://other-git-branch-team.vercel.app/board'), false);
+  assert.equal(mayReceiveKey(start, 'https://app-git-branch-team.vercel.app.example/board'), false);
+  assert.equal(mayReceiveKey('https://app-git-branch-team.vercel.app/board', 'http://app-git-branch-team.vercel.app/board'), false);
 });
 
 // Each test serves its own deployment and opens its own page, or runs its own capture, so they run side by side.
@@ -223,6 +256,56 @@ describe("passing Vercel's sign-in", { concurrency: true, skip }, () => {
     });
   });
 
+  test('with the key, a capture whose start path redirects before the sign-in passes it where the redirect leads, and sends the key there alone', async () => {
+    const key = freshKey();
+    await withDeployment(key, { moved: { [START]: MOVED } }, async (app, other) => {
+      const { dir, cleanup } = scratchDir();
+      try {
+        writeFiles(dir, { 'demo.md': DEMO });
+        const png = path.join(dir, 'out.png');
+        const res = await runCli(['screenshot', path.join(dir, 'demo.md'), '--base-url', app.origin, '-o', png], { cwd: dir, env: cliEnv(dir, key) });
+        assert.equal(res.code, 0, `${res.stdout}${res.stderr}`);
+        assert.ok(res.stdout.includes(`vercel: ${VERCEL_BYPASS_VAR} passed Vercel's sign-in at ${app.origin}\n`), res.stdout);
+        assert.equal(existsSync(png), true);
+
+        // The engine followed the redirect to the sign-in, sent the key there once, and walked the way again.
+        assert.deepEqual(
+          app.seen.filter((s) => !s.browser).map((s) => [s.path, s.key, s.setCookie]),
+          [[START, null, null], [MOVED, null, null], [MOVED, key, 'true'], [START, null, null], [MOVED, null, null]],
+        );
+        // The browser followed the same redirect, and its requests carried the cookie the key earned.
+        const fromPage = app.seen.filter((s) => s.browser);
+        assert.deepEqual(fromPage.slice(0, 2).map((s) => s.path), [START, MOVED]);
+        assert.ok(fromPage.every((s) => s.key === null && s.cookie.includes('_vercel_jwt=')), JSON.stringify(app.seen));
+        assert.ok(other.seen.length > 0 && other.seen.every((s) => s.key === null), JSON.stringify(other.seen));
+        assert.ok(!`${res.stdout}${res.stderr}`.includes(key), 'the output holds the key');
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
+  test('without the key, a capture whose start path redirects before the sign-in fails and says it reached the sign-in, and the browser never asks for the app', async () => {
+    await withDeployment(freshKey(), { moved: { [START]: MOVED } }, async (app, other) => {
+      const { dir, cleanup } = scratchDir();
+      try {
+        writeFiles(dir, { 'demo.md': DEMO });
+        const png = path.join(dir, 'out.png');
+        const res = await runCli(['screenshot', path.join(dir, 'demo.md'), '--base-url', app.origin, '-o', png], { cwd: dir, env: cliEnv(dir) });
+        assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
+        assert.ok(
+          res.stderr.includes(`vercel: the capture reached Vercel's sign-in at ${app.origin}, a redirect to vercel.com/sso-api, so it stops rather than film the sign-in page. Set ${VERCEL_BYPASS_VAR} to the project's Protection Bypass for Automation key to pass it.`),
+          res.stderr,
+        );
+        assert.equal(existsSync(png), false);
+        assert.deepEqual(app.seen.map((s) => [s.path, s.key, s.browser]), [[START, null, false], [MOVED, null, false]]);
+        assert.deepEqual(other.seen, []);
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
   test('an app that does not answer with the sign-in is never sent the key', async () => {
     const key = freshKey();
     await withDeployment(key, { protect: false }, async (app, other) => {
@@ -268,6 +351,62 @@ describe("passing Vercel's sign-in", { concurrency: true, skip }, () => {
           assert.ok(!e.message.includes(key), e.message);
           return true;
         });
+        assert.equal(page.url(), 'about:blank');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('a sign-in on another host the start path redirects to stops the capture, and neither host is sent the key', async () => {
+    const key = freshKey();
+    const app = await stub('localhost', deployment(key, '<h1 id="app">The app</h1>'));
+    const front = await stub('127.0.0.1', (req, res) => {
+      res.writeHead(302, { location: app.origin + (req.url ?? '/') });
+      res.end();
+    });
+    const page = await browser!.newPage();
+    try {
+      await assert.rejects(passVercelSignIn(page, front.origin + START, quiet, { [VERCEL_BYPASS_VAR]: key }), {
+        message: `vercel: the capture's start path redirects to Vercel's sign-in at ${app.origin}, and ${VERCEL_BYPASS_VAR} goes only to the base URL's origin or to its host over https, so the capture stops rather than film the sign-in page. Give ${app.origin} as the base URL to pass it.`,
+      });
+      assert.deepEqual(front.seen.map((s) => [s.path, s.key]), [[START, null]]);
+      assert.deepEqual(app.seen.map((s) => [s.path, s.key]), [[START, null]]);
+      assert.equal(page.url(), 'about:blank');
+    } finally {
+      await page.close();
+      await front.close();
+      await app.close();
+    }
+  });
+
+  test('a sign-in on another host past the one the key passed stops the capture, and the key went to the first host alone', async () => {
+    const key = freshKey();
+    const next = await stub('localhost', deployment(freshKey(), '<h1 id="app">Another app</h1>'));
+    const app = await stub('127.0.0.1', deployment(key, '', { onward: `${next.origin}/elsewhere` }));
+    const page = await browser!.newPage();
+    try {
+      await assert.rejects(passVercelSignIn(page, app.origin + START, quiet, { [VERCEL_BYPASS_VAR]: key }), {
+        message: `vercel: ${VERCEL_BYPASS_VAR} passed Vercel's sign-in at ${app.origin}, and past it the start path redirects to Vercel's sign-in at ${next.origin}, so the capture stops rather than film the sign-in page.`,
+      });
+      assert.deepEqual(app.seen.map((s) => [s.path, s.key]), [[START, null], [START, key], [START, null]]);
+      assert.deepEqual(next.seen.map((s) => [s.path, s.key]), [['/elsewhere', null]]);
+      assert.equal(page.url(), 'about:blank');
+    } finally {
+      await page.close();
+      await app.close();
+      await next.close();
+    }
+  });
+
+  test('a start path whose redirects never end is left to the browser after as many requests as a navigation makes, and the key stays unsent', async () => {
+    const key = freshKey();
+    await withDeployment(key, { moved: { [START]: START } }, async (app) => {
+      const page = await browser!.newPage();
+      try {
+        await passVercelSignIn(page, app.origin + START, quiet, { [VERCEL_BYPASS_VAR]: key });
+        assert.equal(app.seen.length, 20);
+        assert.ok(app.seen.every((s) => s.path === START && s.key === null && !s.browser), JSON.stringify(app.seen));
         assert.equal(page.url(), 'about:blank');
       } finally {
         await page.close();
