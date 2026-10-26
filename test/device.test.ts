@@ -6,9 +6,10 @@
 // for a phone below 1024px, where a menu button opens a navigation drawer, and for a
 // desktop from there up, where a sidebar stands in for both. The screenshots pin the size
 // each viewport is captured at and the layout it shows. A named device pins its scale
-// factor, touch and user agent. The videos pin that a script that starts at phone width
-// and resizes to a desktop's is filmed whole in one frame, as wide as the desktop and as
-// tall as the phone, with the phone's viewport at the frame's top-left corner on gray.
+// factor, touch and user agent, and that proof mode's cards are laid out at the phone's
+// own width. The videos pin that a script that starts at phone width and resizes to a
+// desktop's is filmed whole in one frame, as wide as the desktop and as tall as the
+// phone, with the phone's viewport at the frame's top-left corner on gray.
 //
 // The browser-backed tests need a headless Chromium, and the videos a real ffmpeg; they
 // skip without them (see browser-fixture.ts and assemble.test.ts).
@@ -23,6 +24,7 @@ import { parseDemoScript } from '../src/demo-script.ts';
 import { contextOptions, videoFrame, VIEWPORT } from '../src/browser.ts';
 import { runDemo, runScreenshot } from '../src/run.ts';
 import { ffmpegBin } from '../src/ffmpeg.ts';
+import { cardDocument, coverInnerHtml } from '../src/overlay.ts';
 import { launchBrowser, scratchDir, writeFiles, runCli, pngSize } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
@@ -178,6 +180,17 @@ describe('a page script captured at a device size', { concurrency: true, skip },
       assert.deepEqual(pngSize(scaled.outputPath), { width: 393, height: 659 });
     } finally {
       cleanup();
+    }
+  });
+
+  test("proof mode's cover and closing cards are laid out at a phone's own width, not zoomed out from a desktop's", async () => {
+    const context = await browser!.newContext(contextOptions(parseDemoScript(IPHONE)));
+    try {
+      const page = await context.newPage();
+      await page.setContent(cardDocument(coverInnerHtml('sprintshow · proof', "Navigation at a phone's width", '', '3 proof steps')));
+      assert.deepEqual(await page.evaluate(() => [innerWidth, visualViewport?.scale]), [393, 1]);
+    } finally {
+      await context.close();
     }
   });
 
