@@ -197,8 +197,11 @@ sprintshow screenshot demos/terminal.md --cwd examples/sample-cli --scale 2 -o t
 A terminal script needs no `**Start:**` and takes no server: `--base-url`, `--serve`,
 `--serve-dir` and `--port` are refused for one. Its shell starts in `--cwd` (default: the
 working directory) as `bash --noprofile --norc`, with a `$ ` prompt, no history file, no
-`inputrc` and `TERM=xterm-256color`. It inherits the engine's environment, less the
-variables that describe another terminal, such as `TMUX` and `COLUMNS`.
+`inputrc` and `TERM=xterm-256color`. It inherits the engine's environment, less
+`VERCEL_AUTOMATION_BYPASS_SECRET`, which only the engine uses, and the variables that
+describe another terminal, such as `TMUX` and `COLUMNS`. Other keys in the engine's
+environment, `OPENAI_API_KEY` among them, reach the shell, so a step that prints the
+environment, such as `run env`, films them.
 
 **Actions:**
 
