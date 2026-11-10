@@ -1,3 +1,8 @@
+---
+name: sprintshow architecture
+description: What the sprintshow demo-capture engine is for, the systems it meets, the domains it is made of, the rules and decisions they share, and where what is built falls short. Read it to place a change, or to tell whether a change moves the architecture.
+---
+
 # sprintshow architecture
 
 sprintshow is a demo-capture engine, packaged as `@zookanalytics/sprintshow` with a
@@ -108,10 +113,10 @@ What a user runs, and the domains each draws on:
 - **One step runner.** Every capture, a library caller's own driver included, runs its
   steps through Step proof, so a proof means the same thing in a video and in a
   screenshot.
-- **A failure shows, and only a missing output fails the run.** A failed proof is
-  counted and logged, a video draws it on the step's caption, and the output is still
-  saved. The exit code of `run` and `screenshot` says whether the output was saved and
-  whether every proof held ([exit codes](../README.md#exit-codes)).
+- **A failed proof shows and never stops a capture.** It is counted and logged, a video
+  draws it on the step's caption, and the output is still saved. The exit code of `run`
+  and `screenshot` says whether the output was saved and whether every proof held
+  ([exit codes](../README.md#exit-codes)).
 - **The silent video is the contract.** Narration and the music bed are laid over a
   finished silent video, and a failure in either keeps the silent video.
 - **A key is written nowhere.** The engine reads a key from the environment, never from a
