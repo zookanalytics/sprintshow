@@ -152,9 +152,7 @@ What a user runs, and the domains each draws on:
 - The engine draws its captions, cards, pointer and terminal as DOM in the page, and
   ffmpeg draws no text. Text drawn in the page stays sharp at any scale.
 - The terminal is the engine's own: xterm.js in a page the engine writes, on bash in a
-  pseudo-terminal from `@lydell/node-pty`, whose prompt marks (OSC 133) report each
-  command's end and exit status. That pty package installs prebuilt on macOS and Linux,
-  with nothing to compile.
+  pseudo-terminal.
 - Signing in to an app and seeding its data are the caller's, who hands a capture a
   prepared page, and a script's `**Auth:**` line is read and ignored. Vercel's Deployment
   Protection is the exception: the engine passes it itself, with the bypass key from the
