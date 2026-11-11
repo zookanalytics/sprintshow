@@ -429,13 +429,18 @@ function editDistance(a: string, b: string): number {
   return row[b.length];
 }
 
-/** Why a `**Device:**` name that `names` does not hold is refused, naming the three of `names` nearest to it. */
-export function unknownDevice(written: string, names: readonly string[]): string {
-  const near = names
+/** The `n` of `names` that take the fewest single-character edits to turn into `written`, ignoring case, nearest first. */
+export function nearestNames(written: string, names: readonly string[], n = 3): string[] {
+  return names
     .map((name) => ({ name, distance: editDistance(written.toLowerCase(), name.toLowerCase()) }))
     .sort((a, b) => a.distance - b.distance)
-    .slice(0, 3)
-    .map((n) => `"${n.name}"`);
+    .slice(0, n)
+    .map((d) => d.name);
+}
+
+/** Why a `**Device:**` name that `names` does not hold is refused, naming the three of `names` nearest to it. */
+export function unknownDevice(written: string, names: readonly string[]): string {
+  const near = nearestNames(written, names).map((name) => `"${name}"`);
   return `**Device:** "${written}" is not a device Playwright describes${near.length ? `; the nearest it describes are ${near.join(', ')}` : ''}`;
 }
 

@@ -13,7 +13,8 @@ import { parseDemoScript, outputSlug, type Demo } from './demo-script.ts';
 import { ensureServer, type ServeOptions, type ServerHandle } from './server.ts';
 import { captureProof, type CaptureResult } from './capture.ts';
 import { captureWalkthrough } from './walkthrough.ts';
-import { captureScreenshot, AREA_CONFLICT, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
+import { captureScreenshot, AREA_CONFLICT, TERMINAL_EACH_STEP, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
+import { claimOutputDir } from './golden.ts';
 import { chromiumLaunchArgs, contextOptions } from './browser.ts';
 import { shellDir } from './terminal.ts';
 
@@ -114,7 +115,7 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
   }
 }
 
-export interface RunScreenshotOptions extends ServeOptions, Pick<CaptureScreenshotOptions, 'outputPath' | 'fullPage' | 'selector' | 'transparent' | 'log'> {
+export interface RunScreenshotOptions extends ServeOptions, Pick<CaptureScreenshotOptions, 'outputPath' | 'eachStep' | 'fullPage' | 'selector' | 'transparent' | 'log'> {
   /** Path to a demo-script markdown file, or the parsed demo. */
   script: string | Demo;
   /**
@@ -127,9 +128,10 @@ export interface RunScreenshotOptions extends ServeOptions, Pick<CaptureScreensh
 
 /**
  * Bring up the server, drive the demo's steps in a fresh headless page made as the
- * script's device at `scale`, save the state the last step leaves as a PNG, and tear the
- * server down. A failed proof still saves the PNG and is counted in `failures`. A
- * terminal script's PNG is its terminal window (see captureScreenshot).
+ * script's device at `scale`, save the state the last step leaves as a PNG, or with
+ * `eachStep` the state each step leaves, and tear the server down. A failed proof still
+ * saves the PNGs and is counted in `failures`. A terminal script's PNG is its terminal
+ * window (see captureScreenshot).
  */
 export async function runScreenshot(opts: RunScreenshotOptions): Promise<ScreenshotResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -139,8 +141,10 @@ export async function runScreenshot(opts: RunScreenshotOptions): Promise<Screens
   if (opts.fullPage && opts.selector) throw new Error(AREA_CONFLICT);
   const { demo } = loadDemo(opts.script);
   if (demo.terminal && opts.selector) throw new Error(TERMINAL_SELECTOR);
+  if (demo.terminal && opts.fullPage && opts.eachStep) throw new Error(TERMINAL_EACH_STEP);
   const device = contextOptions(demo);
-  log(`demo: "${demo.title}" — ${demo.steps.length} steps · screenshot`);
+  if (opts.eachStep) claimOutputDir(opts.outputPath, 'screenshot');
+  log(`demo: "${demo.title}" — ${demo.steps.length} steps · ${opts.eachStep ? 'a screenshot of each step' : 'screenshot'}`);
 
   const server = await serverFor(demo, opts);
   try {
@@ -151,6 +155,7 @@ export async function runScreenshot(opts: RunScreenshotOptions): Promise<Screens
         cwd: opts.cwd,
         demo,
         outputPath: opts.outputPath,
+        eachStep: opts.eachStep,
         fullPage: opts.fullPage,
         selector: opts.selector,
         transparent: opts.transparent,

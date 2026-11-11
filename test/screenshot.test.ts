@@ -16,11 +16,12 @@
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { captureHeightLimit, captureScreenshot, AREA_CONFLICT } from '../src/screenshot.ts';
+import { captureHeightLimit, captureScreenshot, stepFileName, AREA_CONFLICT, TERMINAL_EACH_STEP } from '../src/screenshot.ts';
+import { parseDemoScript } from '../src/demo-script.ts';
 import { ensureServer } from '../src/server.ts';
 import { launchBrowser, serveSite, scratchDir, writeFiles, runCli, stepLines, pngSize, pngPixels, pixelsApart, alphaAt, HIGH_DPI_ARGS, REPO } from './browser-fixture.ts';
 
@@ -388,3 +389,132 @@ for (const tiles of [256, 512]) {
     }
   });
 }
+
+test('a step\'s PNG is named by its number, padded so the names sort, and its caption cut at a word', () => {
+  const demo = parseDemoScript(readFileSync(SAMPLE, 'utf8'));
+  assert.deepEqual(
+    demo.steps.map((step) => stepFileName(step, demo.steps.length)),
+    ['01-the-board-boots-empty.png', '02-add-the-first-task.png', '03-add-a-second-task.png', '04-add-a-third-task.png', '05-mark-the-first-task-done.png', '06-the-summary-reflects-the-work.png'],
+  );
+  const step = (index: number, narration: string) => ({ index, narration, actions: [], description: '', droppedCodes: [] });
+  assert.equal(stepFileName(step(7, 'The board, once every task in the backlog is done and the sprint is closed'), 120), '007-the-board-once-every-task-in-the-backlog-is-done.png');
+  const word = 'supercalifragilisticexpialidociousandthensomemorewordsrunningtogether';
+  assert.equal(stepFileName(step(3, word), 9), `03-${word.slice(0, 48)}.png`, 'a first word longer than the name may run is cut');
+  assert.equal(stepFileName(step(2, '— ✓ —'), 2), '02-step.png');
+});
+
+/** A terminal script of two steps, each printing a word. */
+const TWO_WORDS = `# Demo: Two words
+
+**Terminal:** 40x8
+
+## Steps
+
+1. **Say hello**
+   \`run echo hello\`
+   _Prove:_ it says hello — \`screen ~ hello\`
+
+2. **Say goodbye**
+   \`run echo goodbye\`
+   _Prove:_ it says goodbye — \`screen ~ goodbye\`
+`;
+
+// Each test drives a page, a server or a process of its own, so they run side by side.
+describe('a screenshot of each step', { concurrency: true, skip }, () => {
+  test('sprintshow screenshot --each-step saves the state each step of the sample leaves, named for the step, and exits 0', async () => {
+    const { dir, cleanup } = scratchDir();
+    try {
+      const res = await runCli(['screenshot', SAMPLE, '--serve-dir', SAMPLE_APP, '--each-step', '-o', path.join(dir, 'steps')], { env: noFfmpegEnv(dir) });
+      assert.equal(res.code, 0, `${res.stdout}${res.stderr}`);
+      assert.match(res.stdout, /✅ 6 screenshot\(s\), one for each step → /);
+      const names = readdirSync(path.join(dir, 'steps')).sort();
+      assert.deepEqual(names, ['01-the-board-boots-empty.png', '02-add-the-first-task.png', '03-add-a-second-task.png', '04-add-a-third-task.png', '05-mark-the-first-task-done.png', '06-the-summary-reflects-the-work.png']);
+      const shots = names.map((n) => readFileSync(path.join(dir, 'steps', n)));
+      for (const n of names) assert.deepEqual(pngSize(path.join(dir, 'steps', n)), { width: 1280, height: 900 });
+      // Steps 2 to 5 change the board. Step 6 scrolls to a summary the viewport already shows.
+      for (let i = 1; i <= 4; i++) assert.notDeepEqual(shots[i], shots[i - 1], `step ${i + 1} shows what step ${i} left changed`);
+      // Each step is captured once its proof is checked, before the next step runs.
+      const order = res.stdout.split('\n').filter((l) => /^step \d|^screenshot: capturing/.test(l));
+      assert.deepEqual(order.slice(0, 4), ['step 1/6: The board boots empty', 'screenshot: capturing the viewport → 01-the-board-boots-empty.png', 'step 2/6: Add the first task', 'screenshot: capturing the viewport → 02-add-the-first-task.png']);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('two runs of the sample, a screenshot of each step, match as golden images', async () => {
+    const { dir, cleanup } = scratchDir();
+    try {
+      for (const run of ['first', 'second']) {
+        const res = await runCli(['screenshot', SAMPLE, '--serve-dir', SAMPLE_APP, '--each-step', '-o', path.join(dir, run)]);
+        assert.equal(res.code, 0, `${res.stdout}${res.stderr}`);
+      }
+      assert.equal((await runCli(['golden', path.join(dir, 'first'), path.join(dir, 'golden'), '--update'])).code, 0);
+      const compared = await runCli(['golden', path.join(dir, 'second'), path.join(dir, 'golden')]);
+      assert.equal(compared.code, 0, `${compared.stdout}${compared.stderr}`);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('a step whose proof fails still has its screenshot saved with the rest, and the command exits 3', async () => {
+    const site = await serveSite({ 'card.html': CARD_HTML, 'card.md': CARD_FAILS });
+    try {
+      const res = await runCli(['screenshot', path.join(site.dir, 'card.md'), '--base-url', site.baseUrl, '--each-step', '-o', path.join(site.dir, 'steps')]);
+      assert.equal(res.code, 3, `${res.stdout}${res.stderr}`);
+      assert.deepEqual(readdirSync(path.join(site.dir, 'steps')), ['01-the-card-shows-and-the-step-is-made-to-fail.png']);
+      assert.match(res.stdout, /1 step\(s\) failed their proof — the screenshots show the state they left/);
+    } finally {
+      await site.close();
+    }
+  });
+
+  test('a capture that fails at a later step removes the screenshots of the steps before it', async () => {
+    const page = await browser!.newPage();
+    const site = await serveSite({ 'card.html': CARD_HTML.replace('<div class="card"></div>', '<div class="card"></div><button id="go" onclick="document.querySelector(\'.card\').remove()">go</button>') });
+    try {
+      const steps = path.join(site.dir, 'steps');
+      const demo = `# Demo: The card, then none\n\n**Start:** \`/card.html\`\n\n## Steps\n\n1. **The card shows**\n   \`waitFor .card\`\n\n2. **The card goes**\n   \`click #go\`\n`;
+      const lines: string[] = [];
+      await assert.rejects(captureScreenshot({ page, baseUrl: site.baseUrl, demo, outputPath: steps, eachStep: true, selector: '.card', log: (m) => lines.push(m) }), /screenshot: no visible `\.card` to capture: /);
+      assert.ok(lines.includes('screenshot: capturing `.card` → 01-the-card-shows.png'), lines.join('\n'));
+      assert.deepEqual(readdirSync(steps), [], "the first step's screenshot is gone");
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
+
+  test('--each-step refuses a directory that already holds files, before the page is driven', async () => {
+    const { dir, cleanup } = scratchDir();
+    try {
+      mkdirSync(path.join(dir, 'steps'));
+      writeFileSync(path.join(dir, 'steps', 'old.png'), '');
+      const res = await runCli(['screenshot', SAMPLE, '--serve-dir', SAMPLE_APP, '--each-step', '-o', path.join(dir, 'steps')]);
+      assert.equal(res.code, 1);
+      assert.match(res.stderr, /screenshot: .*steps already holds files; name a new or empty directory/);
+      assert.ok(!res.stdout.includes('step 1/'), 'no step ran');
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('a terminal script saves its window at each step, and refuses --full-page with --each-step', async () => {
+    const { dir, cleanup } = scratchDir();
+    try {
+      writeFiles(dir, { 'words.md': TWO_WORDS });
+      const res = await runCli(['screenshot', path.join(dir, 'words.md'), '--cwd', dir, '--each-step', '-o', path.join(dir, 'steps')]);
+      assert.equal(res.code, 0, `${res.stdout}${res.stderr}`);
+      const names = readdirSync(path.join(dir, 'steps')).sort();
+      assert.deepEqual(names, ['01-say-hello.png', '02-say-goodbye.png']);
+      assert.deepEqual(pngSize(path.join(dir, 'steps', names[0])), pngSize(path.join(dir, 'steps', names[1])), 'the window keeps its size from step to step');
+      assert.notDeepEqual(readFileSync(path.join(dir, 'steps', names[0])), readFileSync(path.join(dir, 'steps', names[1])));
+
+      const full = await runCli(['screenshot', path.join(dir, 'words.md'), '--cwd', dir, '--each-step', '--full-page', '-o', path.join(dir, 'full')]);
+      assert.equal(full.code, 1);
+      assert.ok(full.stderr.includes(TERMINAL_EACH_STEP), full.stderr);
+      assert.ok(!existsSync(path.join(dir, 'full')), 'refused before anything is made');
+    } finally {
+      cleanup();
+    }
+  });
+});

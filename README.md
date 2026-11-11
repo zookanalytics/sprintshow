@@ -40,6 +40,12 @@ A script drives an app in a browser page, or, when it declares `**Terminal:**`, 
 a terminal the engine serves itself: commands typed, their output, and full-screen programs.
 Every capture takes either kind (see [Terminal demos](#terminal-demos)).
 
+An iOS app is driven by its own UI tests instead of a script. `sprintshow simulator` runs
+them on a throwaway iOS Simulator device, once in light and once in dark, and saves each
+screenshot they attach (see [Capture an iOS app](#capture-an-ios-app-on-a-simulator)). The
+screenshots of any capture can be kept in a repository as golden images, and a later run
+compared with them (see [Golden images](#golden-images)).
+
 ## Install
 
 ```bash
@@ -59,6 +65,8 @@ Prerequisites, fetched on demand rather than assumed:
 - **bash on `PATH`**, for a terminal demo. Its pty comes from `@lydell/node-pty`, which
   installs a prebuilt binary for macOS or Linux (x64 or arm64) with nothing to build or
   allow.
+- **macOS with Xcode and an iOS Simulator runtime**, for `sprintshow simulator` only. It
+  runs `xcodebuild`, `xcrun simctl` and `xcrun xcresulttool`, which come with Xcode.
 
 ## Run a demo
 
@@ -151,6 +159,18 @@ factor, which is otherwise that of the device the script names, or 1. `--transpa
 out the page's default white background, so on a page that paints no background of its own,
 an element with rounded corners keeps transparent corners.
 
+`--each-step` saves the state each step leaves instead of the state the last step leaves:
+one PNG for each step, in the new or empty directory `-o` names. Each is named for its
+step's number and caption, such as `01-the-board-boots-empty.png`, and is the area the
+other options choose, taken once the step's proof is checked. These are the screenshots a
+script's [golden images](#golden-images) are kept from. A terminal script's PNGs are its
+window at each step, and `--full-page` is refused with `--each-step` for one, because
+growing the window to the session resizes the terminal the next step runs in.
+
+```bash
+sprintshow screenshot demos/sample.md --serve-dir examples/sample-app --each-step -o build/steps
+```
+
 Chromium draws one capture in tiles, and holds only so many of them at once: about 120
 million device pixels' worth. A `--full-page` capture larger than that holds what fits,
 whichever size of tile the browser draws in: 256 pixels on a side, or 512 in a browser
@@ -241,14 +261,114 @@ Once a capture is done, the shell and every program it still runs are ended, and
 that ignores SIGHUP is killed.
 `specs/ss-71qt/design.md` records why the surface is built this way.
 
+## Capture an iOS app on a simulator
+
+`sprintshow simulator` runs an iOS app's UI tests on a throwaway iOS Simulator device, once
+in light and once in dark, and saves each screenshot the tests attach. It needs macOS with
+Xcode and an iOS Simulator runtime.
+
+```bash
+# build the sample app and its UI tests, run them in light and dark, and record each pass
+sprintshow simulator --project examples/sample-ios/SprintBoard.xcodeproj --scheme SprintBoard \
+  --device "iPhone 17 Pro" --video -o build/screens
+```
+
+The UI tests are the steps. A UI test drives the app as a person does, with taps, typing
+and waits on what the screen shows, and attaches a screenshot where a step ends:
+
+```swift
+let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+attachment.name = "01-board"
+attachment.lifetime = .keepAlways
+add(attachment)
+```
+
+Each PNG the tests attach is saved in the new or empty directory `-o` names, as
+`<name>.<appearance>.png`, such as `01-board.light.png` and `01-board.dark.png`. A name a
+pass already took gets `-2`, `-3` and so on. `examples/sample-ios` is an app whose UI test
+taps a task done and attaches a screenshot before and after.
+
+- **The app.** `--project` or `--workspace`, with `--scheme`, names the app to build:
+  `xcodebuild build-for-testing` builds it and its UI tests for any simulator, without
+  code signing, in the run's `.captures/` working dir. `--xctestrun` instead names a build
+  already made, by the `.xctestrun` file that command wrote. The UI tests are the
+  scheme's: `--test <id>` runs only the tests named, as `-only-testing` names them, such
+  as `SprintBoardUITests/SprintBoardUITests/testBoard`, and may be given more than once.
+  A test reads settings from the run's environment as `xcodebuild` passes them on: a
+  variable named `TEST_RUNNER_<NAME>` reaches the test runner as `<NAME>`.
+- **The device.** `--device` names a device type as the host names it, such as
+  `iPhone 17 Pro`. Letter case and the spaces between words do not matter. The device runs
+  the newest iOS runtime the host has that runs that type, or the one `--runtime` names,
+  such as `27.0`. A type the host's runtimes do not run is refused, naming the nearest
+  ones they do.
+- **Each pass.** Light and then dark, each pass runs on a device of its own. The device is
+  created for the pass and booted, and its status bar is fixed at 9:41 with full signal
+  and a charged battery, so a screenshot does not change with the time of day. Its
+  appearance is set, and `--grant <bundle-id>` grants that app every permission `simctl`
+  grants, so no permission prompt stops the tests. Then `xcodebuild test-without-building`
+  installs the app and its test runner there and runs the tests, and the device is deleted
+  once the pass ends, however it ends. Two runs never share a device, and a pass never
+  starts from what an earlier pass left. A signal that ends the run, such as Ctrl-C,
+  deletes the device first.
+- **The video.** `--video` records each pass's screen, from before the tests start until
+  they end, as `light.mp4` and `dark.mp4` beside the screenshots. A recording that does not
+  start leaves its pass without a video, and the log says so.
+
+A UI test that fails still has the screenshots it attached saved, and the log gives each
+failure with its message. A run that cannot build the app, run its tests, or find a
+screenshot they attached saves nothing and keeps its `.captures/` working dir, which holds
+`xcodebuild`'s logs. `--keep` keeps it after a run that saved its screenshots too.
+`specs/ss-pqt8i/design.md` records why the UI tests drive the app.
+
+## Golden images
+
+The screenshots of a run can be kept in a repository as golden images, the references a
+later run is compared with. A run is a directory of PNGs, as `sprintshow simulator` or
+`sprintshow screenshot --each-step` writes, and its golden images are a directory of PNGs
+with the same names.
+
+```bash
+# write the golden images from a run, or rewrite them once a screen changes on purpose
+sprintshow golden build/screens ios/golden --update
+
+# compare a later run with them
+sprintshow golden build/screens ios/golden
+```
+
+Each image of the run is compared with the golden image of its name. Only the PNGs
+directly in each directory count. Two images match when they are the same size and no
+more than `--max-diff-pixels` of their pixels differ, 0 unless it says otherwise. A pixel
+differs when its colour moves further than `--threshold`, from 0 to 1 and 0.1 by default,
+and it is not an anti-aliased edge, whose shade can move between two renderings of one
+screen. [pixelmatch](https://github.com/mapbox/pixelmatch) makes that call. An image only
+the run has, or a golden image the run lacks, is a difference too, so a step a run gained
+or lost shows.
+
+Each image that differs gets a diff image of its name in `golden-diff/` in the run's
+directory: the golden image faded to grey with each differing pixel in red, or, when the
+two are not the same size, the golden image and the run's side by side. A comparison
+replaces the diff images of the one before it.
+
+`--update` rewrites the golden images from the run. It writes each image the run changed or
+added, removes each golden image the run does not have, and leaves each one that matches as
+it is, so a run whose pixels moved within the tolerance changes no committed file.
+
 ## Exit codes
 
-The exit code of `run` and `screenshot` says what was saved:
+The exit code of `run`, `screenshot` and `simulator` says what was saved:
 
-- **0**: the output (the MP4 or the PNG) is saved and every step's proof held.
-- **3**: the output is saved, but at least one step's proof failed. The output still shows
-  what failed, and `run` keeps its `.captures/<run>/` working dir.
+- **0**: the output (the MP4, the PNG or the PNGs) is saved, and every step's proof held,
+  or every UI test passed.
+- **3**: the output is saved, but at least one step's proof or UI test failed. The output
+  still shows what failed, and `run` keeps its `.captures/<run>/` working dir.
 - **1**: no output is saved.
+
+The exit code of `golden` says how the run stands against the golden images:
+
+- **0**: every image matches its golden image, or `--update` wrote them.
+- **3**: an image differs from its golden image, or one side has an image the other lacks.
+  Each image that differs has its diff image.
+- **1**: nothing was compared, as when the run's directory holds no PNG.
 
 ## Demo-script format
 
@@ -362,7 +482,8 @@ const result = await captureProof({
 });
 ```
 
-`captureScreenshot` takes the same kind of page and saves one PNG in place of the MP4.
+`captureScreenshot` takes the same kind of page and saves one PNG in place of the MP4, or
+with `eachStep`, a PNG for each step.
 `runDemo` and `runScreenshot` bring up the server and the browser themselves, as the CLI
 does. A script that names a device needs a page made as that device: make its context with
 `contextOptions(demo)`, as they do. The drivers set the page's viewport to the one the
@@ -370,6 +491,10 @@ script starts at, and the rest of the device is the context's. A custom driver t
 steps through `runStep` checks each proof as the built-in captures do. For a terminal
 script, a driver takes a `cwd` in place of a `baseUrl`, and `openSurface` brings up what any
 script drives: the app at its start path, or the engine's terminal and its shell.
+
+`captureSimulator` runs an iOS app's UI tests on throwaway devices as `sprintshow
+simulator` does, and `compareGolden` and `updateGolden` compare a run with its golden
+images or rewrite them as `sprintshow golden` does.
 
 ## The agent / MCP path
 

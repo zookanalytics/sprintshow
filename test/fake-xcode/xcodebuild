@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+// The stand-in xcodebuild: see fake.mjs.
+import { main } from './fake.mjs';
+main('xcodebuild');

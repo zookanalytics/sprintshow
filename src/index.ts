@@ -1,8 +1,9 @@
 // Public library API for @zookanalytics/sprintshow.
 //
-// The CLI (`sprintshow run|screenshot|assemble|lint`) is one consumer of this surface; the
-// same functions are importable for the seed-test bootstrap (hand `captureProof` or
-// `captureScreenshot` a ready page) and for embedding the engine in another tool.
+// The CLI (`sprintshow run|screenshot|simulator|golden|assemble|lint`) is one consumer of
+// this surface; the same functions are importable for the seed-test bootstrap (hand
+// `captureProof` or `captureScreenshot` a ready page) and for embedding the engine in
+// another tool.
 
 // The demo-script grammar: parser, types, and slug helpers.
 export * from './demo-script.ts';
@@ -13,7 +14,11 @@ export { assembleVideo, baseDuration, type Frame, type Manifest, type AssembleOp
 // The drivers and their result types.
 export { captureProof, type CaptureProofOptions, type CaptureResult } from './capture.ts';
 export { captureWalkthrough, type CaptureWalkthroughOptions } from './walkthrough.ts';
-export { captureScreenshot, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
+export { captureScreenshot, stepFileName, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
+
+// An iOS app's UI tests on a throwaway simulator, and golden images of any capture.
+export { captureSimulator, APPEARANCES, STATUS_BAR, type Appearance, type CaptureSimulatorOptions, type SimulatorResult, type SimulatorPass, type SimulatorScreenshot } from './simulator.ts';
+export { compareGolden, updateGolden, DIFF_DIR, DEFAULT_THRESHOLD, type GoldenOptions, type GoldenComparison, type GoldenUpdate, type GoldenImage, type GoldenStatus } from './golden.ts';
 
 // The one-command orchestrators behind `sprintshow run` and `sprintshow screenshot`.
 export { runDemo, runScreenshot, type RunDemoOptions, type RunScreenshotOptions, type CaptureMode } from './run.ts';

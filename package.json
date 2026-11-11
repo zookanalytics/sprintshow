@@ -1,7 +1,7 @@
 {
   "name": "@zookanalytics/sprintshow",
   "version": "0.1.0",
-  "description": "Auto-generate a quick, unpolished demo video of what an AI agent just did — the agent equivalent of a sprint demo. A demo-script DSL + linter, on-screen captions, TTS voiceover and ffmpeg assembly, over a Playwright browser drive or a terminal session.",
+  "description": "Auto-generate a quick, unpolished demo video of what an AI agent just did — the agent equivalent of a sprint demo. A demo-script DSL + linter, on-screen captions, TTS voiceover and ffmpeg assembly, over a Playwright browser drive or a terminal session. Also captures an iOS app's screens through its UI tests on a throwaway simulator, and keeps any capture's screenshots as golden images.",
   "keywords": [
     "demo",
     "demo-video",
@@ -16,7 +16,11 @@
     "sprint-demo",
     "terminal",
     "tui",
-    "xterm"
+    "xterm",
+    "ios-simulator",
+    "xcuitest",
+    "golden-images",
+    "visual-regression"
   ],
   "license": "AGPL-3.0-only",
   "author": "Zook Analytics",
@@ -64,10 +68,13 @@
     "@lydell/node-pty": "^1.1.0",
     "@xterm/xterm": "^6.0.0",
     "ffmpeg-static": "^5.3.0",
-    "playwright": "^1.63.0"
+    "pixelmatch": "^8.0.0",
+    "playwright": "^1.63.0",
+    "pngjs": "^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pngjs": "^6.0.5",
     "typescript": "^5.9.0"
   }
 }
