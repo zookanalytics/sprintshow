@@ -122,15 +122,15 @@ sprintshow run demos/sample.md --serve-dir examples/sample-app --screenshots sho
 Each PNG is named for its step: its number, padded so the names sort in step order, and
 its caption as a slug of at most 48 characters, cut at a word, such as
 `01-the-board-boots-empty.png`. It is taken once the step's proof is checked and the
-animations running in the page have ended, for up to a second. It shows the app alone, as
+page's own animations have ended, for up to a second. It shows the app alone, as
 `sprintshow screenshot` saves it by default: a page script's viewport at the device's scale
 factor, or a terminal script's window with its corners transparent, with no caption, card
-or pointer drawn on it. A walkthrough takes each in the page it films, and its video holds
-still on the step's last frame while it does, so the video shows no trace of it. The
-exception is a page whose stylesheet gives elements of every tag a `::before`, `::after`
-or `::first-line` box. Its video can show one at the page's top-left corner just after a
-PNG is taken. A step whose proof fails still gets its PNG, which shows what failed. A run
-that saves no output keeps none of them, and removes the directory if it made it for them.
+or pointer drawn on it. A walkthrough takes each in the page it films, and cuts the
+stretch in which it does from its video, so the video shows no trace of it. The exception
+is a page whose stylesheet gives elements of every tag a `::before`, `::after` or
+`::first-line` box. Its video can show one at the page's top-left corner just after a PNG
+is taken. A step whose proof fails still gets its PNG, which shows what failed. A run that
+saves no output keeps none of them, and removes the directory if it made it for them.
 
 sprintshow compares no screenshot with another: keeping reference images and comparing a
 run's screenshots with them is the consumer's work.

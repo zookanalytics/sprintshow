@@ -14,10 +14,13 @@
 // every size whole in one frame.
 //
 // Given a screenshot directory, it saves a PNG of the state each step leaves
-// (screenshot.ts) in the page it films. A still is taken with the engine's chrome hidden,
-// and the browser draws the page as the still sees it, so the frames drawn while one is
-// taken, until the browser shows the walkthrough again, are dropped from the video, which
-// holds still on the frame before them (heldSpans).
+// (screenshot.ts) in the page it films. That page alone holds the app's state, since
+// another page would have to drive the app again, so a still that leaves out the engine's
+// chrome is a frame the filmed page draws, and the recording can show it. The video cuts
+// the stretch in which each still is taken, reaching a little before the still and a
+// little past the first frame of the recording that shows the walkthrough again
+// (stillCuts). The page holds one state on both sides of a cut, so the video runs on as
+// if no still were taken, and each mark the narration is laid on moves up with it.
 
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -91,43 +94,54 @@ export function narrationSlots(marks: SegMark[], endMs: number): NarrationSlot[]
  * the walkthrough: from just before the still is taken to the first frame of the recording
  * that shows the walkthrough again.
  */
-export interface Hold {
+export interface Still {
   from: number;
   to: number;
 }
 
-/**
- * How far, in seconds, the frames dropped for a hold reach before it and past it. The
- * video shows a frame the browser drew from up to 60 ms before it was drawn to 20 ms
- * after, so each reaches one 40 ms frame further.
- */
-const HOLD_LEAD_S = 0.08;
-const HOLD_TRAIL_S = 0.04;
+/** A stretch cut from a recording, in seconds from its start. */
+export interface Cut {
+  start: number;
+  end: number;
+}
 
 /**
- * How long the page shows a step's end before its screenshot is taken: longer than a hold
- * reaches back, by two frames, so the frame the video holds on shows the step's end.
+ * How far, in ms, a cut reaches past each end of a still's stretch, so that it takes in
+ * every frame of the still, which the recording can show some way from when the browser
+ * drew it: at 25 frames a second, from up to 60 ms before to 20 ms after. The reach is
+ * several times that, which costs the video nothing, since the page does not change in
+ * the QUIET_MS on either side of a still.
  */
-const STILL_QUIET_MS = (HOLD_LEAD_S + 0.08) * 1000;
+const CUT_REACH_MS = 200;
 
 /**
- * How long the page stays still once the recording shows the walkthrough again after a
- * screenshot: longer than a hold reaches past it, by two frames, so the next frame the
- * page draws lies past the frames it drops.
+ * How long the page stays still before a screenshot is taken, and once the recording shows
+ * the walkthrough again after it: longer than a cut reaches, by two frames, so the frames
+ * on both sides of a cut show the page in one state.
  */
-const RESHOWN_QUIET_MS = (HOLD_TRAIL_S + 0.08) * 1000;
+const QUIET_MS = CUT_REACH_MS + 80;
 
 /** How long a screenshot waits for a frame that shows the walkthrough again to reach the recording, and how many it draws. */
 const RESHOW_WAIT_MS = 250;
 const RESHOW_TRIES = 8;
 
 /**
- * The stretches of a recording that starts at `start`, in wall-clock ms, whose frames are
- * dropped for `holds`: each in seconds from the recording's start, rounded to the ms.
+ * The stretches cut from a recording that starts at `start`, in wall-clock ms, for
+ * `stills`: each still's stretch and CUT_REACH_MS on either side of it, in seconds from the
+ * recording's start, rounded to the ms.
  */
-export function heldSpans(holds: Hold[], start: number): { start: number; end: number }[] {
-  const at = (wall: number, by: number): number => Math.round(((wall - start) / 1000 + by) * 1000) / 1000;
-  return holds.map((h) => ({ start: at(h.from, -HOLD_LEAD_S), end: at(h.to, HOLD_TRAIL_S) }));
+export function stillCuts(stills: Still[], start: number): Cut[] {
+  const at = (wall: number): number => Math.round(wall - start) / 1000;
+  return stills.map((s) => ({ start: at(s.from - CUT_REACH_MS), end: at(s.to + CUT_REACH_MS) }));
+}
+
+/**
+ * Where `at`, in ms from a recording's start, falls in its video once `cuts` are taken out:
+ * earlier by the length of each cut before it, and at the start of a cut it falls in.
+ */
+export function afterCuts(at: number, cuts: Cut[]): number {
+  // A cut's bounds are whole ms, which the seconds it is given in carry exactly once rounded.
+  return cuts.reduce((moved, c) => moved - Math.max(0, Math.min(at, Math.round(c.end * 1000)) - Math.round(c.start * 1000)), at);
 }
 
 /** The frames of a page's recording, each by the wall-clock time in ms the browser drew it at. */
@@ -180,9 +194,9 @@ async function walkStep(page: Page, base: string, step: DemoStep, total: number,
  * for as long as the page draws no other. So such frames are drawn until one drawn after
  * the first reaches the recording.
  */
-export async function screenshotStep(page: Page, surface: Surface, shots: StepScreenshots, recording: RecordingFrames, step: DemoStep, log: (m: string) => void): Promise<Hold> {
+export async function screenshotStep(page: Page, surface: Surface, shots: StepScreenshots, recording: RecordingFrames, step: DemoStep, log: (m: string) => void): Promise<Still> {
   await surface.settle();
-  const from = await shots.take(page, step, STILL_QUIET_MS);
+  const from = await shots.take(page, step, QUIET_MS);
   const shown = (await markFrame(page)) ?? Date.now();
   try {
     for (let tries = 0; tries < RESHOW_TRIES; tries++) {
@@ -190,7 +204,7 @@ export async function screenshotStep(page: Page, surface: Surface, shots: StepSc
       for (const until = Date.now() + RESHOW_WAIT_MS; Date.now() < until; await page.waitForTimeout(25)) {
         const to = recording.firstFrom(shown);
         if (to !== null) {
-          await page.waitForTimeout(RESHOWN_QUIET_MS);
+          await page.waitForTimeout(QUIET_MS);
           return { from, to };
         }
       }
@@ -206,8 +220,9 @@ export async function screenshotStep(page: Page, surface: Surface, shots: StepSc
  * Drive `demo` against a fresh recorded context and finish the MP4. Records where each
  * segment (cover, each step, the closing card) appears in the recording, so the optional
  * narration track can be laid on the recording's own timeline. With a screenshot
- * directory, it saves each step's screenshot once the step is walked, and the video holds
- * still while each is taken. A capture that throws keeps none of the screenshots it saved.
+ * directory, it saves each step's screenshot once the step is walked, and cuts from the
+ * video the stretch in which each is taken. A capture that throws keeps none of the
+ * screenshots it saved.
  */
 export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -243,7 +258,7 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
   // caption; for the cover and the closing card, when the page added the card; for a tail
   // with no card, which draws nothing, when it began.
   const segments: { narration: string; wall: number; card: boolean }[] = [];
-  const holds: Hold[] = [];
+  const stills: Still[] = [];
   let failures = 0;
   let webmPath: string | null = null;
   let flushedAt = 0;
@@ -258,7 +273,7 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
       const { proved, shownAt } = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
       segments.push({ narration: step.narration, wall: shownAt, card: false });
       if (!proved) failures++;
-      if (shots) holds.push(await screenshotStep(page, surface, shots, recording, step, log));
+      if (shots) stills.push(await screenshotStep(page, surface, shots, recording, step, log));
     }
 
     if (demo.scrutiny.length) {
@@ -285,8 +300,9 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
   if (!webmPath) throw new Error('walkthrough: recording produced no video (recordVideo did not write a file)');
 
   const firstFrame = recording.start();
-  if (firstFrame === null) log(`walkthrough: no frame of the recording reached the engine, so the narration${holds.length ? " and the screenshots' holds are" : ' is'} timed from when the page opened`);
+  if (firstFrame === null) log(`walkthrough: no frame of the recording reached the engine, so the narration${stills.length ? " and the screenshots' cuts are" : ' is'} timed from when the page opened`);
   const start = firstFrame ?? openedAt;
+  const cuts = stillCuts(stills, start);
   // A segment starts with the frame that first shows it, so neither the time an evaluate
   // takes to reach a busy page nor the time a loaded browser takes to draw counts against
   // its clip. A caption's frame is the one the browser reported. A card can fade in, and
@@ -294,18 +310,17 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
   // the first frame the browser drew after the page added it. That is the card's frame
   // unless the page was drawing frames of its own then. The page, the browser and the
   // engine all tell the host's wall-clock time, so every time is read against the
-  // recording's start.
-  const marks = segments.map((s) => ({ narration: s.narration, at: ((s.card ? recording.firstFrom(s.wall) : null) ?? s.wall) - start }));
+  // recording's start, and moved up past the cuts before it.
+  const marks = segments.map((s) => ({ narration: s.narration, at: afterCuts(((s.card ? recording.firstFrom(s.wall) : null) ?? s.wall) - start, cuts) }));
 
   const tmp = mkdtempSync(path.join(tmpdir(), 'sprintshow-wt-'));
   try {
     const silent = path.join(tmp, 'silent.mp4');
     log(`walkthrough: transcoding recording → ${path.basename(opts.outputPath)}`);
-    // The MP4 is cut at a constant frame rate, so ffmpeg repeats the frame before each
-    // stretch the filter drops, and the video holds still on it.
-    const held = heldSpans(holds, start);
-    const drop = held.length ? `select='not(${held.map((h) => `between(t,${h.start},${h.end})`).join('+')})',` : '';
-    run(['-y', '-i', webmPath, '-vf', `${drop}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p`, '-c:v', 'libx264', '-crf', '22', '-preset', 'slow', '-an', silent]);
+    // The recording runs at a constant frame rate. The filter drops each cut's frames, and
+    // the frames after a cut are retimed to follow the frame before it.
+    const cut = cuts.length ? `select='not(${cuts.map((c) => `between(t,${c.start},${c.end})`).join('+')})',setpts=N/FRAME_RATE/TB,` : '';
+    run(['-y', '-i', webmPath, '-vf', `${cut}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p`, '-c:v', 'libx264', '-crf', '22', '-preset', 'slow', '-an', silent]);
 
     // The transcode is the picture the MP4 shows, so its length ends the last slot. ffmpeg
     // prints the length of a file it wrote, and the time the flush ended stands in only
@@ -332,7 +347,7 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
     // Write a manifest for the kept working dir so a run is inspectable.
     writeFileSync(
       path.join(capturesDir, 'manifest.json'),
-      JSON.stringify({ title: demo.title, mode: 'walkthrough', video: path.basename(webmPath), segments: slots, ...(held.length ? { held } : {}), ...(demo.scrutiny.length ? { scrutiny: demo.scrutiny } : {}) }, null, 2),
+      JSON.stringify({ title: demo.title, mode: 'walkthrough', video: path.basename(webmPath), segments: slots, ...(cuts.length ? { cuts } : {}), ...(demo.scrutiny.length ? { scrutiny: demo.scrutiny } : {}) }, null, 2),
     );
 
     const keep = opts.keep || failures > 0;

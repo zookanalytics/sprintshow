@@ -6,20 +6,23 @@
 // named for the step, as a proof video names its frame of the step. A screenshot shows
 // the app alone: the screenshots a run with a video takes match, pixel for pixel, those a
 // run with no video takes, in whose page the engine draws nothing, and the last matches
-// the PNG `sprintshow screenshot` saves. A walkthrough's video shows no trace of taking
-// them: every frame from the first step's caption to the closing card shows the caption,
-// no frame shows a terminal's window laid out as a still, a step that ends at once shows
-// its caption before the video holds still for its screenshot, a step that moves to
-// another page, leaving its caption behind, gets no caption back, and no frame of a page
-// whose stylesheet decorates every element shows anything at its top-left corner, where
-// the engine's frame marker sits. The hold ends at a frame drawn after the still that the
-// recording has, and frames are drawn until one reaches it, on a page whose Content
-// Security Policy refuses an image from a data: URL as on any other, and on a page that
-// cannot take the marker. A run with no video needs a screenshot directory and refuses
-// the video's options, and a directory that holds files, or would also hold the video or
-// the run's working directory, is refused before anything is served or made. A run whose
-// proof fails saves its screenshots and exits 3, and one that saves nothing keeps none of
-// them, nor the directory it made for them.
+// the PNG `sprintshow screenshot` saves. A still waits on the page's own animations and
+// not on the engine's. A walkthrough's video shows no trace of taking them: it is shorter
+// than its recording by the stretches it cuts for them, every frame from the first step's
+// caption to the closing card shows the caption, no frame shows a terminal's window laid
+// out as a still, a step that ends at once shows its caption before the cut for its
+// screenshot, a step that moves to another page, leaving its caption behind, gets no
+// caption back, and no frame of a page whose stylesheet decorates every element shows
+// anything at its top-left corner, where the engine's frame marker sits. A cut reaches
+// past each end of its still, and a moment after it moves up by its length. The stretch
+// a still can show ends at a frame drawn after the still that the recording has, and
+// frames are drawn until one reaches it, on a page whose Content Security Policy refuses
+// an image from a data: URL as on any other, and on a page that cannot take the marker.
+// A run with no video needs a screenshot directory and refuses the video's options, and a
+// directory that holds files, or would also hold the video or the run's working
+// directory, is refused before anything is served or made. A run whose proof fails saves
+// its screenshots and exits 3, and one that saves nothing keeps none of them, nor the
+// directory it made for them.
 //
 // The tests that drive a page need a headless Chromium and skip without one, and the
 // walkthrough's need a real ffmpeg (see browser-fixture.ts and assemble.test.ts). A proof
@@ -33,9 +36,9 @@ import type { Page } from 'playwright';
 
 import { parseDemoScript, type DemoStep } from '../src/demo-script.ts';
 import { runDemo } from '../src/run.ts';
-import { captureWalkthrough, heldSpans, screenshotStep, watchRecording, type RecordingFrames } from '../src/walkthrough.ts';
+import { afterCuts, captureWalkthrough, screenshotStep, stillCuts, watchRecording, type Cut, type RecordingFrames } from '../src/walkthrough.ts';
 import { captureScreenshots, stepFileName, stepScreenshots } from '../src/screenshot.ts';
-import { ffmpegBin } from '../src/ffmpeg.ts';
+import { ffmpegBin, probeDuration } from '../src/ffmpeg.ts';
 import { markFrame } from '../src/overlay.ts';
 import { VIEWPORT } from '../src/browser.ts';
 import { launchBrowser, scratchDir, serveSite, writeFiles, runCli, stubFfmpeg, pngSize, pixelsApart, alphaAt, patchLuma, firstFrame, REPO } from './browser-fixture.ts';
@@ -60,21 +63,24 @@ test("a step's screenshot is named for its number, padded so the names sort in s
   assert.equal(stepFileName(step(3, '— · —'), 3), '03-step.png');
 });
 
-test('a hold drops the frames from two frames before its still to a frame past the walkthrough showing again', () => {
-  assert.deepEqual(
-    heldSpans(
-      [
-        { from: 11_000, to: 11_070 },
-        { from: 15_500.4, to: 15_620 },
-      ],
-      1_000,
-    ),
+test('a cut reaches 200 ms past each end of its still, and a moment after it moves up by its length', () => {
+  const cuts = stillCuts(
     [
-      { start: 9.92, end: 10.11 },
-      { start: 14.42, end: 14.66 },
+      { from: 11_000, to: 11_070 },
+      { from: 15_500.4, to: 15_620 },
     ],
+    1_000,
   );
-  assert.deepEqual(heldSpans([], 1_000), []);
+  assert.deepEqual(cuts, [
+    { start: 9.8, end: 10.27 },
+    { start: 14.3, end: 14.82 },
+  ]);
+  assert.deepEqual(stillCuts([], 1_000), []);
+  // Before the first cut, inside it, between the two, and past both.
+  assert.deepEqual(
+    [5_000, 10_000, 12_000, 20_000].map((at) => afterCuts(at, cuts)),
+    [5_000, 9_800, 11_530, 19_010],
+  );
 });
 
 test("a run with no video needs a screenshot directory and refuses the options only a video takes, before it reads the script", async () => {
@@ -279,7 +285,7 @@ async function walkWithScreenshots(demo: string, at: { baseUrl?: string; cwd?: s
 }
 
 describe('a walkthrough takes its screenshots with no trace in its video', { concurrency: true, skip: skip || needsFfmpeg }, () => {
-  test('a page walkthrough shows the caption in every frame from the first to the closing card, and a step that ends at once shows its caption before the video holds still', { timeout: 300_000 }, async () => {
+  test('a page walkthrough is shorter than its recording by its cuts, shows the caption in every frame from the first to the closing card, and shows the caption of a step that ends at once before the cut for its screenshot', { timeout: 300_000 }, async () => {
     const site = await serveSite({ 'index.html': COUNTER_HTML });
     try {
       await walkWithScreenshots(PAGE_WALK, { baseUrl: site.baseUrl }, (video, capturesDir) => {
@@ -296,9 +302,15 @@ describe('a walkthrough takes its screenshots with no trace in its video', { con
         const bare = foot.filter((f) => f.t >= caption && f.t < closing && f.luma >= 100).map((f) => f.t);
         assert.deepEqual(bare, [], `every frame from the first caption at ${caption}s to the closing card at ${closing}s shows the caption`);
 
-        const { held } = JSON.parse(readFileSync(path.join(capturesDir, 'manifest.json'), 'utf8')) as { held: { start: number; end: number }[] };
-        assert.equal(held.length, 2, 'the video holds still once for each screenshot');
-        assert.ok(caption < held[0].start, `the first step's caption shows at ${caption}s, before the video holds still for its screenshot at ${held[0].start}s`);
+        const manifest = JSON.parse(readFileSync(path.join(capturesDir, 'manifest.json'), 'utf8')) as { video: string; cuts: Cut[] };
+        const { cuts } = manifest;
+        assert.equal(cuts.length, 2, 'the video cuts a stretch for each screenshot');
+        assert.ok(caption < cuts[0].start, `the first step's caption shows at ${caption}s, before the cut for its screenshot at ${cuts[0].start}s`);
+        // Each cut drops whole frames, so it can run a frame longer or shorter than its stretch.
+        const cut = Math.round(cuts.reduce((sum, c) => sum + c.end - c.start, 0) * 1000) / 1000;
+        const recorded = probeDuration(path.join(capturesDir, manifest.video));
+        const shown = probeDuration(video);
+        assert.ok(Math.abs(recorded - cut - shown) < 0.15, `the video runs ${shown}s, its recording ${recorded}s less the ${cut}s it cuts, with no frame held in their place`);
       });
     } finally {
       await site.close();
@@ -369,12 +381,12 @@ describe('a walkthrough takes its screenshots with no trace in its video', { con
   });
 });
 
-describe("a walkthrough's screenshot ends its hold at a frame the recording has", { skip }, () => {
+describe("a walkthrough's screenshot ends the stretch it can show at a frame the recording has", { skip }, () => {
   const STEP = parseDemoScript('# Demo: Hold\n\n**Start:** `/`\n\n## Steps\n\n1. **The page shows**\n   _Prove:_ it shows — `visible #app`\n');
-  const still = { settle: async () => {}, close: async () => {} };
+  const bare = { settle: async () => {}, close: async () => {} };
 
-  /** Take the step's screenshot on a page of its own against `recording`, and hand `check` the hold, the markers the page was given and the log. */
-  async function hold(recording: RecordingFrames, check: (held: { from: number; to: number }, markers: number, lines: string[], page: Page) => Promise<void>): Promise<void> {
+  /** Take the step's screenshot on a page of its own against `recording`, and hand `check` the stretch it can show, the markers the page was given and the log. */
+  async function still(recording: RecordingFrames, check: (shown: { from: number; to: number }, markers: number, lines: string[], page: Page) => Promise<void>): Promise<void> {
     const { dir, cleanup } = scratchDir();
     const page = await browser!.newPage({ viewport: VIEWPORT });
     try {
@@ -386,8 +398,8 @@ describe("a walkthrough's screenshot ends its hold at a frame the recording has"
       });
       const lines: string[] = [];
       const shots = stepScreenshots(STEP, path.join(dir, 'shots'), quiet);
-      const held = await screenshotStep(page, still, shots, recording, STEP.steps[0], (m) => lines.push(m));
-      await check(held, await page.evaluate(() => (window as unknown as { __markers: number }).__markers), lines, page);
+      const shown = await screenshotStep(page, bare, shots, recording, STEP.steps[0], (m) => lines.push(m));
+      await check(shown, await page.evaluate(() => (window as unknown as { __markers: number }).__markers), lines, page);
     } finally {
       await page.close();
       cleanup();
@@ -399,19 +411,19 @@ describe("a walkthrough's screenshot ends its hold at a frame the recording has"
     let frame = 0;
     // The recording has no frame drawn after the still until it has been asked 25 times.
     const recording: RecordingFrames = { start: () => 0, firstFrom: (wall) => (++asks < 25 ? null : (frame ||= wall + 1)) };
-    await hold(recording, async (held, markers, lines, page) => {
-      assert.equal(held.to, frame, 'the hold ends at the frame the recording has');
-      assert.ok(held.from < held.to);
+    await still(recording, async (shown, markers, lines, page) => {
+      assert.equal(shown.to, frame, 'the stretch ends at the frame the recording has');
+      assert.ok(shown.from < shown.to);
       assert.ok(markers >= 3, `it drew a frame anew each time the recording had none (${markers} markers)`);
-      assert.deepEqual(lines, [], 'it says nothing of a hold that ends at a frame of the recording');
-      assert.equal(await page.locator('#__ss_mark__').count(), 0, 'the marker leaves the page once the hold ends');
+      assert.deepEqual(lines, [], 'it says nothing of a stretch that ends at a frame of the recording');
+      assert.equal(await page.locator('#__ss_mark__').count(), 0, 'the marker leaves the page once the stretch ends');
     });
   });
 
   test('it gives up, and says the video can show the still, when no frame reaches the recording', { timeout: 60_000 }, async () => {
     const recording: RecordingFrames = { start: () => 0, firstFrom: () => null };
-    await hold(recording, async (held, markers, lines) => {
-      assert.ok(held.to >= held.from);
+    await still(recording, async (shown, markers, lines) => {
+      assert.ok(shown.to >= shown.from);
       assert.ok(markers > 1, `it kept drawing frames (${markers} markers)`);
       assert.equal(lines.at(-1), "walkthrough: no frame drawn after step 1's screenshot reached the recording, so the video can show its page as the screenshot saw it");
     });
@@ -437,9 +449,9 @@ describe("a walkthrough's screenshot ends its hold at a frame the recording has"
       );
       assert.ok(refused, 'the page refuses an image from a data: URL');
       const lines: string[] = [];
-      const held = await screenshotStep(page, still, stepScreenshots(STEP, path.join(dir, 'shots'), quiet), recording, STEP.steps[0], (m) => lines.push(m));
-      assert.deepEqual(lines, [], 'it says nothing of a hold that ends at a frame of the recording');
-      assert.equal(recording.firstFrom(held.to), held.to, 'the hold ends at a frame the recording has');
+      const shown = await screenshotStep(page, bare, stepScreenshots(STEP, path.join(dir, 'shots'), quiet), recording, STEP.steps[0], (m) => lines.push(m));
+      assert.deepEqual(lines, [], 'it says nothing of a stretch that ends at a frame of the recording');
+      assert.equal(recording.firstFrom(shown.to), shown.to, 'the stretch ends at a frame the recording has');
     } finally {
       await page.close();
       cleanup();
@@ -447,10 +459,10 @@ describe("a walkthrough's screenshot ends its hold at a frame the recording has"
   });
 });
 
-describe('a frame marker on a page of its own', { skip }, () => {
+describe('a still and its marker on a page of their own', { skip }, () => {
   const STEP = parseDemoScript('# Demo: Still\n\n**Start:** `/`\n\n## Steps\n\n1. **The page shows**\n   _Prove:_ it shows — `visible #app`\n');
 
-  test('the marker resolves null on a page that cannot take it, and the hold still ends', async () => {
+  test('the marker resolves null on a page that cannot take it, and the stretch a still can show still ends', async () => {
     const { dir, cleanup } = scratchDir();
     const page = await browser!.newPage({ viewport: VIEWPORT });
     try {
@@ -460,7 +472,38 @@ describe('a frame marker on a page of its own', { skip }, () => {
       const recording: RecordingFrames = { start: () => 0, firstFrom: (wall) => wall + 1 };
       const bare = { settle: async () => {}, close: async () => {} };
       const shown = await screenshotStep(page, bare, stepScreenshots(STEP, path.join(dir, 'shots'), quiet), recording, STEP.steps[0], quiet);
-      assert.ok(shown.from < shown.to, 'the hold ends at a frame the recording has');
+      assert.ok(shown.from < shown.to, 'the stretch ends at a frame the recording has');
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test("a still waits on the page's own animations, and not on the engine's pointer, caption or card", async () => {
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage({ viewport: VIEWPORT });
+    try {
+      await page.setContent(
+        '<body style="margin:0;background:#fff"><main id="app">app</main><div class="__ss_ripple__">.</div><div id="__ss_pointer__">.</div>' +
+          '<div id="__ss_caption__"><span>caption</span></div><div id="__ss_card__">card</div></body>',
+      );
+      await page.evaluate(() => {
+        // Each animation runs ten seconds, past the longest a still waits, and is named for its element.
+        const w = window as unknown as { __waited: string[] };
+        w.__waited = [];
+        const finished = Object.getOwnPropertyDescriptor(Animation.prototype, 'finished') as PropertyDescriptor;
+        Object.defineProperty(Animation.prototype, 'finished', {
+          get(this: Animation) {
+            w.__waited.push(this.id);
+            return finished.get?.call(this);
+          },
+        });
+        for (const [selector, id] of [['#app', 'app'], ['.__ss_ripple__', 'ripple'], ['#__ss_pointer__', 'pointer'], ['#__ss_caption__ span', 'caption'], ['#__ss_card__', 'card']]) {
+          (document.querySelector(selector) as Element).animate([{ opacity: 1 }, { opacity: 0.5 }], 10_000).id = id;
+        }
+      });
+      await stepScreenshots(STEP, path.join(dir, 'shots'), quiet).take(page, STEP.steps[0]);
+      assert.deepEqual(await page.evaluate(() => (window as unknown as { __waited: string[] }).__waited), ['app']);
     } finally {
       await page.close();
       cleanup();

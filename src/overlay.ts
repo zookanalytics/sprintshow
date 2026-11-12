@@ -17,8 +17,8 @@ export const FG = '#e7e9ee';
 export const MUTED = '#9aa3b2';
 export const FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 
-/** The style that leaves this module's chrome, the caption bar and a card, out of a screenshot taken in the page it is drawn in. */
-export const OVERLAY_STILL_CSS = '#__ss_caption__,#__ss_card__{visibility:hidden!important}';
+/** The elements this module draws in a page: the caption bar and a card. */
+export const OVERLAY_CHROME = '#__ss_caption__,#__ss_card__';
 
 /** HTML-escape text bound for `innerHTML` / `setContent`. */
 export function esc(s: string): string {

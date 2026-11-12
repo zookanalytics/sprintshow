@@ -29,18 +29,18 @@
 // it. Each is the area a screenshot takes by default: a page script's viewport, or a
 // terminal script's window. A video's driver takes them in the page it films, where the
 // engine draws its caption, cards, pointer and terminal backdrop, so a still is taken
-// with a style that leaves those out. A still first waits for the animations running in
-// the page to end, so it shows the state they settle in, and a walkthrough's video holds
-// still while it is taken.
+// with a style that leaves those out. A still first waits for the page's own animations
+// to end, so it shows the state they settle in. A walkthrough cuts the stretch in which a
+// still is taken from its video (walkthrough.ts).
 
 import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
 import { parseDemoScript, slugify, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
-import { runStep, openSurface, contextOptions, ACTION_TIMEOUT, POINTER_STILL_CSS } from './browser.ts';
+import { runStep, openSurface, contextOptions, ACTION_TIMEOUT, POINTER_CHROME } from './browser.ts';
 import { expandToSession, TERMINAL_WINDOW, TERMINAL_STILL_CSS } from './terminal.ts';
-import { OVERLAY_STILL_CSS } from './overlay.ts';
+import { OVERLAY_CHROME } from './overlay.ts';
 
 /**
  * Chromium rasterizes a capture in square tiles, each laid two device pixels short of its
@@ -271,10 +271,13 @@ async function driveSteps<T>(opts: DriveOptions, start: ViewportSize, each: ((st
   }
 }
 
-/** The style a still is taken with, which leaves out what the engine draws in the page a video is filmed in. */
-const STILL_STYLE = OVERLAY_STILL_CSS + POINTER_STILL_CSS + TERMINAL_STILL_CSS;
+/** The elements the engine draws in the page a video is filmed in, which a still leaves out. */
+const CHROME = `${OVERLAY_CHROME},${POINTER_CHROME}`;
 
-/** The longest a still waits for the animations running in its page to end. */
+/** The style a still is taken with: it hides the engine's chrome, and lays a terminal's backdrop page out as a still's. */
+const STILL_STYLE = `${CHROME}{visibility:hidden!important}${TERMINAL_STILL_CSS}`;
+
+/** The longest a still waits for the page's own animations to end. */
 const ANIMATION_WAIT_MS = 1000;
 
 /** The longest a step's caption runs in its screenshot's name. */
@@ -321,21 +324,24 @@ export function checkScreenshotDir(dir: string, writes: string[] = []): void {
  * Save what `page` shows now as the PNG `file`, the area a screenshot of `demo` takes by
  * default: a page script's viewport, or a terminal script's window with its corners
  * transparent. Nothing the engine draws in the page shows in it. It waits first for the
- * animations running in the page to end, for up to ANIMATION_WAIT_MS. Given `quietMs`, it
- * then waits for the browser to draw the state they end in, and for `quietMs` more.
- * Resolves with the wall-clock time in ms at which it began the capture: until then, the
- * page shows nothing the capture changes.
+ * page's own animations to end, for up to ANIMATION_WAIT_MS, and not for the engine's,
+ * which the still leaves out. Given `quietMs`, it then waits for the browser to draw the
+ * state they end in, and for `quietMs` more. Resolves with the wall-clock time in ms at
+ * which it began the capture: until then, the page shows nothing the capture changes.
  */
 async function saveStill(page: Page, demo: Demo, file: string, quietMs = 0): Promise<number> {
   await page
     .evaluate(
-      async ({ ms, drawn }) => {
-        const ending = document.getAnimations().filter((a) => a.playState === 'running' && Number.isFinite(Number(a.effect?.getComputedTiming().endTime)));
+      async ({ ms, drawn, chrome }) => {
+        const ending = document.getAnimations().filter((a) => {
+          const target = (a.effect as KeyframeEffect | null)?.target;
+          return a.playState === 'running' && Number.isFinite(Number(a.effect?.getComputedTiming().endTime)) && !target?.closest(chrome);
+        });
         await Promise.race([Promise.allSettled(ending.map((a) => a.finished)), new Promise((resolve) => setTimeout(resolve, ms))]);
         // The second animation frame begins once the browser has drawn the first.
         if (drawn) await Promise.race([new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))), new Promise((resolve) => setTimeout(resolve, ms))]);
       },
-      { ms: ANIMATION_WAIT_MS, drawn: quietMs > 0 },
+      { ms: ANIMATION_WAIT_MS, drawn: quietMs > 0, chrome: CHROME },
     )
     .catch(() => {});
   if (quietMs > 0) await page.waitForTimeout(quietMs);
@@ -349,9 +355,9 @@ async function saveStill(page: Page, demo: Demo, file: string, quietMs = 0): Pro
 /** What saves a capture's screenshots, and the ones it has saved. */
 export interface StepScreenshots {
   /**
-   * Save what `page` shows now as the screenshot of `step`, once its animations have ended
-   * and, given `quietMs`, once the browser has drawn their end and `quietMs` more has
-   * passed. Resolves with the wall-clock time in ms at which it began the capture: until
+   * Save what `page` shows now as the screenshot of `step`, once the page's own animations
+   * have ended and, given `quietMs`, once the browser has drawn their end and `quietMs` more
+   * has passed. Resolves with the wall-clock time in ms at which it began the capture: until
    * then, the page shows nothing the capture changes.
    */
   take(page: Page, step: DemoStep, quietMs?: number): Promise<number>;
