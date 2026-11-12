@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// The `sprintshow` command: run / screenshot / assemble / lint. Thin — it parses flags and
-// calls the library, which is where the behaviour lives.
+// The `sprintshow` command: run / screenshot / simulator / golden / assemble / lint. Thin —
+// it parses flags and calls the library, which is where the behaviour lives.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
