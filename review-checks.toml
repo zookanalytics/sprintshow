@@ -4,14 +4,14 @@
 # triage reads; it is not a field here. The index is read from the commit under
 # review, so a branch is judged against the index it carries.
 #
-# sprintshow carries only the forced baseline, correctness and triage. It is a
-# developer library (the SprintShow demo-capture engine, published as
-# @zookanalytics/sprintshow): it has no operator-watched surface of its own, so
-# no demo check; no architecture docs, so no arch check; no product or user
-# surface, so no pm check. Declaring the baseline explicitly is a considered
-# choice — it keeps triage from reading a missing index as an omission. Add a
-# check here if sprintshow grows a watched surface, architecture docs, or
-# product goals.
+# sprintshow carries the forced baseline, correctness and triage, and the arch
+# check, which holds a change to the architecture docs/architecture.md
+# describes. It is a developer library (the SprintShow demo-capture engine,
+# published as @zookanalytics/sprintshow): it has no operator-watched surface of
+# its own, so no demo check, and no product or user surface, so no pm check.
+# Declaring the checks explicitly is a considered choice — it keeps triage from
+# reading a missing index as an omission. Add a check here if sprintshow grows a
+# watched surface or product goals.
 
 [checks.correctness]
 method = "formulas/mol-review.toml"
@@ -20,3 +20,7 @@ purpose = "Is the change correct and safe as merged?"
 [checks.triage]
 method = "skills/review-triage/SKILL.md"
 purpose = "Which specialist checks does this diff warrant?"
+
+[checks.arch]
+method = "skills/review-arch/SKILL.md"
+purpose = "Does the change fit the architecture, and is any architecture change justified and documented in the same PR?"
