@@ -178,6 +178,11 @@ const PAGE_WALK = `# Demo: Screenshots of a walkthrough
 /** A second page, in a colour of its own, which a step moves to and so leaves its caption behind. */
 const NEXT_HTML = '<!doctype html><body style="margin:0;background:#9cc"><main id="next" style="height:100vh"></main></body>';
 
+/**
+ * A walkthrough whose first step moves to the second page. The step waits before it moves,
+ * so its caption shows on the first page for some ten frames: a step that moved at once
+ * could show it there for less than one, which a recording on a loaded host can miss.
+ */
 const MOVING_WALK = `# Demo: Screenshots of a walkthrough that moves to another page
 
 **Start:** \`/\`
@@ -185,6 +190,7 @@ const MOVING_WALK = `# Demo: Screenshots of a walkthrough that moves to another 
 ## Steps
 
 1. **The page moves on**
+   \`wait 400\`
    \`goto /next.html\`
    _Prove:_ the next page shows — \`visible #next\`
 
