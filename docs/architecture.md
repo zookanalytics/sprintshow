@@ -67,7 +67,7 @@ when asked.
 | Xcode and the iOS Simulator | Build the app and its UI tests, create, set up, record and delete each simulator device, run the tests on it, and hand back their results and the screenshots they attached. |
 | Golden images, in the consuming repository | A committed directory of PNGs: the references a run is compared with. |
 | Chromium, through Playwright | Shows every page, the engine's terminal page included, records the walkthrough and takes every screenshot of a page or a terminal. |
-| ffmpeg | Encodes, mixes and muxes every video. |
+| ffmpeg | Encodes, mixes and muxes every video except a simulator pass's, which Xcode and the iOS Simulator record. |
 | OpenAI's speech API | Voices each caption when `OPENAI_API_KEY` is set. |
 | Vercel's Deployment Protection | Stands in front of a protected deployment, and lets the engine through with the key in `VERCEL_AUTOMATION_BYPASS_SECRET`. |
 | git and git-LFS | Tell the linter whether a committed MP4 would be stored in LFS. |
