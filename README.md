@@ -1,8 +1,10 @@
 # sprintshow
 
 Give an AI agent a way to *show* the work it just did. At the end of a unit of work,
-`sprintshow` turns a short markdown script into a quick, **unpolished** demo video — the
-agent equivalent of a sprint demo or demo day, not glossy marketing or a social clip.
+`sprintshow` turns a short markdown script into a quick, **unpolished** demo video, a
+screenshot of each step, or both — the agent equivalent of a sprint demo or demo day, not
+glossy marketing or a social clip. It is the automated user: told what to do and what each
+step must show, it drives the app and sends back a record of the work.
 
 Over [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp), which drives a
 browser, `sprintshow` adds the produced-video layer: a demo-script DSL and linter,
@@ -14,6 +16,9 @@ npx @zookanalytics/sprintshow run demos/sample.md --serve-dir examples/sample-ap
 
 # the same for a command-line session, full-screen program included
 npx @zookanalytics/sprintshow run demos/terminal.md --cwd examples/sample-cli
+
+# a PNG of each step beside the video, or alone with --no-video
+npx @zookanalytics/sprintshow run demos/sample.md --serve-dir examples/sample-app --screenshots shots
 ```
 
 ## What it does
@@ -29,9 +34,13 @@ One script drives each capture:
 - **walkthrough** (the `run` default) — one continuous recorded take, driven at a human
   pace with a synthetic cursor and live on-screen captions. The watchable,
   library/marketing cut.
-- **proof** (`run --mode proof`) — one screenshot per step, each with its assertion checked
+- **proof** (`run --mode proof`) — one frame per step, each with its assertion checked
   and its caption burned in. Deterministic and frame-exact; the shape an agent produces when
   it drives the browser itself.
+- **screenshots** (`run --screenshots <dir>`) — a PNG of the state each step leaves, beside
+  either video, or alone with `--no-video`. Each shows the app alone, with no caption, card
+  or pointer, and taking them leaves no trace in a walkthrough's video (see
+  [Screenshots of each step](#screenshots-of-each-step)).
 - **screenshot** (`sprintshow screenshot`) — the steps run and each proof is checked as in
   proof mode, and the state the last step leaves is saved as one PNG. It draws no caption
   and needs neither ffmpeg nor a narration key.
@@ -82,12 +91,46 @@ command binds.
 
 The MP4 lands at `demos/<script-name>.mp4` by default (`-o` to override). Useful flags:
 `--no-narrate`, `--music <file.mp3>` (a background bed under the narration), `--keep` (keep
-the `.captures/<run>/` working dir), `--headed`.
+the `.captures/<run>/` working dir), `--headed`, and `--screenshots <dir>` (a PNG of each
+step, [below](#screenshots-of-each-step)).
 
 **Narration is optional.** With `OPENAI_API_KEY` set, each step is voiced (`tts-1`/`nova`;
 override with `DEMO_TTS_MODEL` / `DEMO_TTS_VOICE`) and mixed in. Without a key — or on any
 synthesis failure — the video is **silent and captioned**. Narration is best-effort and
 can never break the video.
+
+### Screenshots of each step
+
+`--screenshots <dir>` saves a PNG of the state each step leaves into `<dir>`, beside the
+video. The directory must be new or empty, so once the run is done it holds that run's
+screenshots and nothing else. `--no-video` makes no video, so the run returns the
+screenshots alone. It takes none of the video's options: `-o`, `--mode`, `--music`,
+`--no-narrate`, `--keep` and `--headed` are refused with it.
+
+```bash
+# the walkthrough, and a PNG of each step
+sprintshow run demos/sample.md --serve-dir examples/sample-app --screenshots shots
+
+# the proof video, and a PNG of each step
+sprintshow run demos/terminal.md --cwd examples/sample-cli --mode proof --screenshots shots
+
+# the PNGs alone
+sprintshow run demos/sample.md --serve-dir examples/sample-app --screenshots shots --no-video
+```
+
+Each PNG is named for its step: its number, padded so the names sort in step order, and
+its caption as a slug of at most 48 characters, cut at a word, such as
+`01-the-board-boots-empty.png`. It is taken once the step's proof is checked and the
+animations running in the page have ended, for up to a second. It shows the app alone, as
+`sprintshow screenshot` saves it by default: a page script's viewport at the device's scale
+factor, or a terminal script's window with its corners transparent, with no caption, card
+or pointer drawn on it. A walkthrough takes each in the page it films, and its video holds
+still on the step's last frame while it does, so the video shows no trace of it. A step
+whose proof fails still gets its PNG, which shows what failed, and a run that saves no
+output keeps none of them.
+
+sprintshow compares no screenshot with another: keeping reference images and comparing a
+run's screenshots with them is the consumer's work.
 
 ### An app behind Vercel's sign-in
 
@@ -234,9 +277,10 @@ A matcher is as in a page script's `text` assertion, and a `/regex/` is tested w
 `m` flag, so `^` and `$` match at each row's start and end.
 
 **Captures.** `sprintshow screenshot` saves the terminal window, title bar included, with
-its rounded corners transparent. `--full-page` captures the whole session instead of the
-screen: one row for each line it holds, scrollback included. A session longer than one
-capture holds keeps its last lines (see [Capture a screenshot](#capture-a-screenshot)).
+its rounded corners transparent, and so does each step's PNG of a run with `--screenshots`.
+`--full-page` captures the whole session instead of the screen: one row for each line it
+holds, scrollback included. A session longer than one capture holds keeps its last lines
+(see [Capture a screenshot](#capture-a-screenshot)).
 `--selector` is for page scripts. The videos show the window on a dark backdrop, above the
 caption bar. Every capture draws the window at the largest font size, up to 24 px, at which
 it fits a video frame above the caption bar, so a very wide or tall terminal draws small.
@@ -248,9 +292,9 @@ that ignores SIGHUP is killed.
 
 The exit code of `run` and `screenshot` says what was saved:
 
-- **0**: the output (the MP4 or the PNG) is saved and every step's proof held.
-- **3**: the output is saved, but at least one step's proof failed. The output still shows
-  what failed, and `run` keeps its `.captures/<run>/` working dir.
+- **0**: the outputs (the MP4, the PNGs, or both) are saved and every step's proof held.
+- **3**: the outputs are saved, but at least one step's proof failed. They still show what
+  failed, and a `run` that made a video keeps its `.captures/<run>/` working dir.
 - **1**: no output is saved.
 
 ## Demo-script format
@@ -367,7 +411,10 @@ const result = await captureProof({
 
 `captureScreenshot` takes the same kind of page and saves one PNG in place of the MP4.
 `runDemo` and `runScreenshot` bring up the server and the browser themselves, as the CLI
-does. A script that names a device needs a page made as that device: make its context with
+does. Given `screenshotDir`, `runDemo` and each video driver also save a PNG of each step,
+listed in the result's `screenshots`, and `runDemo` given `noVideo` as well makes no video,
+so its result's `outputPath` is null. `captureScreenshots` saves a PNG of each step from a
+page you have prepared, with no video. A script that names a device needs a page made as that device: make its context with
 `contextOptions(demo)`, as they do. The drivers set the page's viewport to the one the
 script starts at, and the rest of the device is the context's. A custom driver that runs its
 steps through `runStep` checks each proof as the built-in captures do. For a terminal
