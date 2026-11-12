@@ -1,6 +1,6 @@
 ---
 name: sprintshow architecture
-description: What the sprintshow demo-capture engine is for, the systems it meets, the domains it is made of, the rules and decisions they share, and where what is built falls short. Read it to place a change, or to tell whether a change moves the architecture.
+description: What the sprintshow demo-capture engine is for, the systems it meets, the domains it is made of, the rules and decisions they share, and where the repository has chosen to diverge from that design. Read it to place a change, or to tell whether a change moves the architecture.
 ---
 
 # sprintshow architecture
@@ -61,7 +61,6 @@ leaves an MP4 or a PNG at a path for the caller to publish.
 | Vercel's Deployment Protection | Stands in front of a protected deployment, and lets the engine through with the key in `VERCEL_AUTOMATION_BYPASS_SECRET`. |
 | git and git-LFS | Tell the linter whether a committed MP4 would be stored in LFS. |
 | An agent that drives its own browser, such as through `@playwright/mcp` | Hands its frames and manifest to `sprintshow assemble`. sprintshow does not run it. |
-| gc-toolkit's demo check | Runs the command-line interface from a checkout of this repository, or from the published package, and learns which commands and script kinds the engine has from `sprintshow help`. |
 
 ## Domains
 
@@ -162,10 +161,8 @@ What a user runs, and the domains each draws on:
 
 ## Debt
 
-| Gap | Why a reader must know it | Retired by |
+Where the repository has chosen to diverge from the design above:
+
+| Divergence | Why a reader must know it | Retired by |
 |---|---|---|
 | The package is not on npm. | A consumer runs a checkout's `src/cli.ts`, and the README's `npx` and `npm install` lines fail. | Publishing the package, which needs the npm account owner's credentials (ss-rck). |
-| A terminal script's shell inherits `VERCEL_AUTOMATION_BYPASS_SECRET`. | A step that prints the environment films the key, against *A key is written nowhere*. | Withholding the key from the shell (ss-fj0y). |
-| The repository blocks no dependency's install script. | An npm that runs install scripts runs each dependency's at install, `ffmpeg-static`'s among them, against *Binaries are provisioned*. | Blocking install scripts, with ffmpeg fetched by its named script (ss-aq7h). |
-| A walkthrough whose setup throws leaves its browser open. | The command never exits, against *A capture ends what it started*. | Closing what the walkthrough opened on any throw (ss-f8qx). |
-| A narration clip that ffmpeg cannot decode fails the capture. | The run saves no video, against *The silent video is the contract*. | Treating a clip that does not decode as a failed synthesis (ss-vfg0). |
