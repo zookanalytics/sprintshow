@@ -8,7 +8,10 @@ description: What the sprintshow demo-capture engine is for, the systems it meet
 sprintshow is a demo-capture engine, packaged as `@zookanalytics/sprintshow` with a
 command-line interface and a library. A markdown demo script drives an app in a browser
 or a shell in a terminal, and the engine turns the run into a video or a screenshot, with
-each step's claim checked against the screen.
+each step's claim checked against the screen. An iOS app's own UI tests drive it on
+throwaway iOS Simulator devices, and the engine keeps the screenshots they attach. Any
+capture's screenshots can be kept as golden images, which a later capture is compared
+with.
 
 ## Scope
 
@@ -29,33 +32,41 @@ the living docs that hold them:
 ## Purpose and quality goals
 
 sprintshow gives an AI agent a way to show a person the work it just did, in a quick,
-unpolished demo like a team's sprint demo. One script drives each kind of capture: a
-walkthrough video, a proof video of one frame per step, or a screenshot.
+unpolished demo like a team's sprint demo, and to tell when an app's screens change. One
+script drives each kind of capture of a page or a terminal: a walkthrough video, a proof
+video of one frame per step, or a screenshot of the last step or of each. An iOS capture
+is the screenshots an app's UI tests attach, in light and in dark.
 
 The quality goals, in rank order:
 
 1. **Truthful.** A capture shows what the app or the shell did. Each step's proof is
-   checked against the live page or terminal, and a failed proof is reported, never
-   hidden.
-2. **Unattended.** An agent runs a capture with no person present, on a macOS or Linux
-   host and beside other captures. The run asks nothing, leaves nothing running, and
-   either saves its output or says what stopped it.
+   checked against the live page or terminal, an iOS app's UI tests make their own
+   checks, and a failed check is reported, never hidden. Two captures of an app that has
+   not changed, made on one host, match as golden images.
+2. **Unattended.** An agent runs a capture with no person present, beside other captures,
+   on a macOS or Linux host, or on macOS with Xcode for an iOS app. The run asks nothing,
+   leaves nothing running, and either saves its output or says what stopped it.
 3. **Legible.** A person who has not read the script can follow the demo. Each step has
    a caption, the walkthrough moves at a human pace, and narration voices the captions
    when a speech key is set.
 
 ## Context
 
-The boundary is the capture. sprintshow takes a demo script and an app or a shell, and
-leaves an MP4 or a PNG at a path for the caller to publish.
+The boundary is the capture and its comparison. sprintshow takes a demo script and an app
+or a shell, or an iOS app and its UI tests, and leaves an MP4 or PNGs at a path for the
+caller to publish. It compares a run's PNGs with golden images, and rewrites them only
+when asked.
 
 | Who or what | Its role |
 |---|---|
-| An agent or a developer | Writes the script, runs a command or calls the library, and reads the log and the exit code. |
-| A person watching, such as a pull request's reviewer | Watches the MP4 or looks at the PNG wherever the caller puts it. |
+| An agent or a developer | Writes the script or an iOS app's UI tests, runs a command or calls the library, and reads the log and the exit code. |
+| A person watching, such as a pull request's reviewer | Watches the MP4 or looks at the PNGs wherever the caller puts them. |
 | The app under demo | Answers over HTTP at an origin: a server already running, a dev-server command sprintshow starts and stops, or a static directory sprintshow serves. |
 | bash, and the programs a terminal script runs | Run on the host in a pseudo-terminal, in the directory the caller names. |
-| Chromium, through Playwright | Shows every page, the engine's terminal page included, records the walkthrough and takes every screenshot. |
+| An iOS app and its UI tests, in the consuming repository | Built from its Xcode project or workspace, or handed over as a build already made. The tests drive the app and attach a screenshot where each step ends. |
+| Xcode and the iOS Simulator | Build the app and its UI tests, create, set up, record and delete each simulator device, run the tests on it, and hand back their results and the screenshots they attached. |
+| Golden images, in the consuming repository | A committed directory of PNGs: the references a run is compared with. |
+| Chromium, through Playwright | Shows every page, the engine's terminal page included, records the walkthrough and takes every screenshot of a page or a terminal. |
 | ffmpeg | Encodes, mixes and muxes every video. |
 | OpenAI's speech API | Voices each caption when `OPENAI_API_KEY` is set. |
 | Vercel's Deployment Protection | Stands in front of a protected deployment, and lets the engine through with the key in `VERCEL_AUTOMATION_BYPASS_SECRET`. |
@@ -72,11 +83,13 @@ leaves an MP4 or a PNG at a path for the caller to publish.
 | Page ([browser.ts](../src/browser.ts), [vercel.ts](../src/vercel.ts)) | Open a page script's app in Chromium as the script's device, past Vercel's sign-in when the app is behind it. | The browser context: its device, its viewport, and the cookie that passes Vercel's sign-in. | Send the bypass key beyond the app's origin. |
 | [Terminal session](../src/terminal.ts) | Run a terminal script's bash in a pseudo-terminal, shown by xterm.js in the capture's page. | The shell and its jobs, the screen and its scrollback, and the last command's exit status. | Interpret the shell's output itself: xterm.js reads every escape sequence. |
 | Step proof ([browser.ts](../src/browser.ts), [keyboard.ts](../src/keyboard.ts)) | Run one step's actions on the page or the terminal, then check its proof. | Each step's result: its proof held, failed with a reason, or was manual. | End the capture: an action that does not settle is logged, and the proof decides the step. |
-| Capture ([walkthrough.ts](../src/walkthrough.ts), [capture.ts](../src/capture.ts), [screenshot.ts](../src/screenshot.ts), [overlay.ts](../src/overlay.ts)) | Turn a script's steps into a recorded take, a frame per step, or one PNG, and draw a video's captions, cards and pointer. | A run's working directory: its frames or its recording, and when each step shows. | Judge a step: each step's result comes from Step proof. |
+| Capture ([walkthrough.ts](../src/walkthrough.ts), [capture.ts](../src/capture.ts), [screenshot.ts](../src/screenshot.ts), [overlay.ts](../src/overlay.ts)) | Turn a script's steps into a recorded take, a frame per step, or a PNG of the last step or of each, and draw a video's captions, cards and pointer. | A run's working directory: its frames or its recording, and when each step shows. | Judge a step: each step's result comes from Step proof. |
 | Video ([assemble.ts](../src/assemble.ts), [ffmpeg.ts](../src/ffmpeg.ts)) | Encode frames or a recording into an MP4, and lay narration and a music bed under it. | The frames manifest, the narration track and the audio mix. | Need the app or a browser: it works from files on disk. |
-| Samples ([demos/](../demos/), [sample-app](../examples/sample-app/), [sample-cli](../examples/sample-cli/)) | Give a capture something to drive with no app of one's own. | The sample scripts, and the sample app and terminal program they drive. | Need anything the package does not ship. |
+| [iOS capture](../src/simulator.ts) | Run an iOS app's UI tests on a throwaway simulator device for each appearance, light then dark, and save each screenshot they attach. | Each pass's device, from its creation to its deletion, and a run's working directory: its build, its result bundles and its test logs. | Drive the app or judge a test: the app's UI tests do both. |
+| [Golden images](../src/golden.ts) | Compare a run with its golden images, draw a diff image of each difference, and rewrite the golden images from a run. | Each image's verdict against its golden image, and the diff images in a run's `golden-diff/`. | Depend on what made a run: any directory of PNGs compares the same way. |
+| Samples ([demos/](../demos/), [sample-app](../examples/sample-app/), [sample-cli](../examples/sample-cli/), [sample-ios](../examples/sample-ios/)) | Give a capture something to drive with no app of one's own. | The sample scripts and the sample app and terminal program they drive, and the sample iOS app with its UI test. | Need anything the package does not ship. |
 
-How the domains meet in a capture:
+How the domains meet in a capture and in a comparison:
 
 ```mermaid
 flowchart LR
@@ -89,6 +102,8 @@ flowchart LR
   proof -->|acts on and reads| page
   proof -->|acts on and reads| term
   capture -->|frames or recording| video[Video]
+  capture -->|a run of PNGs| golden[Golden images]
+  ios[iOS capture] -->|a run of PNGs| golden
 ```
 
 ### Product verticals
@@ -100,6 +115,9 @@ What a user runs, and the domains each draws on:
 | `sprintshow run` | A walkthrough: one continuous take at a human pace, with live captions and a pointer. | Demo script, App origin and Page or Terminal session, Step proof, Capture, Video |
 | `sprintshow run --mode proof` | A proof video: one captioned frame per step. | Demo script, App origin and Page or Terminal session, Step proof, Capture, Video |
 | `sprintshow screenshot` | One PNG of the state the last step leaves, with nothing of the engine's drawn on it. | Demo script, App origin and Page or Terminal session, Step proof, Capture |
+| `sprintshow screenshot --each-step` | A PNG of the state each step leaves, named in step order: a run to keep as golden images. | Demo script, App origin and Page or Terminal session, Step proof, Capture, Golden images |
+| `sprintshow simulator` | A PNG of each screenshot an iOS app's UI tests attach, in light and in dark, and a video of each pass when asked. | iOS capture, Golden images |
+| `sprintshow golden` | A run compared with its golden images, with a diff image of each difference, or the golden images rewritten from the run. | Golden images |
 | `sprintshow assemble` | An MP4 from the frames and manifest of an agent's own capture. | Video |
 | `sprintshow lint` | A script's findings, before a capture. | Demo script, Lint findings |
 | The library | Each command's driver and the parts under it, for a caller that prepares its own page or drives its own steps. | Every domain but Samples |
@@ -109,27 +127,39 @@ What a user runs, and the domains each draws on:
 - **One reading of a script.** Every part that reads a demo script reads it through the
   parser in Demo script, so the linter, each capture and a library caller see the same
   steps.
-- **One step runner.** Every capture, a library caller's own driver included, runs its
-  steps through Step proof, so a proof means the same thing in a video and in a
-  screenshot.
-- **A failed proof shows and never stops a capture.** It is counted and logged, a video
-  draws it on the step's caption, and the output is still saved. The exit code of `run`
-  and `screenshot` says whether the output was saved and whether every proof held
+- **One step runner.** Every capture of a demo script, a library caller's own driver
+  included, runs its steps through Step proof, so a proof means the same thing in a video
+  and in a screenshot.
+- **A failed check shows and never stops a capture.** A failed proof or UI test is
+  counted and logged, a video draws a failed proof on the step's caption, and the output
+  is still saved. The exit code of `run`, `screenshot` and `simulator` says whether the
+  output was saved and whether every check held, and `golden` exits 3, as they do on a
+  failed check, when a run differs from its golden images
   ([exit codes](../README.md#exit-codes)).
-- **The silent video is the contract.** Narration and the music bed are laid over a
-  finished silent video, and a failure in either keeps the silent video.
+- **An add-on never costs the output.** Narration and the music bed are laid over a
+  finished silent video, and a simulator pass's video is recorded beside its
+  screenshots. A failure in an add-on keeps the output it adds to.
 - **A key is written nowhere.** The engine reads a key from the environment, never from a
   flag, sends it only to the service it is for, and writes it to no log, caption,
   narration, URL, file or error. A key only the engine uses, such as the Vercel bypass
   key, stays out of a terminal script's shell.
 - **A capture ends what it started.** It stops the dev server it spawned, closes the
-  browser it launched, and ends the shell with every job the shell runs.
-- **Captures share a host.** A run's static-server port, its working directory under
-  `.captures/` and its temporary files are its own, so captures run side by side.
+  browser it launched, ends the shell with every job the shell runs, and deletes each
+  simulator device it created, also when a signal such as Ctrl-C ends the run.
+- **Captures share a host.** A run's static-server port, its simulator devices, its
+  working directory under `.captures/` and its temporary files are its own, so captures
+  run side by side.
+- **A run of PNGs has a directory of its own.** A capture that saves several PNGs writes
+  them into a new or empty directory, and a capture that errors leaves that directory
+  empty, so a directory Golden images reads holds one whole run.
+- **Image names differ in more than letter case.** No capture names two images of one
+  run alike but for letter case, and an update refuses a run that holds two such
+  images, on every host. A Mac's default volume takes such names for one file, so a run
+  or a golden directory made on Linux checks out whole on a Mac.
 - **Binaries are provisioned.** A binary the engine needs, such as Chromium or ffmpeg,
   comes from a named npm script (`provision:browser`, `provision:ffmpeg`) or from the
-  host, never from a dependency's install script. A part that finds one missing fails
-  with the command that fetches it.
+  host, such as Xcode, never from a dependency's install script. A part that finds one
+  missing fails with the command that fetches it, or with what the host must install.
 - **Behavior lives in the library.** The command-line interface parses flags and calls
   the library's exports, so a library caller can do whatever a command does.
 - **The source runs as written.** Every source file is TypeScript that Node 22.18 or
@@ -146,8 +176,10 @@ What a user runs, and the domains each draws on:
   lines.
 - A script drives one surface, set by its header: an app's page (`**Start:**`) or a
   terminal (`**Terminal:**`). It reads only that surface's actions and assertions.
-- Playwright drives Chromium for every capture, and a device a script names is one from
-  Playwright's registry.
+- Playwright drives Chromium for every capture of a page or a terminal, and a device a
+  script names is one from Playwright's registry.
+- An iOS app's own UI tests drive its capture, never a demo script. `simctl` has no way
+  to tap, type or wait on the screen.
 - The engine draws its captions, cards, pointer and terminal as DOM in the page, and
   ffmpeg draws no text. Text drawn in the page stays sharp at any scale.
 - The terminal is the engine's own: xterm.js in a page the engine writes, on bash in a
@@ -158,6 +190,7 @@ What a user runs, and the domains each draws on:
   environment.
 - The proof video and an agent that drives its own browser share one hand-off: frames and
   a `manifest.json`, which `assemble` encodes.
+- A run and its golden images are each a directory of PNGs, matched by file name.
 
 ## Debt
 
