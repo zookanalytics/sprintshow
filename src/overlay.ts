@@ -1,7 +1,7 @@
 // On-screen chrome rendered inside the page: the step caption bar and the cover /
 // scrutiny cards. Rendering in the DOM (not with ffmpeg `drawtext`) keeps text crisp in
 // the app's own font and lets the walkthrough path show live, animated captions. A
-// marker, a transparent pixel, makes the browser draw a frame that shows nothing new.
+// marker, a no-break space, makes the browser draw a frame that shows nothing new.
 //
 // The still-frame path injects a caption, screenshots, and removes it; the walkthrough
 // path leaves the caption up and updates it in place, and shows the cards as full-screen
@@ -140,8 +140,6 @@ async function shownAt(page: Page, id: string): Promise<number | null> {
     .catch(() => null);
 }
 
-/** A transparent pixel, which a frame can show without showing anything new. */
-const MARKER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 let marks = 0;
 
 /**
@@ -149,22 +147,23 @@ let marks = 0;
  * place of the last, marked for the page's Element Timing. Resolves with the wall-clock
  * time in ms of the frame in which the browser first showed it, or null when the browser
  * reports none within SHOWN_TIMEOUT_MS.
+ *
+ * The marker is text, a no-break space, which has no ink. A page's Content Security Policy
+ * can refuse an image, which then never shows, but it has no say over text. Element Timing
+ * reports no text drawn transparent, so the marker is drawn in an opaque colour, and in a
+ * font the system holds, which never waits for a web font to load.
  */
 export async function markFrame(page: Page): Promise<number | null> {
   const id = `__ss_mark_${++marks}`;
-  await page.evaluate(
-    ({ id, src }) => {
-      document.getElementById('__ss_mark__')?.remove();
-      const img = document.createElement('img');
-      img.id = '__ss_mark__';
-      img.alt = '';
-      img.setAttribute('elementtiming', id);
-      Object.assign(img.style, { position: 'fixed', left: '0', top: '0', width: '1px', height: '1px', zIndex: '2147483647', pointerEvents: 'none' });
-      img.src = src;
-      document.body.appendChild(img);
-    },
-    { id, src: MARKER },
-  );
+  await page.evaluate((id) => {
+    document.getElementById('__ss_mark__')?.remove();
+    const mark = document.createElement('span');
+    mark.id = '__ss_mark__';
+    mark.setAttribute('elementtiming', id);
+    mark.textContent = ' ';
+    Object.assign(mark.style, { position: 'fixed', left: '0', top: '0', font: '1px/1px sans-serif', color: '#000', zIndex: '2147483647', pointerEvents: 'none' });
+    document.body.appendChild(mark);
+  }, id);
   return shownAt(page, id);
 }
 

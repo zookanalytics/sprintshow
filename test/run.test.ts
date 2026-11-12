@@ -11,7 +11,8 @@
 // out as a still, a step that ends at once shows its caption before the video holds still
 // for its screenshot, and a step that moves to another page, leaving its caption behind,
 // gets no caption back. The hold ends at a frame drawn after the still that the recording
-// has, and frames are drawn until one reaches it. A run with no video needs a screenshot
+// has, and frames are drawn until one reaches it, on a page whose Content Security Policy
+// refuses an image from a data: URL as on any other. A run with no video needs a screenshot
 // directory and refuses the video's options, and a directory that holds files is refused
 // before anything is served. A run whose proof fails saves its screenshots and exits 3,
 // and one that saves nothing keeps none of them.
@@ -28,7 +29,7 @@ import type { Page } from 'playwright';
 
 import { parseDemoScript, type DemoStep } from '../src/demo-script.ts';
 import { runDemo } from '../src/run.ts';
-import { captureWalkthrough, heldSpans, screenshotStep, type RecordingFrames } from '../src/walkthrough.ts';
+import { captureWalkthrough, heldSpans, screenshotStep, watchRecording, type RecordingFrames } from '../src/walkthrough.ts';
 import { captureScreenshots, stepFileName, stepScreenshots } from '../src/screenshot.ts';
 import { ffmpegBin } from '../src/ffmpeg.ts';
 import { VIEWPORT } from '../src/browser.ts';
@@ -344,6 +345,35 @@ describe("a walkthrough's screenshot ends its hold at a frame the recording has"
       assert.ok(markers > 1, `it kept drawing frames (${markers} markers)`);
       assert.equal(lines.at(-1), "walkthrough: no frame drawn after step 1's screenshot reached the recording, so the video can show its page as the screenshot saw it");
     });
+  });
+
+  test("it ends at a frame the recording has on a page whose Content Security Policy refuses an image from a data: URL", { timeout: 90_000 }, async () => {
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage({ viewport: VIEWPORT });
+    try {
+      await page.route('http://own-images.test/', (r) =>
+        r.fulfill({ contentType: 'text/html', headers: { 'Content-Security-Policy': "img-src 'self'" }, body: '<body style="margin:0;background:#fff"><main id="app">app</main></body>' }),
+      );
+      const recording = await watchRecording(page);
+      await page.goto('http://own-images.test/');
+      const refused = await page.evaluate(
+        () =>
+          new Promise<boolean>((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve(false);
+            img.onerror = () => resolve(true);
+            img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+          }),
+      );
+      assert.ok(refused, 'the page refuses an image from a data: URL');
+      const lines: string[] = [];
+      const held = await screenshotStep(page, still, stepScreenshots(STEP, path.join(dir, 'shots'), quiet), recording, STEP.steps[0], (m) => lines.push(m));
+      assert.deepEqual(lines, [], 'it says nothing of a hold that ends at a frame of the recording');
+      assert.equal(recording.firstFrom(held.to), held.to, 'the hold ends at a frame the recording has');
+    } finally {
+      await page.close();
+      cleanup();
+    }
   });
 });
 
