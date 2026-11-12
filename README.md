@@ -284,9 +284,12 @@ add(attachment)
 ```
 
 Each PNG the tests attach is saved in the new or empty directory `-o` names, as
-`<name>.<appearance>.png`, such as `01-board.light.png` and `01-board.dark.png`. A name a
-pass already took gets `-2`, `-3` and so on. `examples/sample-ios` is an app whose UI test
-taps a task done and attaches a screenshot before and after.
+`<name>.<appearance>.png`, such as `01-board.light.png` and `01-board.dark.png`. A name the
+pass already took gets the first of `-2`, `-3` and so on that no screenshot of the pass is
+attached with, so a name a test gave, such as `board-2`, stays that screenshot's own.
+Letter case does not tell two names apart, because a Mac's default volume takes `Board`
+and `board` for one file. `examples/sample-ios` is an app whose UI test taps a task done
+and attaches a screenshot before and after.
 
 - **The app.** `--project` or `--workspace`, with `--scheme`, names the app to build:
   `xcodebuild build-for-testing` builds it and its UI tests for any simulator, without
@@ -317,7 +320,10 @@ taps a task done and attaches a screenshot before and after.
 A UI test that fails still has the screenshots it attached saved, and the log gives each
 failure with its message. A run that cannot build the app, run its tests, or find a
 screenshot they attached saves nothing and keeps its `.captures/` working dir, which holds
-`xcodebuild`'s logs. `--keep` keeps it after a run that saved its screenshots too.
+`xcodebuild`'s logs. So does a run whose `xcodebuild` fails the tests though the results
+count no failed test: something outside the tests failed, and the screenshots of the tests
+that passed may not be all of them. `--keep` keeps the working dir after a run that saved
+its screenshots too.
 `specs/ss-pqt8i/design.md` records why the UI tests drive the app.
 
 ## Golden images

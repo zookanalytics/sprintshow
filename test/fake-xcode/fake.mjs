@@ -6,12 +6,17 @@
 // {tool, args}, to $FAKE_XCODE_STATE/calls.jsonl. A test run on a device writes a result
 // bundle holding what the run would have produced. Exporting its attachments writes a 4x4
 // PNG for each screenshot, white in light and black in dark, so a test can tell which
-// appearance a screenshot was taken in.
+// appearance a screenshot was taken in. The red of its last pixel is the screenshot's
+// place among the ones the test attached, counting from 0, so a test can tell which
+// screenshot a file holds.
 //
 // These variables change what it does:
 //   FAKE_XCODE_SCREENSHOTS  a JSON array of the names the UI test attaches its screenshots
 //                           with (default ["01-board", "02-first-task-done"])
 //   FAKE_XCODE_FAIL         the appearance whose test run fails a test
+//   FAKE_XCODE_ABORT        the appearance whose test run fails outside the tests: its
+//                           test passes and the results count no failure, but xcodebuild
+//                           says the run failed and exits 65
 //   FAKE_XCODE_NO_RESULT    the appearance whose test run fails before any test runs
 //   FAKE_XCODE_HANG         the appearance whose test run waits until it is killed
 //   FAKE_XCODE_BUILD_FAIL   when set, the build fails
@@ -52,9 +57,11 @@ function fail(message, code = 1) {
   process.exit(code);
 }
 
-function png(rgba) {
+/** A 4x4 PNG of `rgba` whose last pixel's red is `place`. */
+function png(rgba, place) {
   const img = new PNG({ width: 4, height: 4 });
   for (let i = 0; i < img.data.length; i += 4) img.data.set(rgba, i);
+  img.data[img.data.length - 4] = place;
   return PNG.sync.write(img);
 }
 
@@ -142,7 +149,7 @@ function xcresulttool(args) {
     const attachments = [];
     run.names.forEach((name, i) => {
       const file = `${randomUUID().toUpperCase()}.png`;
-      writeFileSync(path.join(out, file), png(colour));
+      writeFileSync(path.join(out, file), png(colour, i));
       attachments.push({ exportedFileName: file, suggestedHumanReadableName: `${name}_0_${randomUUID().toUpperCase()}.png`, timestamp: 1000 + i, isAssociatedWithFailure: false, configurationName: 'Test Scheme Action', deviceName: 'fake', deviceId: run.udid });
     });
     // XCTest's own attachments, which are not screenshots, come along as well.
@@ -183,10 +190,12 @@ function xcodebuild(args) {
     const bundle = after(args, '-resultBundlePath');
     mkdirSync(bundle, { recursive: true });
     const failed = process.env.FAKE_XCODE_FAIL === appearance;
+    const aborted = process.env.FAKE_XCODE_ABORT === appearance;
     const names = JSON.parse(process.env.FAKE_XCODE_SCREENSHOTS ?? '["01-board", "02-first-task-done"]');
     writeFileSync(path.join(bundle, 'fake.json'), JSON.stringify({ udid, appearance, failed, names }));
-    console.log(failed ? '** TEST EXECUTE FAILED **' : '** TEST EXECUTE SUCCEEDED **');
-    process.exit(failed ? 65 : 0);
+    if (aborted) console.log('xcodebuild: error: The test runner stopped before the test run finished.');
+    console.log(failed || aborted ? '** TEST EXECUTE FAILED **' : '** TEST EXECUTE SUCCEEDED **');
+    process.exit(failed || aborted ? 65 : 0);
   }
   fail(`fake-xcode: xcodebuild ${args[0]} is not faked`, 64);
 }

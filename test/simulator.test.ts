@@ -6,9 +6,10 @@
 // once in light and once in dark, each pass on a device of its own: created on the newest
 // runtime that runs the named device type, booted, given a fixed status bar and the pass's
 // appearance, and deleted once the pass ends, however it ends. Each PNG the tests attach is
-// saved as <name>.<appearance>.png. A failed test still saves its screenshots and exits 3,
-// and a capture that cannot finish leaves the output directory empty and exits 1. A signal
-// that ends the process deletes the device first.
+// saved as <name>.<appearance>.png, under a name no other screenshot of the pass has in any
+// letter case. A failed test still saves its screenshots and exits 3. A capture that cannot
+// finish, as when xcodebuild fails the test run though no test failed, leaves the output
+// directory empty and exits 1. A signal that ends the process deletes the device first.
 
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,14 +18,14 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import path from 'node:path';
 import { PNG } from 'pngjs';
 
-import { attachmentName, captureSimulator, pickDevice, screenshotsOf, STATUS_BAR, type CaptureSimulatorOptions, type SimRuntime } from '../src/simulator.ts';
+import { APPEARANCES, attachmentName, captureSimulator, pickDevice, screenshotsOf, STATUS_BAR, type CaptureSimulatorOptions, type SimRuntime } from '../src/simulator.ts';
 import { scratchDir, runCli, REPO } from './browser-fixture.ts';
 
 const FAKE = path.join(REPO, 'test', 'fake-xcode');
 const quiet = (): void => {};
 
 /** Every FAKE_XCODE_ variable the stand-ins read, so one test's setting never reaches the next. */
-const FAKE_VARS = ['FAKE_XCODE_SCREENSHOTS', 'FAKE_XCODE_FAIL', 'FAKE_XCODE_NO_RESULT', 'FAKE_XCODE_HANG', 'FAKE_XCODE_BUILD_FAIL', 'FAKE_XCODE_NO_VIDEO'];
+const FAKE_VARS = ['FAKE_XCODE_SCREENSHOTS', 'FAKE_XCODE_FAIL', 'FAKE_XCODE_ABORT', 'FAKE_XCODE_NO_RESULT', 'FAKE_XCODE_HANG', 'FAKE_XCODE_BUILD_FAIL', 'FAKE_XCODE_NO_VIDEO'];
 
 before(() => {
   process.env.PATH = `${FAKE}${path.delimiter}${process.env.PATH}`;
@@ -84,6 +85,12 @@ function capture(f: Fixture, opts: Partial<CaptureSimulatorOptions> = {}, log: (
 function shade(file: string): string {
   const [r] = PNG.sync.read(readFileSync(file)).data;
   return r === 255 ? 'white' : r === 0 ? 'black' : `rgb ${r}`;
+}
+
+/** Which of the screenshots a test attached a PNG the stand-ins wrote holds: its place among them, from 0. */
+function place(file: string): number {
+  const { data } = PNG.sync.read(readFileSync(file));
+  return data[data.length - 4];
 }
 
 /** A call to `simctl <sub>`, or to xcodebuild's `<sub>` action, by the first word of its arguments. */
@@ -147,6 +154,20 @@ describe('attachment names', () => {
       { name: '02-detail', file: 'B.png', test: 'A/testOne()' },
       { name: '01-home-2', file: 'C.png', test: 'A/testTwo()' },
     ]);
+  });
+
+  test('a name given again takes a number no attachment of the pass is given, and letter case does not tell names apart', () => {
+    const named = (given: string[]): string[] =>
+      screenshotsOf([
+        {
+          testIdentifier: 'A/test()',
+          attachments: given.map((name, i) => ({ exportedFileName: `${i}.png`, suggestedHumanReadableName: `${name}_0_0A243A0A-11D2-4A88-8192-F41E9BF1D7F3.png`, timestamp: i })),
+        },
+      ]).map((s) => s.name);
+    assert.deepEqual(named(['board', 'board', 'board-2']), ['board', 'board-3', 'board-2'], 'a name the test gave stays its own');
+    assert.deepEqual(named(['board-2', 'board', 'board']), ['board-2', 'board', 'board-3']);
+    assert.deepEqual(named(['Board', 'board', 'BOARD-2']), ['Board', 'board-3', 'BOARD-2']);
+    assert.deepEqual(named(['a', 'a-2', 'a', 'a-2']), ['a', 'a-2', 'a-3', 'a-2-2']);
   });
 });
 
@@ -227,6 +248,23 @@ describe('captureSimulator, with stand-ins for Xcode', () => {
     assert.deepEqual(readdirSync(f.out).sort(), ['Done-now.dark.png', 'Done-now.light.png', 'board-2.dark.png', 'board-2.light.png', 'board.dark.png', 'board.light.png']);
   });
 
+  test('saves each screenshot in a file of its own when the names it was attached with meet a number or differ only in case', async (t) => {
+    const f = fixture(t, { FAKE_XCODE_SCREENSHOTS: JSON.stringify(['board', 'board', 'board-2', 'Board']) });
+    const res = await capture(f);
+    for (const appearance of APPEARANCES) {
+      assert.deepEqual(
+        res.screenshots.filter((s) => s.appearance === appearance).map((s) => [path.basename(s.path), place(s.path)]),
+        [
+          [`board.${appearance}.png`, 0],
+          [`board-3.${appearance}.png`, 1],
+          [`board-2.${appearance}.png`, 2],
+          [`Board-4.${appearance}.png`, 3],
+        ],
+      );
+    }
+    assert.deepEqual(readdirSync(f.out).sort(), res.screenshots.map((s) => path.basename(s.path)).sort(), 'each screenshot counted is a file');
+  });
+
   test('records each pass when asked, from before the tests start until they end', async (t) => {
     const f = fixture(t);
     const res = await capture(f, { video: true });
@@ -275,6 +313,16 @@ describe('captureSimulator, with stand-ins for Xcode', () => {
     const [kept] = readdirSync(path.join(f.dir, '.captures'));
     assert.ok(existsSync(path.join(f.dir, '.captures', kept, 'test-dark.log')), 'the working dir and its logs are kept');
     assert.ok(lines.some((l) => l.startsWith('simulator: working dir kept: ')), lines.join('\n'));
+  });
+
+  test('a test run xcodebuild fails though the results count no failed test fails the capture, which saves nothing', async (t) => {
+    const f = fixture(t, { FAKE_XCODE_ABORT: 'dark' });
+    await assert.rejects(
+      capture(f),
+      /the test run failed outside the tests: xcodebuild exited 65, though the results count no failed test \(1 test passed, result Passed\):\n {2}xcodebuild: error: The test runner stopped before the test run finished\.\n\(xcodebuild's log: .*test-dark\.log\)/,
+    );
+    assert.deepEqual(readdirSync(f.out), [], "the light pass's screenshots go too");
+    assert.deepEqual(f.devices(), {});
   });
 
   test('a build that fails quotes its errors, and creates no device', async (t) => {
@@ -340,6 +388,11 @@ describe('sprintshow simulator, with stand-ins for Xcode', () => {
     const script = await runCli(['simulator', 'demo.md', '--device', 'iPhone 17 Pro', '-o', f.out], { cwd: f.dir });
     assert.equal(script.code, 1);
     assert.match(script.stderr, /takes no demo script; the app's UI tests are its steps/);
+    process.env.FAKE_XCODE_ABORT = 'light';
+    const aborted = await runCli(['simulator', '--project', f.project, '--scheme', 'Board', '--device', 'iPhone 17 Pro', '-o', f.out], { cwd: f.dir });
+    assert.equal(aborted.code, 1, aborted.stdout + aborted.stderr);
+    assert.match(aborted.stderr, /✖ simulator: the test run failed outside the tests: xcodebuild exited 65/);
+    assert.deepEqual(readdirSync(f.out), []);
     process.env.FAKE_XCODE_BUILD_FAIL = '1';
     const build = await runCli(['simulator', '--project', f.project, '--scheme', 'Board', '--device', 'iPhone 17 Pro', '-o', f.out], { cwd: f.dir });
     assert.equal(build.code, 1);

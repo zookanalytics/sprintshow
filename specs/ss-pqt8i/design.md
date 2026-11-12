@@ -90,16 +90,29 @@ device that runs the tests.
 `manifest.json` that lists each test's attachments, with the exported file and a
 suggested name. XCTest stores a named attachment as `<name>_<n>_<UUID>.<extension>`. The
 counter was 0 for two attachments a test gave one name, and a UUID told them apart, so
-the run takes the name before the counter and numbers repeats itself: `-2`, `-3`, in the
-order the attachments were made. That order is their timestamps. The manifest lists a
-test's attachments out of that order. Only PNGs are kept. A failing test also attaches a
-screen recording and a log of synthesized events, which are not screenshots. A name loses
-the characters a file name should not hold.
+the run takes the name before the counter and numbers repeats itself, in the order the
+attachments were made. That order is their timestamps. The manifest lists a test's
+attachments out of that order. Only PNGs are kept. A failing test also attaches a screen
+recording and a log of synthesized events, which are not screenshots. A name loses the
+characters a file name should not hold.
+
+The first attachment given a name keeps it. A later one given it again takes the first of
+`-2`, `-3` and so on that no attachment of the pass is given and none has taken, so a name
+a test gave, such as `board-2`, stays its own. Names are told apart without regard to
+letter case, because the default volume of a Mac takes `Board.light.png` and
+`board.light.png` for one file. Each screenshot is copied into the output directory only
+where no file has its name yet, so a fault in the naming stops the run rather than write
+one screenshot over another.
 
 The summary that `xcresulttool get test-results summary` writes says how many tests passed
 and failed, and gives each failure's message. A pass whose bundle holds no test that ran
 fails the run, quoting `xcodebuild`'s log. A failed test does not fail the run: its
 screenshots are saved and the run exits 3, as a capture whose proof failed does.
+
+`xcodebuild`'s exit status is kept beside the summary. A failed test the summary counts
+explains a non-zero exit. A non-zero exit with no failed test counted fails the run,
+quoting the log: something outside the tests failed, which the summary does not show, and
+the screenshots of the tests that passed may not be all of them.
 
 ### The video
 

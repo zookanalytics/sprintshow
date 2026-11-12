@@ -27,7 +27,7 @@
 // specs/ss-pqt8i/design.md records why the UI tests drive the app.
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { constants, copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { deviceName, nearestNames } from './demo-script.ts';
@@ -179,23 +179,34 @@ export function attachmentName(suggested: string): string {
 }
 
 /**
- * The PNG attachments a manifest lists, in the order they were attached, each with the
- * name its test gave it. A name already taken in the pass gets `-2`, `-3` and so on, in
- * the order the attachments were made. Other attachments, such as the screen recording
- * XCTest makes of a failing test, are not screenshots and are left out.
+ * The PNG attachments a manifest lists, in the order they were attached, each with a name
+ * of its own in the pass. The first attachment a name is given to keeps it. A later one
+ * given that name again takes the first of `-2`, `-3` and so on that no attachment of the
+ * pass is given and none has taken, so a name a test gave, such as `board-2`, stays its
+ * own. Names are told apart without regard to letter case, as a Mac's default volume
+ * tells file names apart, so no two of them are one file there. Other attachments, such
+ * as the screen recording XCTest makes of a failing test, are not screenshots and are
+ * left out.
  */
 export function screenshotsOf(manifest: AttachmentsOfTest[]): { name: string; file: string; test: string }[] {
   const pngs = manifest
     .flatMap((t) => t.attachments.map((a) => ({ ...a, test: t.testIdentifier })))
     .map((a, order) => ({ ...a, order }))
     .filter((a) => a.exportedFileName.toLowerCase().endsWith('.png'))
-    .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0) || a.order - b.order);
-  const taken = new Map<string, number>();
+    .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0) || a.order - b.order)
+    .map((a) => ({ ...a, given: attachmentName(a.suggestedHumanReadableName) }));
+  const fold = (name: string): string => name.toLowerCase();
+  const given = new Set(pngs.map((a) => fold(a.given)));
+  const taken = new Set<string>();
   return pngs.map((a) => {
-    const base = attachmentName(a.suggestedHumanReadableName);
-    const n = (taken.get(base) ?? 0) + 1;
-    taken.set(base, n);
-    return { name: n === 1 ? base : `${base}-${n}`, file: a.exportedFileName, test: a.test };
+    let name = a.given;
+    if (taken.has(fold(name))) {
+      let n = 2;
+      while (given.has(fold(`${a.given}-${n}`)) || taken.has(fold(`${a.given}-${n}`))) n++;
+      name = `${a.given}-${n}`;
+    }
+    taken.add(fold(name));
+    return { name, file: a.exportedFileName, test: a.test };
   });
 }
 
@@ -345,6 +356,8 @@ function xctestrunIn(products: string, scheme: string): string {
 
 /** What a result bundle's summary says of the tests that ran. */
 interface Summary {
+  /** The run's result, such as `Passed` or `Failed`. */
+  result?: string;
   passedTests?: number;
   failedTests?: number;
   skippedTests?: number;
@@ -360,7 +373,8 @@ const count = (n: number, one: string, many = `${one}s`): string => `${n} ${n ==
  * device of the named type in each appearance, and save the screenshots they attach into
  * `outputDir`. Throws, saving nothing, when the options name no build or two, the output
  * directory holds files, the host runs no such device, the build fails, the tests cannot
- * run, or they attach no screenshot. Tests that fail are counted, not thrown.
+ * run, xcodebuild fails the test run though no test failed, or the tests attach no
+ * screenshot. Tests that fail are counted, not thrown.
  */
 export async function captureSimulator(opts: CaptureSimulatorOptions): Promise<SimulatorResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -445,10 +459,11 @@ async function runPass(opts: CaptureSimulatorOptions, appearance: Appearance, de
     log(`  · running the UI tests (xcodebuild's log: ${testLog})`);
     const only = (opts.tests ?? []).map((t) => `-only-testing:${t}`);
     let video: string | undefined;
+    let tested: Ran;
     try {
       // Diagnostics stay off: on a failure, xcodebuild otherwise collects a sysdiagnose of
       // the device, which can take ten minutes.
-      await run('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-destination', `platform=iOS Simulator,id=${udid}`, '-resultBundlePath', bundle, '-parallel-testing-enabled', 'NO', '-collect-test-diagnostics', 'never', ...only], testLog);
+      tested = await run('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-destination', `platform=iOS Simulator,id=${udid}`, '-resultBundlePath', bundle, '-parallel-testing-enabled', 'NO', '-collect-test-diagnostics', 'never', ...only], testLog);
     } finally {
       if (recording) video = (await recording.stop()) ? videoFile : undefined;
     }
@@ -459,15 +474,24 @@ async function runPass(opts: CaptureSimulatorOptions, appearance: Appearance, de
     const ran = (summary.passedTests ?? 0) + (summary.failedTests ?? 0) + (summary.expectedFailures ?? 0);
     if (ran === 0) throw new Error(`simulator: no test ran${opts.tests?.length ? `; check the tests named: ${opts.tests.join(', ')}` : ''}:\n${whatWentWrong(readFileSync(testLog, 'utf8'))}\n(xcodebuild's log: ${testLog})`);
     const failedTests = summary.failedTests ?? 0;
+    // xcodebuild's exit status is its own verdict on the test run. A failed test that the
+    // results count explains a non-zero exit. With none counted, the run failed in a way
+    // the results do not show, so the pass fails rather than pass on the tests that passed.
+    if (tested.code !== 0 && failedTests === 0) {
+      const results = `${count(summary.passedTests ?? 0, 'test')} passed${summary.result ? `, result ${summary.result}` : ''}`;
+      throw new Error(`simulator: the test run failed outside the tests: xcodebuild exited ${tested.code}, though the results count no failed test (${results}):\n${whatWentWrong(readFileSync(testLog, 'utf8'))}\n(xcodebuild's log: ${testLog})`);
+    }
     const failures = (summary.testFailures ?? []).map((f) => `${f.testIdentifierString ?? f.testName ?? 'a test'}: ${f.failureText ?? 'failed'}`);
     if (failedTests > 0 && failures.length === 0) failures.push(`${count(failedTests, 'test')} failed`);
 
     const exported = path.join(capturesDir, `${appearance}-attachments`);
     await xcresulttool(['export', 'attachments', '--path', bundle, '--output-path', exported], 'export the screenshots the tests attached');
     const manifest = existsSync(path.join(exported, 'manifest.json')) ? (JSON.parse(readFileSync(path.join(exported, 'manifest.json'), 'utf8')) as AttachmentsOfTest[]) : [];
+    // The output directory was empty when the run began and each name is the pass's own,
+    // so a file already there is a fault to stop at, not a screenshot to write over.
     const screenshots = screenshotsOf(manifest).map((s) => {
       const file = path.join(opts.outputDir, `${s.name}.${appearance}.png`);
-      copyFileSync(path.join(exported, s.file), file);
+      copyFileSync(path.join(exported, s.file), file, constants.COPYFILE_EXCL);
       return { name: s.name, appearance, path: file, test: s.test };
     });
 
