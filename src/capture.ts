@@ -11,6 +11,9 @@
 // The driver sets the page's viewport to the one the script starts at. The rest of a
 // device the script names, its scale factor, user agent and touch, belongs to the page's
 // context, which the caller makes with contextOptions (browser.ts), as runDemo does.
+//
+// Given a screenshot directory, it also saves a PNG of the state each step leaves
+// (screenshot.ts), before it draws the step's caption.
 
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
@@ -20,6 +23,7 @@ import { parseDemoScript, slugify, outputSlug, type Demo, type DemoStep, type Vi
 import { assembleVideo, type Frame, type Manifest } from './assemble.ts';
 import { runStep, openSurface, contextOptions, videoFrame, type Surface } from './browser.ts';
 import { showCaption, removeCaption, coverInnerHtml, scrutinyInnerHtml, cardDocument } from './overlay.ts';
+import { stepScreenshots, type StepScreenshots } from './screenshot.ts';
 
 const BRAND = 'sprintshow · proof';
 
@@ -40,6 +44,8 @@ export interface CaptureProofOptions {
   keep?: boolean;
   /** Where the `.captures/<run>/` working dir is created (default: cwd). */
   captureRoot?: string;
+  /** Also save a PNG of the state each step leaves into this directory, a new or empty one (stepScreenshots). */
+  screenshotDir?: string;
   log?: (m: string) => void;
 }
 
@@ -51,6 +57,8 @@ export interface CaptureResult {
   failures: number;
   /** The working dir, if it was kept (a failed run, or `keep`); otherwise null. */
   capturesDir: string | null;
+  /** Each step's screenshot, in step order, for a capture given a screenshot directory; otherwise none. */
+  screenshots: string[];
 }
 
 interface StepResult {
@@ -58,9 +66,10 @@ interface StepResult {
   issue: { severity: 'error'; step: number; description: string; screenshot: string } | null;
 }
 
-async function proofStep(page: Page, base: string, step: DemoStep, total: number, capturesDir: string, surface: Surface, log: (m: string) => void): Promise<StepResult> {
+async function proofStep(page: Page, base: string, step: DemoStep, total: number, capturesDir: string, surface: Surface, shots: StepScreenshots | null, log: (m: string) => void): Promise<StepResult> {
   const { proved, manual, reason } = await runStep(page, base, step, total, false, log);
   await surface.settle();
+  await shots?.take(page, step);
 
   const file = `${String(step.index).padStart(2, '0')}-${slugify(step.narration).slice(0, 40)}.png`;
   await showCaption(page, step.index, total, step.narration, !proved);
@@ -102,7 +111,8 @@ async function captureScrutiny(page: Page, items: string[], capturesDir: string)
 /**
  * Drive `demo` against `page` in still-frame mode and assemble the MP4. Screenshots the
  * steps on the app first, then the cover and scrutiny cards, so the manifest order is
- * cover → steps → scrutiny.
+ * cover → steps → scrutiny. A capture that throws keeps none of the step screenshots it
+ * saved.
  */
 export async function captureProof(opts: CaptureProofOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -110,6 +120,16 @@ export async function captureProof(opts: CaptureProofOptions): Promise<CaptureRe
   // Read before anything is written: a device the registry does not hold throws here.
   const start = contextOptions(demo).viewport as ViewportSize;
   const frameSize = videoFrame(demo);
+  const shots = opts.screenshotDir ? stepScreenshots(demo, opts.screenshotDir, log) : null;
+  try {
+    return await proofVideo(opts, demo, start, frameSize, shots, log);
+  } catch (e) {
+    shots?.discard();
+    throw e;
+  }
+}
+
+async function proofVideo(opts: CaptureProofOptions, demo: Demo, start: ViewportSize, frameSize: ViewportSize, shots: StepScreenshots | null, log: (m: string) => void): Promise<CaptureResult> {
   const { page, baseUrl } = opts;
 
   const slug = outputSlug(path.basename(opts.outputPath, path.extname(opts.outputPath)));
@@ -124,7 +144,7 @@ export async function captureProof(opts: CaptureProofOptions): Promise<CaptureRe
   const issues: NonNullable<StepResult['issue']>[] = [];
   try {
     for (const step of demo.steps) {
-      const { frame, issue } = await proofStep(page, baseUrl ?? '', step, demo.steps.length, capturesDir, surface, log);
+      const { frame, issue } = await proofStep(page, baseUrl ?? '', step, demo.steps.length, capturesDir, surface, shots, log);
       frames.push(frame);
       if (issue) issues.push(issue);
     }
@@ -153,5 +173,5 @@ export async function captureProof(opts: CaptureProofOptions): Promise<CaptureRe
   const keep = opts.keep || failures > 0;
   if (!keep) rmSync(capturesDir, { recursive: true, force: true });
 
-  return { outputPath: result.outputPath, narrated: result.narrated, music: result.music, failures, capturesDir: keep ? capturesDir : null };
+  return { outputPath: result.outputPath, narrated: result.narrated, music: result.music, failures, capturesDir: keep ? capturesDir : null, screenshots: shots ? [...shots.saved] : [] };
 }

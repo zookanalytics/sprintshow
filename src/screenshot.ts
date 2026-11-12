@@ -1,12 +1,13 @@
-// The screenshot driver: drive a demo script's steps, check each step's proof, and save
-// the state the last step leaves as one PNG. The steps run through the step runner the
-// video drivers use, so a proof means the same thing in a screenshot as in a video.
+// The screenshot drivers: drive a demo script's steps, check each step's proof, and save
+// the state the last step leaves as one PNG (captureScreenshot), or the state each step
+// leaves as a PNG of its own (captureScreenshots). The steps run through the step runner
+// the video drivers use, so a proof means the same thing in a screenshot as in a video.
 //
-// It draws no caption, pointer, cover or scrutiny card, and it needs neither ffmpeg nor
+// They draw no caption, pointer, cover or scrutiny card, and they need neither ffmpeg nor
 // a narration key. A failed proof does not stop the capture: the PNG is still saved,
 // because it shows what failed.
 //
-// Like the proof driver it takes a ready page, so it owns neither the browser nor the
+// Like the proof driver they take a ready page, so they own neither the browser nor the
 // server. The device scale factor belongs to the page's context, as do a device's user
 // agent and touch, so the caller sets them where the page is created; `runScreenshot`
 // (run.ts) does that for the CLI, from contextOptions (browser.ts).
@@ -21,13 +22,23 @@
 // and a terminal session its last lines. A capture that cannot hold one row of the page,
 // or one line of the session, at its scale fails instead. specs/ss-vyii/capture-limit.md
 // records how the limit was found.
+//
+// A run's screenshots are a PNG of the state each step leaves (stepScreenshots), in a
+// directory that holds nothing else once the run is done. Each is the area a screenshot
+// takes by default: a page script's viewport, or a terminal script's window. A video's
+// driver takes them in the page it films, where the engine draws its caption, cards,
+// pointer and terminal backdrop, so a still is taken with a style that leaves those out.
+// A still first waits for the animations running in the page to end, so it shows the
+// state they settle in, and a walkthrough's video holds still while it is taken.
 
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { parseDemoScript, type Demo, type ViewportSize } from './demo-script.ts';
-import { runStep, openSurface, contextOptions, ACTION_TIMEOUT } from './browser.ts';
-import { expandToSession, TERMINAL_WINDOW } from './terminal.ts';
+import { parseDemoScript, slugify, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { runStep, openSurface, contextOptions, ACTION_TIMEOUT, POINTER_STILL_CSS } from './browser.ts';
+import { expandToSession, TERMINAL_WINDOW, TERMINAL_STILL_CSS } from './terminal.ts';
+import { OVERLAY_STILL_CSS } from './overlay.ts';
 
 /**
  * Chromium rasterizes a capture in square tiles, each laid two device pixels short of its
@@ -225,5 +236,167 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
     return { outputPath: opts.outputPath, failures };
   } finally {
     await surface.close();
+  }
+}
+
+/** The style a still is taken with, which leaves out what the engine draws in the page a video is filmed in. */
+const STILL_STYLE = OVERLAY_STILL_CSS + POINTER_STILL_CSS + TERMINAL_STILL_CSS;
+
+/** The longest a still waits for the animations running in its page to end. */
+const ANIMATION_WAIT_MS = 1000;
+
+/** The longest a step's caption runs in its screenshot's name. */
+const STEP_NAME_CHARS = 48;
+
+/**
+ * The name of the screenshot of the state `step` leaves, in a script of `total` steps:
+ * its number, padded so the names sort in step order, and its caption as a slug, cut at a
+ * word to at most 48 characters, such as `01-the-board-boots-empty.png`.
+ */
+export function stepFileName(step: DemoStep, total: number): string {
+  const number = String(step.index).padStart(Math.max(2, String(total).length), '0');
+  let slug = slugify(step.narration);
+  if (slug.length > STEP_NAME_CHARS) {
+    // Cut at the last dash that leaves a whole word, or mid-word when the first word is longer than the name may run.
+    const word = slug.lastIndexOf('-', STEP_NAME_CHARS);
+    slug = slug.slice(0, word > 0 ? word : STEP_NAME_CHARS);
+  }
+  return `${number}-${slug || 'step'}.png`;
+}
+
+/**
+ * Make `dir` for a run's screenshots. Throws when it is a file or already holds files, so
+ * once the run is done it holds that run's screenshots and nothing else.
+ */
+export function claimScreenshotDir(dir: string): void {
+  if (existsSync(dir) && !statSync(dir).isDirectory()) throw new Error(`screenshots: ${dir} is a file; name a new or empty directory`);
+  mkdirSync(dir, { recursive: true });
+  if (readdirSync(dir).length > 0) throw new Error(`screenshots: ${dir} already holds files; name a new or empty directory`);
+}
+
+/**
+ * Save what `page` shows now as the PNG `file`, the area a screenshot of `demo` takes by
+ * default: a page script's viewport, or a terminal script's window with its corners
+ * transparent. Nothing the engine draws in the page shows in it. It waits first for the
+ * animations running in the page to end, for up to ANIMATION_WAIT_MS. Given `quietMs`, it
+ * then waits for the browser to draw the state they end in, and for `quietMs` more.
+ * Resolves with the wall-clock time in ms at which it began the capture: until then, the
+ * page shows nothing the capture changes.
+ */
+async function saveStill(page: Page, demo: Demo, file: string, quietMs = 0): Promise<number> {
+  await page
+    .evaluate(
+      async ({ ms, drawn }) => {
+        const ending = document.getAnimations().filter((a) => a.playState === 'running' && Number.isFinite(Number(a.effect?.getComputedTiming().endTime)));
+        await Promise.race([Promise.allSettled(ending.map((a) => a.finished)), new Promise((resolve) => setTimeout(resolve, ms))]);
+        // The second animation frame begins once the browser has drawn the first.
+        if (drawn) await Promise.race([new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))), new Promise((resolve) => setTimeout(resolve, ms))]);
+      },
+      { ms: ANIMATION_WAIT_MS, drawn: quietMs > 0 },
+    )
+    .catch(() => {});
+  if (quietMs > 0) await page.waitForTimeout(quietMs);
+  const began = Date.now();
+  const shot = { path: file, type: 'png' as const, style: STILL_STYLE, timeout: ACTION_TIMEOUT };
+  if (demo.terminal) await page.locator(TERMINAL_WINDOW).screenshot({ ...shot, omitBackground: true });
+  else await page.screenshot(shot);
+  return began;
+}
+
+/** What saves a capture's screenshots, and the ones it has saved. */
+export interface StepScreenshots {
+  /**
+   * Save what `page` shows now as the screenshot of `step`, once its animations have ended
+   * and, given `quietMs`, once the browser has drawn their end and `quietMs` more has
+   * passed. Resolves with the wall-clock time in ms at which it began the capture: until
+   * then, the page shows nothing the capture changes.
+   */
+  take(page: Page, step: DemoStep, quietMs?: number): Promise<number>;
+  /** The screenshots saved, in step order. */
+  readonly saved: string[];
+  /** Remove every screenshot saved, for a capture that ends saving nothing. */
+  discard(): void;
+}
+
+/**
+ * Claim `dir` for the screenshots of a capture of `demo` (claimScreenshotDir), and return
+ * what saves them: a PNG of the state each step leaves, named for the step
+ * (stepFileName), with nothing the engine draws on it.
+ */
+export function stepScreenshots(demo: Demo, dir: string, log: (m: string) => void): StepScreenshots {
+  claimScreenshotDir(dir);
+  const saved: string[] = [];
+  return {
+    saved,
+    async take(page, step, quietMs) {
+      const file = path.join(dir, stepFileName(step, demo.steps.length));
+      let began: number;
+      try {
+        began = await saveStill(page, demo, file, quietMs);
+      } catch (e) {
+        throw new Error(`screenshot: could not capture step ${step.index}: ${(e as Error).message.split('\n')[0]}`);
+      }
+      saved.push(file);
+      log(`  · screenshot → ${path.basename(file)}`);
+      return began;
+    },
+    discard() {
+      for (const file of saved.splice(0)) rmSync(file, { force: true });
+    },
+  };
+}
+
+export interface CaptureScreenshotsOptions {
+  /** A ready page, as captureScreenshot takes one. Its viewport is set to the one the script starts at. */
+  page: Page;
+  /** Origin a page script's start path is joined onto. A terminal script needs none. */
+  baseUrl?: string;
+  /** The directory a terminal script's shell starts in (default: the working directory). */
+  cwd?: string;
+  /** The parsed demo, or a markdown string to parse. */
+  demo: Demo | string;
+  /** The directory each step's screenshot goes into: a new or empty one. */
+  screenshotDir: string;
+  log?: (m: string) => void;
+}
+
+export interface ScreenshotsResult {
+  /** Each step's screenshot, in step order. */
+  screenshots: string[];
+  /** Steps whose proof failed. Their screenshots are saved either way, and show the state they left. */
+  failures: number;
+}
+
+/**
+ * Drive `demo` against `page`, checking each step's proof, and save a PNG of the state
+ * each step leaves into `screenshotDir`, with no video. Throws, keeping no screenshot,
+ * when the script names a device Playwright does not describe, the directory is a file or
+ * holds files, the page cannot be driven, or a screenshot cannot be taken or written.
+ */
+export async function captureScreenshots(opts: CaptureScreenshotsOptions): Promise<ScreenshotsResult> {
+  const log = opts.log ?? ((m: string) => console.log(m));
+  const demo = typeof opts.demo === 'string' ? parseDemoScript(opts.demo) : opts.demo;
+  // Read before anything is written: a device the registry does not hold throws here.
+  const start = contextOptions(demo).viewport as ViewportSize;
+  const shots = stepScreenshots(demo, opts.screenshotDir, log);
+  const { page, baseUrl } = opts;
+  try {
+    await page.setViewportSize(start).catch(() => {});
+    const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, backdrop: false, log });
+    try {
+      let failures = 0;
+      for (const step of demo.steps) {
+        const { proved } = await runStep(page, baseUrl ?? '', step, demo.steps.length, false, log);
+        if (!proved) failures++;
+        await surface.settle();
+        await shots.take(page, step);
+      }
+      return { screenshots: [...shots.saved], failures };
+    } finally {
+      await surface.close();
+    }
+  } catch (e) {
+    shots.discard();
+    throw e;
   }
 }

@@ -133,6 +133,15 @@ const PAGE_CSS =
   '#ss-title{max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
   `#ss-terminal{padding:${WINDOW.padY}px ${WINDOW.padX}px}`;
 
+/**
+ * The style that lays a backdrop page out as a still's for one screenshot: the window at
+ * the page's top-left corner, with nothing painted around it, so the window is captured
+ * as a still captures it.
+ */
+export const TERMINAL_STILL_CSS =
+  'body.ss-backdrop{display:block!important;height:auto!important;padding:0!important;background:none!important}' +
+  'body.ss-backdrop #ss-window{box-shadow:none!important}';
+
 /** The terminal page: a window with a title bar, whose terminal installTerminal draws. */
 function terminalDocument(title: string, backdrop: boolean): string {
   const dots = ['#ff5f57', '#febc2e', '#28c840'].map((c) => `<i style="background:${c}"></i>`).join('');

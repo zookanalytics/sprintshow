@@ -34,7 +34,7 @@ import path from 'node:path';
 import { captureWalkthrough, narrationSlots, watchRecording } from '../src/walkthrough.ts';
 import { ffmpegBin, probeDuration } from '../src/ffmpeg.ts';
 import { VIEWPORT } from '../src/browser.ts';
-import { launchBrowser, scratchDir } from './browser-fixture.ts';
+import { launchBrowser, scratchDir, patchLuma, firstFrame } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
 after(() => browser?.close());
@@ -74,19 +74,6 @@ test('a slot of no length is dropped, and a mark outside the recording is held t
     ],
   );
 });
-
-/** The time of each frame of `file`, and the mean luma of an 8x8 patch of it centred on (x, y). */
-function patchLuma(file: string, x: number, y: number): { t: number; luma: number }[] {
-  const res = spawnSync(ffmpegBin() as string, ['-hide_banner', '-i', file, '-an', '-vf', `crop=8:8:${x - 4}:${y - 4},showinfo`, '-f', 'null', '-'], { encoding: 'utf8', maxBuffer: 1 << 26 });
-  return [...res.stderr.matchAll(/pts_time:\s*([\d.]+).*?mean:\[(\d+)/g)].map((m) => ({ t: Number(m[1]), luma: Number(m[2]) }));
-}
-
-/** The first frame from `from` on whose patch matches `pred`, or a failure naming `what`. */
-function firstFrame(frames: { t: number; luma: number }[], from: number, pred: (luma: number) => boolean, what: string): number {
-  const hit = frames.find((f) => f.t >= from && pred(f.luma));
-  assert.ok(hit, `no frame from ${from}s shows ${what}`);
-  return hit.t;
-}
 
 /** The times the audio of `file` sounds after silence, in seconds, and 0 when it opens on sound. */
 function onsets(file: string): number[] {

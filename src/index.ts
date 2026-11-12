@@ -13,10 +13,10 @@ export { assembleVideo, baseDuration, type Frame, type Manifest, type AssembleOp
 // The drivers and their result types.
 export { captureProof, type CaptureProofOptions, type CaptureResult } from './capture.ts';
 export { captureWalkthrough, type CaptureWalkthroughOptions } from './walkthrough.ts';
-export { captureScreenshot, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
+export { captureScreenshot, captureScreenshots, stepFileName, type CaptureScreenshotOptions, type CaptureScreenshotsOptions, type ScreenshotResult, type ScreenshotsResult } from './screenshot.ts';
 
 // The one-command orchestrators behind `sprintshow run` and `sprintshow screenshot`.
-export { runDemo, runScreenshot, type RunDemoOptions, type RunScreenshotOptions, type CaptureMode } from './run.ts';
+export { runDemo, runScreenshot, type RunDemoOptions, type RunResult, type RunScreenshotOptions, type CaptureMode } from './run.ts';
 
 // The linter core + CLI.
 export { lintDemo, lintCli, demoScenarioOf, looksLikeDirective, looksLikeAssertion, outputPathFor, type Finding, type Severity, type LintEnv } from './lint.ts';

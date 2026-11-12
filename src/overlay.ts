@@ -1,6 +1,7 @@
 // On-screen chrome rendered inside the page: the step caption bar and the cover /
 // scrutiny cards. Rendering in the DOM (not with ffmpeg `drawtext`) keeps text crisp in
-// the app's own font and lets the walkthrough path show live, animated captions.
+// the app's own font and lets the walkthrough path show live, animated captions. A
+// marker, a transparent pixel, makes the browser draw a frame that shows nothing new.
 //
 // The still-frame path injects a caption, screenshots, and removes it; the walkthrough
 // path leaves the caption up and updates it in place, and shows the cards as full-screen
@@ -15,6 +16,9 @@ export const BG = '#0f1115';
 export const FG = '#e7e9ee';
 export const MUTED = '#9aa3b2';
 export const FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+
+/** The style that leaves this module's chrome, the caption bar and a card, out of a screenshot taken in the page it is drawn in. */
+export const OVERLAY_STILL_CSS = '#__ss_caption__,#__ss_card__{visibility:hidden!important}';
 
 /** HTML-escape text bound for `innerHTML` / `setContent`. */
 export function esc(s: string): string {
@@ -134,6 +138,39 @@ async function shownAt(page: Page, id: string): Promise<number | null> {
       { id, timeout: SHOWN_TIMEOUT_MS },
     )
     .catch(() => null);
+}
+
+/** A transparent pixel, which a frame can show without showing anything new. */
+const MARKER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+let marks = 0;
+
+/**
+ * Make the browser draw a frame that shows nothing new: put a fresh marker in the page in
+ * place of the last, marked for the page's Element Timing. Resolves with the wall-clock
+ * time in ms of the frame in which the browser first showed it, or null when the browser
+ * reports none within SHOWN_TIMEOUT_MS.
+ */
+export async function markFrame(page: Page): Promise<number | null> {
+  const id = `__ss_mark_${++marks}`;
+  await page.evaluate(
+    ({ id, src }) => {
+      document.getElementById('__ss_mark__')?.remove();
+      const img = document.createElement('img');
+      img.id = '__ss_mark__';
+      img.alt = '';
+      img.setAttribute('elementtiming', id);
+      Object.assign(img.style, { position: 'fixed', left: '0', top: '0', width: '1px', height: '1px', zIndex: '2147483647', pointerEvents: 'none' });
+      img.src = src;
+      document.body.appendChild(img);
+    },
+    { id, src: MARKER },
+  );
+  return shownAt(page, id);
+}
+
+/** Take the marker out of the page. */
+export async function removeMarker(page: Page): Promise<void> {
+  await page.evaluate(() => document.getElementById('__ss_mark__')?.remove()).catch(() => {});
 }
 
 export async function removeCaption(page: Page): Promise<void> {

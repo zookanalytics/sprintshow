@@ -5,17 +5,17 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { runDemo, runScreenshot, type CaptureMode } from './run.ts';
+import { runDemo, runScreenshot, type CaptureMode, type RunResult } from './run.ts';
 import { assembleVideo, type AssembleResult } from './assemble.ts';
 import { lintCli } from './lint.ts';
 import { outputSlug } from './demo-script.ts';
-import type { CaptureResult } from './capture.ts';
 import type { ServeOptions } from './server.ts';
 
 const HELP = `sprintshow — auto-generate a quick, unpolished demo video of what your app (or agent) just did.
 
 Usage:
-  sprintshow run <demo.md> [options]           Drive a demo script and produce an mp4
+  sprintshow run <demo.md> [options]           Drive a demo script and produce an mp4, a
+                                               PNG of each step, or both
   sprintshow screenshot <demo.md> -o <file.png> [options]
                                                Drive a demo script and save the state its
                                                last step leaves as one PNG
@@ -24,7 +24,7 @@ Usage:
 
 run options:
   --mode <walkthrough|proof>  walkthrough (default): one continuous recorded take.
-                              proof: a screenshot per step, each proof-checked.
+                              proof: one captioned frame per step, each proof-checked.
   --base-url <url>            Drive against a server already running.
   --serve "<command>"         Spawn a dev-server command, wait for it, then tear it down.
   --serve-dir <dir>           Serve a static directory with the built-in file server.
@@ -33,6 +33,12 @@ run options:
   --cwd <dir>                 Working directory for --serve, and where a terminal
                               script's shell starts.
   -o, --output <file.mp4>     Output path (default demos/<script-name>.mp4).
+  --screenshots <dir>         Also save a PNG of the state each step leaves into <dir>, a
+                              new or empty directory, named for the step, such as
+                              01-the-board-boots-empty.png. It shows the app alone, with
+                              no caption, card or pointer.
+  --no-video                  Make no mp4: the run returns its screenshots alone. Needs
+                              --screenshots, and takes none of the video's options.
   --music <file>              Mix a background-music bed under the narration.
   --no-narrate                Force a silent video even with OPENAI_API_KEY set.
   --keep                      Keep the .captures/<run>/ working dir.
@@ -61,8 +67,8 @@ terminal scripts:
   the terminal window, its rounded corners transparent.
 
 run and screenshot exit codes:
-  0                           The output is saved and every step's proof held.
-  3                           The output is saved, but a step's proof failed.
+  0                           The outputs are saved and every step's proof held.
+  3                           The outputs are saved, but a step's proof failed.
   1                           No output is saved.
 
 assemble options:
@@ -79,7 +85,7 @@ base URL's origin or on its host over https, answers with Vercel's sign-in, the 
 once, to that URL alone, and the browser carries the cookie it earns. Without the key, such
 a capture stops and says it reached the sign-in.`;
 
-const BOOLEAN_FLAGS = new Set(['no-narrate', 'keep', 'headed', 'strict', 'full-page', 'transparent']);
+const BOOLEAN_FLAGS = new Set(['no-narrate', 'no-video', 'keep', 'headed', 'strict', 'full-page', 'transparent']);
 
 interface Parsed {
   pos: string[];
@@ -130,13 +136,19 @@ function savedExit(failures: number): number {
   return failures > 0 ? 3 : 0;
 }
 
-function reportRun(res: CaptureResult): void {
-  const kind = res.narrated ? 'narrated' : 'silent';
-  const music = res.music ? ' + music bed' : '';
+function reportRun(res: RunResult): void {
   console.log('');
-  console.log(`✅ ${kind}${music} demo → ${path.relative(process.cwd(), res.outputPath)}`);
+  if (res.outputPath) {
+    const kind = res.narrated ? 'narrated' : 'silent';
+    const music = res.music ? ' + music bed' : '';
+    console.log(`✅ ${kind}${music} demo → ${path.relative(process.cwd(), res.outputPath)}`);
+  }
+  if (res.screenshots.length) {
+    console.log(`✅ ${res.screenshots.length} screenshot(s) → ${path.relative(process.cwd(), path.dirname(res.screenshots[0])) || '.'}`);
+  }
   if (res.failures > 0) {
-    console.log(`   ⚠️  ${res.failures} step(s) failed their proof — video and frames kept${res.capturesDir ? `: ${path.relative(process.cwd(), res.capturesDir)}` : ''}`);
+    const kept = res.outputPath ? `video and frames kept${res.capturesDir ? `: ${path.relative(process.cwd(), res.capturesDir)}` : ''}` : 'the screenshots show the state they left';
+    console.log(`   ⚠️  ${res.failures} step(s) failed their proof — ${kept}`);
   } else if (res.capturesDir) {
     console.log(`   working dir kept: ${path.relative(process.cwd(), res.capturesDir)}`);
   }
@@ -164,6 +176,8 @@ async function runCommand(rest: string[]): Promise<number> {
     noNarrate: Boolean(flags['no-narrate']),
     keep: Boolean(flags.keep),
     headed: Boolean(flags.headed),
+    screenshotDir: flags.screenshots === undefined ? undefined : path.resolve(flags.screenshots as string),
+    noVideo: Boolean(flags['no-video']),
   });
   reportRun(res);
   return savedExit(res.failures);

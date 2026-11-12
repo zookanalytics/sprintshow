@@ -111,6 +111,9 @@ const POINTER_INIT = `(() => {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build); else build();
 })()`;
 
+/** The style that leaves the pointer and its ripples out of a screenshot taken in the page they are drawn in. */
+export const POINTER_STILL_CSS = '#__ss_pointer__,.__ss_ripple__{visibility:hidden!important}';
+
 /** Register the pointer so every navigation re-installs it. Call once, before the first goto. */
 export async function installPointer(page: Page): Promise<void> {
   await page.addInitScript(POINTER_INIT);
