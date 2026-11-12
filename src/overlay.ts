@@ -152,16 +152,26 @@ let marks = 0;
  * can refuse an image, which then never shows, but it has no say over text. Element Timing
  * reports no text drawn transparent, so the marker is drawn in an opaque colour, and in a
  * font the system holds, which never waits for a web font to load.
+ *
+ * The video keeps frames drawn while the marker is in the page, so the page's stylesheets
+ * must not draw it. Its tag is the engine's own, which a rule for the page's own elements,
+ * such as one for every span, does not select. Its inline style resets its properties
+ * (`all: initial`) and sets the few it needs, each important, which outranks every rule of
+ * a page's stylesheet that does select it. A ::before, ::after or ::first-line rule that
+ * selects it, such as one for every element, can still draw on it, because no style on an
+ * element reaches its pseudo-elements.
  */
 export async function markFrame(page: Page): Promise<number | null> {
   const id = `__ss_mark_${++marks}`;
   await page.evaluate((id) => {
     document.getElementById('__ss_mark__')?.remove();
-    const mark = document.createElement('span');
+    const mark = document.createElement('sprintshow-mark');
     mark.id = '__ss_mark__';
     mark.setAttribute('elementtiming', id);
     mark.textContent = ' ';
-    Object.assign(mark.style, { position: 'fixed', left: '0', top: '0', font: '1px/1px sans-serif', color: '#000', zIndex: '2147483647', pointerEvents: 'none' });
+    // `all` comes first, because it resets the properties that the rest then set.
+    const style = { all: 'initial', position: 'fixed', left: '0', top: '0', font: '1px/1px sans-serif', color: '#000', 'z-index': '2147483647', 'pointer-events': 'none' };
+    for (const [name, value] of Object.entries(style)) mark.style.setProperty(name, value, 'important');
     document.body.appendChild(mark);
   }, id);
   return shownAt(page, id);

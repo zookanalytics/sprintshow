@@ -157,6 +157,18 @@ const COUNTER_HTML =
   '<main id="app" style="height:100vh;box-sizing:border-box;padding:40px"><button id="go">Go</button> <span id="n">0</span></main>' +
   '<script>go.onclick = () => { n.textContent = String(Number(n.textContent) + 1); };</script></body>';
 
+/**
+ * The counter page, whose stylesheet decorates its elements: every span with a red block
+ * and a red box after its text, and every element with an important red outline. Its own
+ * elements sit well below its top-left corner, where the walkthrough draws its marker.
+ */
+const DECORATED_HTML =
+  '<!doctype html><head><style>span { background: red; padding: 20px } span::after { content: "x"; background: red; padding: 20px } ' +
+  'body * { outline: 20px solid red !important }</style></head>' +
+  '<body style="margin:0;background:#fff;font:20px sans-serif">' +
+  '<main id="app" style="height:100vh;box-sizing:border-box;padding:200px 40px 40px"><button id="go">Go</button> <span id="n">0</span></main>' +
+  '<script>go.onclick = () => { n.textContent = String(Number(n.textContent) + 1); };</script></body>';
+
 const PAGE_WALK = `# Demo: Screenshots of a walkthrough
 
 **Start:** \`/\`
@@ -281,6 +293,27 @@ describe('a walkthrough takes its screenshots with no trace in its video', { con
         assert.ok(second, 'the manifest has the second step');
         const captioned = foot.filter((f) => f.t >= left && f.t < second.start - 0.05 && f.luma < 100).map((f) => f.t);
         assert.deepEqual(captioned, [], `from the move to the next page at ${left}s to the second step's caption at ${second.start}s, no frame shows a caption`);
+      });
+    } finally {
+      await site.close();
+    }
+  });
+
+  test("a page walkthrough draws nothing at the page's top-left corner, where its marker sits, on a page whose stylesheet decorates every element", { timeout: 300_000 }, async () => {
+    const site = await serveSite({ 'index.html': DECORATED_HTML });
+    try {
+      await walkWithScreenshots(PAGE_WALK, { baseUrl: site.baseUrl }, (video) => {
+        // The cover and the closing card darken the page's top right, which no step's
+        // pointer, caption or element reaches. Between the two cards the page is white at
+        // its top-left corner, and a red block or outline there is the marker drawn by the
+        // page's stylesheet.
+        const frames = patchLuma(video, 960, 150);
+        const corner = patchLuma(video, 8, 8);
+        const cover = firstFrame(frames, 0, (l) => l < 200, 'the cover');
+        const between = firstFrame(frames, cover, (l) => l > 220, 'the page between the cards');
+        const closing = firstFrame(frames, between, (l) => l < 200, 'the closing card');
+        const marked = corner.filter((f) => f.t >= between && f.t < closing && f.luma < 200).map((f) => f.t);
+        assert.deepEqual(marked, [], `from the page at ${between}s to the closing card at ${closing}s, every frame shows the page's white at its top-left corner`);
       });
     } finally {
       await site.close();
