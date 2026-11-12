@@ -414,12 +414,13 @@ const result = await captureProof({
 does. Given `screenshotDir`, `runDemo` and each video driver also save a PNG of each step,
 listed in the result's `screenshots`, and `runDemo` given `noVideo` as well makes no video,
 so its result's `outputPath` is null. `captureScreenshots` saves a PNG of each step from a
-page you have prepared, with no video. A script that names a device needs a page made as that device: make its context with
-`contextOptions(demo)`, as they do. The drivers set the page's viewport to the one the
-script starts at, and the rest of the device is the context's. A custom driver that runs its
-steps through `runStep` checks each proof as the built-in captures do. For a terminal
-script, a driver takes a `cwd` in place of a `baseUrl`, and `openSurface` brings up what any
-script drives: the app at its start path, or the engine's terminal and its shell.
+page you have prepared, with no video. A script that names a device needs a page made as
+that device: make its context with `contextOptions(demo)`, as they do. The drivers set the
+page's viewport to the one the script starts at, and the rest of the device is the
+context's. A custom driver that runs its steps through `runStep` checks each proof as the
+built-in captures do. For a terminal script, a driver takes a `cwd` in place of a
+`baseUrl`, and `openSurface` brings up what any script drives: the app at its start path,
+or the engine's terminal and its shell.
 
 ## The agent / MCP path
 
