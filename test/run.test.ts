@@ -9,13 +9,15 @@
 // walkthrough's video shows no trace of taking them: every frame from the first step's
 // caption to the closing card shows the caption, no frame shows a terminal's window laid
 // out as a still, a step that ends at once shows its caption before the video holds still
-// for its screenshot, and a step that moves to another page, leaving its caption behind,
-// gets no caption back. The hold ends at a frame drawn after the still that the recording
-// has, and frames are drawn until one reaches it, on a page whose Content Security Policy
-// refuses an image from a data: URL as on any other. A run with no video needs a screenshot
-// directory and refuses the video's options, and a directory that holds files is refused
-// before anything is served. A run whose proof fails saves its screenshots and exits 3,
-// and one that saves nothing keeps none of them.
+// for its screenshot, a step that moves to another page, leaving its caption behind, gets
+// no caption back, and no frame of a page whose stylesheet decorates every element shows
+// anything at its top-left corner, where the engine's frame marker sits. The hold ends at
+// a frame drawn after the still that the recording has, and frames are drawn until one
+// reaches it, on a page whose Content Security Policy refuses an image from a data: URL
+// as on any other. A run with no video needs a screenshot directory and refuses the
+// video's options, and a directory that holds files is refused before anything is served.
+// A run whose proof fails saves its screenshots and exits 3, and one that saves nothing
+// keeps none of them.
 //
 // The tests that drive a page need a headless Chromium and skip without one, and the
 // walkthrough's need a real ffmpeg (see browser-fixture.ts and assemble.test.ts). A proof
