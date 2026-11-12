@@ -15,9 +15,9 @@ import { chromium, type BrowserContextOptions, type Page } from 'playwright';
 
 import { parseDemoScript, outputSlug, type Demo } from './demo-script.ts';
 import { ensureServer, type ServeOptions, type ServerHandle } from './server.ts';
-import { captureProof, type CaptureResult } from './capture.ts';
+import { captureProof, capturesRoot, type CaptureResult } from './capture.ts';
 import { captureWalkthrough } from './walkthrough.ts';
-import { captureScreenshot, captureScreenshots, claimScreenshotDir, AREA_CONFLICT, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
+import { captureScreenshot, captureScreenshots, checkScreenshotDir, AREA_CONFLICT, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
 import { chromiumLaunchArgs, contextOptions } from './browser.ts';
 import { shellDir } from './terminal.ts';
 
@@ -122,9 +122,11 @@ export async function runDemo(opts: RunDemoOptions): Promise<RunResult> {
   const outputPath = opts.outputPath ?? path.join(process.cwd(), 'demos', `${name}.mp4`);
   const outputs = opts.noVideo ? 'screenshots alone' : `${mode} mode${opts.screenshotDir ? ' and screenshots' : ''}`;
   log(`demo: "${demo.title}" — ${demo.steps.length} steps · ${outputs}`);
-  // Checked before a server or a browser is spent: a device the registry does not hold throws here.
+  // Checked before a server or a browser is spent: a device the registry does not hold
+  // throws here, and so does a screenshot directory the driver would refuse. Only the
+  // driver makes the directory, so a run that stops before it leaves none behind.
   const device = contextOptions(demo);
-  if (opts.screenshotDir) claimScreenshotDir(opts.screenshotDir);
+  if (opts.screenshotDir) checkScreenshotDir(opts.screenshotDir, opts.noVideo ? [] : [outputPath, capturesRoot()]);
 
   const server = await serverFor(demo, opts);
   try {

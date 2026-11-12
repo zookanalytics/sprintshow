@@ -146,7 +146,8 @@ let marks = 0;
  * Make the browser draw a frame that shows nothing new: put a fresh marker in the page in
  * place of the last, marked for the page's Element Timing. Resolves with the wall-clock
  * time in ms of the frame in which the browser first showed it, or null when the browser
- * reports none within SHOWN_TIMEOUT_MS.
+ * reports none within SHOWN_TIMEOUT_MS. It resolves null too when the page cannot take the
+ * marker, such as one whose document is being replaced by another or has no body.
  *
  * The marker is text, a no-break space, which has no ink. A page's Content Security Policy
  * can refuse an image, which then never shows, but it has no say over text. Element Timing
@@ -163,7 +164,7 @@ let marks = 0;
  */
 export async function markFrame(page: Page): Promise<number | null> {
   const id = `__ss_mark_${++marks}`;
-  await page.evaluate((id) => {
+  const marked = await page.evaluate((id) => {
     document.getElementById('__ss_mark__')?.remove();
     const mark = document.createElement('sprintshow-mark');
     mark.id = '__ss_mark__';
@@ -173,8 +174,9 @@ export async function markFrame(page: Page): Promise<number | null> {
     const style = { all: 'initial', position: 'fixed', left: '0', top: '0', font: '1px/1px sans-serif', color: '#000', 'z-index': '2147483647', 'pointer-events': 'none' };
     for (const [name, value] of Object.entries(style)) mark.style.setProperty(name, value, 'important');
     document.body.appendChild(mark);
-  }, id);
-  return shownAt(page, id);
+    return true;
+  }, id).catch(() => false);
+  return marked ? shownAt(page, id) : null;
 }
 
 /** Take the marker out of the page. */

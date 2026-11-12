@@ -19,13 +19,18 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { parseDemoScript, slugify, outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { parseDemoScript, outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
 import { assembleVideo, type Frame, type Manifest } from './assemble.ts';
 import { runStep, openSurface, contextOptions, videoFrame, type Surface } from './browser.ts';
 import { showCaption, removeCaption, coverInnerHtml, scrutinyInnerHtml, cardDocument } from './overlay.ts';
-import { stepScreenshots, type StepScreenshots } from './screenshot.ts';
+import { stepFileName, stepScreenshots, type StepScreenshots } from './screenshot.ts';
 
 const BRAND = 'sprintshow · proof';
+
+/** Where a video capture makes its working directory: `.captures` in `captureRoot`, the working directory by default. */
+export function capturesRoot(captureRoot?: string): string {
+  return path.join(captureRoot ?? process.cwd(), '.captures');
+}
 
 export interface CaptureProofOptions {
   /** A ready page — already authenticated / on the right origin if the demo needs it. */
@@ -71,7 +76,7 @@ async function proofStep(page: Page, base: string, step: DemoStep, total: number
   await surface.settle();
   await shots?.take(page, step);
 
-  const file = `${String(step.index).padStart(2, '0')}-${slugify(step.narration).slice(0, 40)}.png`;
+  const file = stepFileName(step, total);
   await showCaption(page, step.index, total, step.narration, !proved);
   await page.screenshot({ path: path.join(capturesDir, file) });
   await removeCaption(page);
@@ -120,7 +125,7 @@ export async function captureProof(opts: CaptureProofOptions): Promise<CaptureRe
   // Read before anything is written: a device the registry does not hold throws here.
   const start = contextOptions(demo).viewport as ViewportSize;
   const frameSize = videoFrame(demo);
-  const shots = opts.screenshotDir ? stepScreenshots(demo, opts.screenshotDir, log) : null;
+  const shots = opts.screenshotDir ? stepScreenshots(demo, opts.screenshotDir, log, [opts.outputPath, capturesRoot(opts.captureRoot)]) : null;
   try {
     return await proofVideo(opts, demo, start, frameSize, shots, log);
   } catch (e) {
@@ -133,7 +138,7 @@ async function proofVideo(opts: CaptureProofOptions, demo: Demo, start: Viewport
   const { page, baseUrl } = opts;
 
   const slug = outputSlug(path.basename(opts.outputPath, path.extname(opts.outputPath)));
-  const capturesDir = path.join(opts.captureRoot ?? process.cwd(), '.captures', `${slug}-${Date.now()}`);
+  const capturesDir = path.join(capturesRoot(opts.captureRoot), `${slug}-${Date.now()}`);
   mkdirSync(capturesDir, { recursive: true });
   mkdirSync(path.dirname(path.resolve(opts.outputPath)), { recursive: true });
 

@@ -29,7 +29,7 @@ import { requireFfmpeg, run, probeDuration, buildNarration, mixMusicBed, muxOrCo
 import { installPointer, runStep, openSurface, chromiumLaunchArgs, contextOptions, videoFrame, type Surface } from './browser.ts';
 import { showCaption, markFrame, removeMarker, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
 import { stepScreenshots, type StepScreenshots } from './screenshot.ts';
-import type { CaptureResult } from './capture.ts';
+import { capturesRoot, type CaptureResult } from './capture.ts';
 
 const BRAND = 'sprintshow · walkthrough';
 const COVER_MS = 3800;
@@ -216,7 +216,7 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
   // Read before anything is written or launched: a device the registry does not hold throws here.
   const device = contextOptions(demo);
   const frameSize = videoFrame(demo);
-  const shots = opts.screenshotDir ? stepScreenshots(demo, opts.screenshotDir, log) : null;
+  const shots = opts.screenshotDir ? stepScreenshots(demo, opts.screenshotDir, log, [opts.outputPath, capturesRoot(opts.captureRoot)]) : null;
   try {
     return await walkthroughVideo(opts, demo, device, frameSize, shots, log);
   } catch (e) {
@@ -227,7 +227,7 @@ export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promi
 
 async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, device: BrowserContextOptions, frameSize: ViewportSize, shots: StepScreenshots | null, log: (m: string) => void): Promise<CaptureResult> {
   const slug = outputSlug(path.basename(opts.outputPath, path.extname(opts.outputPath)));
-  const capturesDir = path.join(opts.captureRoot ?? process.cwd(), '.captures', `${slug}-${Date.now()}`);
+  const capturesDir = path.join(capturesRoot(opts.captureRoot), `${slug}-${Date.now()}`);
   mkdirSync(capturesDir, { recursive: true });
   mkdirSync(path.dirname(path.resolve(opts.outputPath)), { recursive: true });
 

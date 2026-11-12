@@ -24,14 +24,16 @@
 // records how the limit was found.
 //
 // A run's screenshots are a PNG of the state each step leaves (stepScreenshots), in a
-// directory that holds nothing else once the run is done. Each is the area a screenshot
-// takes by default: a page script's viewport, or a terminal script's window. A video's
-// driver takes them in the page it films, where the engine draws its caption, cards,
-// pointer and terminal backdrop, so a still is taken with a style that leaves those out.
-// A still first waits for the animations running in the page to end, so it shows the
-// state they settle in, and a walkthrough's video holds still while it is taken.
+// directory that holds nothing else once the run is done: a new or empty one, into which
+// the run writes nothing else, and which a run that ends saving nothing leaves as it found
+// it. Each is the area a screenshot takes by default: a page script's viewport, or a
+// terminal script's window. A video's driver takes them in the page it films, where the
+// engine draws its caption, cards, pointer and terminal backdrop, so a still is taken
+// with a style that leaves those out. A still first waits for the animations running in
+// the page to end, so it shows the state they settle in, and a walkthrough's video holds
+// still while it is taken.
 
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
@@ -166,74 +168,104 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
   const log = opts.log ?? ((m: string) => console.log(m));
   const demo = typeof opts.demo === 'string' ? parseDemoScript(opts.demo) : opts.demo;
   if (demo.terminal && opts.selector) throw new Error(TERMINAL_SELECTOR);
-  const { page, baseUrl, selector } = opts;
+  const start = contextOptions(demo).viewport as ViewportSize;
+  return driveSteps({ page: opts.page, baseUrl: opts.baseUrl, cwd: opts.cwd, demo, log }, start, null, (failures) => saveArea(opts, demo, failures, log));
+}
 
-  await page.setViewportSize(contextOptions(demo).viewport as ViewportSize).catch(() => {});
+/** Save the area `opts` asks for as the PNG at its `outputPath`, once `demo`'s steps have run, `failures` of them failing their proof. */
+async function saveArea(opts: CaptureScreenshotOptions, demo: Demo, failures: number, log: (m: string) => void): Promise<ScreenshotResult> {
+  const { page, selector } = opts;
+  // A step whose proof failed is the likeliest reason the page lacks what the capture
+  // needs, so a capture that fails says how many did. Each one's ✗ line is in the log.
+  const failed = failures > 0 ? ` (${failures} step(s) failed their proof)` : '';
+  const attempt = async <T>(what: string, act: () => Promise<T>): Promise<T> => {
+    try {
+      return await act();
+    } catch (e) {
+      throw new Error(`screenshot: ${what}${failed}: ${(e as Error).message.split('\n')[0]}`);
+    }
+  };
+  // Said after the area of a full-page capture that stops short.
+  const limited = (scale: number): string => `, the most one capture holds at scale ${scale}`;
+  // Why a full-page capture holds nothing: not one row of a page, or one line of a terminal window.
+  const tooLarge = (what: string, { width, scale }: Extent): string => `scale ${scale} is too large for one capture of ${what} ${Math.round(width)} CSS pixels wide`;
+
+  const shot = { path: opts.outputPath, type: 'png' as const, omitBackground: Boolean(opts.transparent), timeout: ACTION_TIMEOUT };
+  if (demo.terminal) {
+    let area = 'the terminal window';
+    let note = '';
+    let timeout = ACTION_TIMEOUT;
+    if (opts.fullPage) {
+      // A still's window sits at the page's top-left corner, and grows down from there.
+      const win = await attempt('could not measure the terminal window', () => windowExtent(page));
+      const held = await attempt('could not grow the window to the session', () => expandToSession(page, captureHeightLimit(win.width, win.scale)));
+      if (held.rows < 1) throw new Error(`screenshot: could not capture the terminal session${failed}: ${tooLarge('a window', win)}`);
+      area = held.rows < held.lines ? `the session's last ${held.rows} of its ${held.lines} lines` : 'the whole terminal session';
+      if (held.rows < held.lines) note = limited(win.scale);
+      timeout = captureTimeout(await attempt('could not measure the terminal window', () => windowExtent(page)));
+    }
+    log(`screenshot: capturing ${area}${note} → ${path.basename(opts.outputPath)}`);
+    await attempt(`could not capture ${area}`, () => page.locator(TERMINAL_WINDOW).screenshot({ ...shot, omitBackground: true, timeout }));
+  } else if (selector) {
+    const el = page.locator(selector).first();
+    await attempt(`no visible \`${selector}\` to capture`, () => el.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT }));
+    log(`screenshot: capturing \`${selector}\` → ${path.basename(opts.outputPath)}`);
+    await attempt(`could not capture \`${selector}\``, () => el.screenshot(shot));
+  } else {
+    let area = opts.fullPage ? 'the full page' : 'the viewport';
+    let note = '';
+    let timeout = ACTION_TIMEOUT;
+    let clip: { x: number; y: number; width: number; height: number } | undefined;
+    if (opts.fullPage) {
+      const full = await attempt('could not measure the full page', () => pageExtent(page));
+      const limit = captureHeightLimit(full.width, full.scale);
+      if (limit < 1) throw new Error(`screenshot: could not capture the full page${failed}: ${tooLarge('a page', full)}`);
+      if (full.height > limit) {
+        clip = { x: 0, y: 0, width: full.width, height: limit };
+        area = `the page's top ${limit} of its ${full.height} CSS pixels`;
+        note = limited(full.scale);
+      }
+      timeout = captureTimeout({ ...full, height: Math.min(full.height, limit) });
+    }
+    log(`screenshot: capturing ${area}${note} → ${path.basename(opts.outputPath)}`);
+    await attempt(`could not capture ${area}`, () => page.screenshot({ ...shot, timeout, fullPage: Boolean(opts.fullPage), clip }));
+  }
+  return { outputPath: opts.outputPath, failures };
+}
+
+/** What a screenshot driver drives its steps with. */
+interface DriveOptions {
+  page: Page;
+  baseUrl?: string;
+  cwd?: string;
+  demo: Demo;
+  log: (m: string) => void;
+}
+
+/**
+ * Drive `demo`'s steps in `page` for a screenshot, at the viewport `start` the script
+ * starts at and on a surface the engine draws nothing on, checking each step's proof.
+ * Given `each`, it hands it each step once the step's proof is checked and the surface
+ * shows everything it was sent. Once every step has run and the surface has settled, it
+ * resolves with what `end` makes of the number of steps whose proof failed, and then
+ * closes the surface.
+ */
+async function driveSteps<T>(opts: DriveOptions, start: ViewportSize, each: ((step: DemoStep) => Promise<unknown>) | null, end: (failures: number) => Promise<T>): Promise<T> {
+  const { page, demo, baseUrl, log } = opts;
+  await page.setViewportSize(start).catch(() => {});
   const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, backdrop: false, log });
   try {
     let failures = 0;
     for (const step of demo.steps) {
       const { proved } = await runStep(page, baseUrl ?? '', step, demo.steps.length, false, log);
       if (!proved) failures++;
+      if (each) {
+        await surface.settle();
+        await each(step);
+      }
     }
     await surface.settle();
-
-    // A step whose proof failed is the likeliest reason the page lacks what the capture
-    // needs, so a capture that fails says how many did. Each one's ✗ line is in the log.
-    const failed = failures > 0 ? ` (${failures} step(s) failed their proof)` : '';
-    const attempt = async <T>(what: string, act: () => Promise<T>): Promise<T> => {
-      try {
-        return await act();
-      } catch (e) {
-        throw new Error(`screenshot: ${what}${failed}: ${(e as Error).message.split('\n')[0]}`);
-      }
-    };
-    // Said after the area of a full-page capture that stops short.
-    const limited = (scale: number): string => `, the most one capture holds at scale ${scale}`;
-    // Why a full-page capture holds nothing: not one row of a page, or one line of a terminal window.
-    const tooLarge = (what: string, { width, scale }: Extent): string => `scale ${scale} is too large for one capture of ${what} ${Math.round(width)} CSS pixels wide`;
-
-    const shot = { path: opts.outputPath, type: 'png' as const, omitBackground: Boolean(opts.transparent), timeout: ACTION_TIMEOUT };
-    if (demo.terminal) {
-      let area = 'the terminal window';
-      let note = '';
-      let timeout = ACTION_TIMEOUT;
-      if (opts.fullPage) {
-        // A still's window sits at the page's top-left corner, and grows down from there.
-        const win = await attempt('could not measure the terminal window', () => windowExtent(page));
-        const held = await attempt('could not grow the window to the session', () => expandToSession(page, captureHeightLimit(win.width, win.scale)));
-        if (held.rows < 1) throw new Error(`screenshot: could not capture the terminal session${failed}: ${tooLarge('a window', win)}`);
-        area = held.rows < held.lines ? `the session's last ${held.rows} of its ${held.lines} lines` : 'the whole terminal session';
-        if (held.rows < held.lines) note = limited(win.scale);
-        timeout = captureTimeout(await attempt('could not measure the terminal window', () => windowExtent(page)));
-      }
-      log(`screenshot: capturing ${area}${note} → ${path.basename(opts.outputPath)}`);
-      await attempt(`could not capture ${area}`, () => page.locator(TERMINAL_WINDOW).screenshot({ ...shot, omitBackground: true, timeout }));
-    } else if (selector) {
-      const el = page.locator(selector).first();
-      await attempt(`no visible \`${selector}\` to capture`, () => el.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT }));
-      log(`screenshot: capturing \`${selector}\` → ${path.basename(opts.outputPath)}`);
-      await attempt(`could not capture \`${selector}\``, () => el.screenshot(shot));
-    } else {
-      let area = opts.fullPage ? 'the full page' : 'the viewport';
-      let note = '';
-      let timeout = ACTION_TIMEOUT;
-      let clip: { x: number; y: number; width: number; height: number } | undefined;
-      if (opts.fullPage) {
-        const full = await attempt('could not measure the full page', () => pageExtent(page));
-        const limit = captureHeightLimit(full.width, full.scale);
-        if (limit < 1) throw new Error(`screenshot: could not capture the full page${failed}: ${tooLarge('a page', full)}`);
-        if (full.height > limit) {
-          clip = { x: 0, y: 0, width: full.width, height: limit };
-          area = `the page's top ${limit} of its ${full.height} CSS pixels`;
-          note = limited(full.scale);
-        }
-        timeout = captureTimeout({ ...full, height: Math.min(full.height, limit) });
-      }
-      log(`screenshot: capturing ${area}${note} → ${path.basename(opts.outputPath)}`);
-      await attempt(`could not capture ${area}`, () => page.screenshot({ ...shot, timeout, fullPage: Boolean(opts.fullPage), clip }));
-    }
-    return { outputPath: opts.outputPath, failures };
+    return await end(failures);
   } finally {
     await surface.close();
   }
@@ -249,9 +281,10 @@ const ANIMATION_WAIT_MS = 1000;
 const STEP_NAME_CHARS = 48;
 
 /**
- * The name of the screenshot of the state `step` leaves, in a script of `total` steps:
- * its number, padded so the names sort in step order, and its caption as a slug, cut at a
- * word to at most 48 characters, such as `01-the-board-boots-empty.png`.
+ * The name of a PNG of the state `step` leaves, in a script of `total` steps, both a run's
+ * screenshot and a proof video's frame: its number, padded so the names sort in step
+ * order, and its caption as a slug, cut at a word to at most 48 characters, such as
+ * `01-the-board-boots-empty.png`.
  */
 export function stepFileName(step: DemoStep, total: number): string {
   const number = String(step.index).padStart(Math.max(2, String(total).length), '0');
@@ -264,14 +297,24 @@ export function stepFileName(step: DemoStep, total: number): string {
   return `${number}-${slug || 'step'}.png`;
 }
 
+/** Whether `file` is `dir` or lies inside it. */
+function within(dir: string, file: string): boolean {
+  const rel = path.relative(path.resolve(dir), path.resolve(file));
+  return rel === '' || (rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel));
+}
+
 /**
- * Make `dir` for a run's screenshots. Throws when it is a file or already holds files, so
- * once the run is done it holds that run's screenshots and nothing else.
+ * Throw unless `dir` can hold a run's screenshots and nothing else: it is a new directory
+ * or an empty one, and none of `writes`, the paths the run writes besides its screenshots,
+ * such as its video and its working directory, lies inside it. Makes nothing.
  */
-export function claimScreenshotDir(dir: string): void {
-  if (existsSync(dir) && !statSync(dir).isDirectory()) throw new Error(`screenshots: ${dir} is a file; name a new or empty directory`);
-  mkdirSync(dir, { recursive: true });
-  if (readdirSync(dir).length > 0) throw new Error(`screenshots: ${dir} already holds files; name a new or empty directory`);
+export function checkScreenshotDir(dir: string, writes: string[] = []): void {
+  if (existsSync(dir)) {
+    if (!statSync(dir).isDirectory()) throw new Error(`screenshots: ${dir} is a file; name a new or empty directory`);
+    if (readdirSync(dir).length > 0) throw new Error(`screenshots: ${dir} already holds files; name a new or empty directory`);
+  }
+  const held = writes.find((file) => within(dir, file));
+  if (held) throw new Error(`screenshots: ${dir} would also hold ${held}, which the run writes too; name a directory the run writes nothing else into`);
 }
 
 /**
@@ -314,17 +357,26 @@ export interface StepScreenshots {
   take(page: Page, step: DemoStep, quietMs?: number): Promise<number>;
   /** The screenshots saved, in step order. */
   readonly saved: string[];
-  /** Remove every screenshot saved, for a capture that ends saving nothing. */
+  /** Remove every screenshot saved, and the directory for them if the claim made it, for a capture that ends saving nothing. */
   discard(): void;
 }
 
 /**
- * Claim `dir` for the screenshots of a capture of `demo` (claimScreenshotDir), and return
- * what saves them: a PNG of the state each step leaves, named for the step
- * (stepFileName), with nothing the engine draws on it.
+ * Claim `dir` for the screenshots of a capture of `demo`, which writes `writes` besides
+ * them (checkScreenshotDir), and return what saves them: a PNG of the state each step
+ * leaves, named for the step (stepFileName), with nothing the engine draws on it.
  */
-export function stepScreenshots(demo: Demo, dir: string, log: (m: string) => void): StepScreenshots {
-  claimScreenshotDir(dir);
+export function stepScreenshots(demo: Demo, dir: string, log: (m: string) => void, writes: string[] = []): StepScreenshots {
+  checkScreenshotDir(dir, writes);
+  // The directories the claim makes, the screenshots' own first, which discard removes.
+  const made: string[] = [];
+  const first = mkdirSync(dir, { recursive: true });
+  if (first !== undefined) {
+    for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+      made.push(d);
+      if (d === path.resolve(first) || d === path.dirname(d)) break;
+    }
+  }
   const saved: string[] = [];
   return {
     saved,
@@ -342,6 +394,14 @@ export function stepScreenshots(demo: Demo, dir: string, log: (m: string) => voi
     },
     discard() {
       for (const file of saved.splice(0)) rmSync(file, { force: true });
+      // A directory the claim made goes too, unless something else has been put in it since.
+      for (const d of made.splice(0)) {
+        try {
+          rmdirSync(d);
+        } catch {
+          break;
+        }
+      }
     },
   };
 }
@@ -379,22 +439,9 @@ export async function captureScreenshots(opts: CaptureScreenshotsOptions): Promi
   // Read before anything is written: a device the registry does not hold throws here.
   const start = contextOptions(demo).viewport as ViewportSize;
   const shots = stepScreenshots(demo, opts.screenshotDir, log);
-  const { page, baseUrl } = opts;
+  const { page } = opts;
   try {
-    await page.setViewportSize(start).catch(() => {});
-    const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, backdrop: false, log });
-    try {
-      let failures = 0;
-      for (const step of demo.steps) {
-        const { proved } = await runStep(page, baseUrl ?? '', step, demo.steps.length, false, log);
-        if (!proved) failures++;
-        await surface.settle();
-        await shots.take(page, step);
-      }
-      return { screenshots: [...shots.saved], failures };
-    } finally {
-      await surface.close();
-    }
+    return await driveSteps({ page, baseUrl: opts.baseUrl, cwd: opts.cwd, demo, log }, start, (step) => shots.take(page, step), async (failures) => ({ screenshots: [...shots.saved], failures }));
   } catch (e) {
     shots.discard();
     throw e;

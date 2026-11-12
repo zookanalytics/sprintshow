@@ -3,21 +3,23 @@
 // script, in walkthrough and proof mode.
 //
 // A run given a screenshot directory saves into it a PNG of the state each step leaves,
-// named for the step. A screenshot shows the app alone: the screenshots a run with a
-// video takes match, pixel for pixel, those a run with no video takes, in whose page the
-// engine draws nothing, and the last matches the PNG `sprintshow screenshot` saves. A
-// walkthrough's video shows no trace of taking them: every frame from the first step's
-// caption to the closing card shows the caption, no frame shows a terminal's window laid
-// out as a still, a step that ends at once shows its caption before the video holds still
-// for its screenshot, a step that moves to another page, leaving its caption behind, gets
-// no caption back, and no frame of a page whose stylesheet decorates every element shows
-// anything at its top-left corner, where the engine's frame marker sits. The hold ends at
-// a frame drawn after the still that the recording has, and frames are drawn until one
-// reaches it, on a page whose Content Security Policy refuses an image from a data: URL
-// as on any other. A run with no video needs a screenshot directory and refuses the
-// video's options, and a directory that holds files is refused before anything is served.
-// A run whose proof fails saves its screenshots and exits 3, and one that saves nothing
-// keeps none of them.
+// named for the step, as a proof video names its frame of the step. A screenshot shows
+// the app alone: the screenshots a run with a video takes match, pixel for pixel, those a
+// run with no video takes, in whose page the engine draws nothing, and the last matches
+// the PNG `sprintshow screenshot` saves. A walkthrough's video shows no trace of taking
+// them: every frame from the first step's caption to the closing card shows the caption,
+// no frame shows a terminal's window laid out as a still, a step that ends at once shows
+// its caption before the video holds still for its screenshot, a step that moves to
+// another page, leaving its caption behind, gets no caption back, and no frame of a page
+// whose stylesheet decorates every element shows anything at its top-left corner, where
+// the engine's frame marker sits. The hold ends at a frame drawn after the still that the
+// recording has, and frames are drawn until one reaches it, on a page whose Content
+// Security Policy refuses an image from a data: URL as on any other, and on a page that
+// cannot take the marker. A run with no video needs a screenshot directory and refuses
+// the video's options, and a directory that holds files, or would also hold the video or
+// the run's working directory, is refused before anything is served or made. A run whose
+// proof fails saves its screenshots and exits 3, and one that saves nothing keeps none of
+// them, nor the directory it made for them.
 //
 // The tests that drive a page need a headless Chromium and skip without one, and the
 // walkthrough's need a real ffmpeg (see browser-fixture.ts and assemble.test.ts). A proof
@@ -25,7 +27,7 @@
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
@@ -34,6 +36,7 @@ import { runDemo } from '../src/run.ts';
 import { captureWalkthrough, heldSpans, screenshotStep, watchRecording, type RecordingFrames } from '../src/walkthrough.ts';
 import { captureScreenshots, stepFileName, stepScreenshots } from '../src/screenshot.ts';
 import { ffmpegBin } from '../src/ffmpeg.ts';
+import { markFrame } from '../src/overlay.ts';
 import { VIEWPORT } from '../src/browser.ts';
 import { launchBrowser, scratchDir, serveSite, writeFiles, runCli, stubFfmpeg, pngSize, pixelsApart, alphaAt, patchLuma, firstFrame, REPO } from './browser-fixture.ts';
 
@@ -103,6 +106,32 @@ test('a run refuses a screenshot directory that holds files, or is a file, befor
     assert.deepEqual(readdirSync(path.join(dir, 'shots')), ['mine.txt']);
     assert.equal(readFileSync(path.join(dir, 'a-file'), 'utf8'), 'kept');
     assert.ok(!lines.some((l) => l.startsWith('server:')), `nothing was served:\n${lines.join('\n')}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('a run refuses a screenshot directory that would also hold its video, before it serves or makes anything', async () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    const lines: string[] = [];
+    const shots = path.join(dir, 'shots');
+    const video = path.join(shots, 'demo.mp4');
+    await assert.rejects(runDemo({ script: SAMPLE, serveDir: SAMPLE_APP, screenshotDir: shots, outputPath: video, log: (m) => lines.push(m) }), {
+      message: `screenshots: ${shots} would also hold ${video}, which the run writes too; name a directory the run writes nothing else into`,
+    });
+    assert.deepEqual(readdirSync(dir), []);
+    assert.ok(!lines.some((l) => l.startsWith('server:')), `nothing was served:\n${lines.join('\n')}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a run whose server never comes up leaves no screenshot directory behind", async () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    await assert.rejects(runDemo({ script: SAMPLE, screenshotDir: path.join(dir, 'shots'), noVideo: true, log: quiet }), { message: /^no server: / });
+    assert.deepEqual(readdirSync(dir), []);
   } finally {
     cleanup();
   }
@@ -418,6 +447,27 @@ describe("a walkthrough's screenshot ends its hold at a frame the recording has"
   });
 });
 
+describe('a frame marker on a page of its own', { skip }, () => {
+  const STEP = parseDemoScript('# Demo: Still\n\n**Start:** `/`\n\n## Steps\n\n1. **The page shows**\n   _Prove:_ it shows — `visible #app`\n');
+
+  test('the marker resolves null on a page that cannot take it, and the hold still ends', async () => {
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage({ viewport: VIEWPORT });
+    try {
+      await page.setContent('<body style="margin:0;background:#fff"><main id="app">app</main></body>');
+      await page.evaluate(() => document.body.remove());
+      assert.equal(await markFrame(page), null);
+      const recording: RecordingFrames = { start: () => 0, firstFrom: (wall) => wall + 1 };
+      const bare = { settle: async () => {}, close: async () => {} };
+      const shown = await screenshotStep(page, bare, stepScreenshots(STEP, path.join(dir, 'shots'), quiet), recording, STEP.steps[0], quiet);
+      assert.ok(shown.from < shown.to, 'the hold ends at a frame the recording has');
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+});
+
 /** A one-step script on the card page, whose proof holds or fails at once as asked. */
 function cardScript(proof: 'holds' | 'fails'): string {
   const assertion = proof === 'holds' ? '_Prove:_ the card shows — `visible .card`' : '_Fail if:_ the card shows — `visible .card`';
@@ -438,19 +488,57 @@ describe('the run command and its screenshots', { concurrency: true, skip }, () 
     }
   });
 
-  test('keeps none of its screenshots when it saves no video', async () => {
+  test('keeps none of its screenshots when it saves no video, nor the directories it made for them', async () => {
     const { dir, cleanup } = scratchDir();
     try {
       writeFiles(dir, { 'site/card.html': '<!doctype html><div class="card">card</div>', 'demo.md': cardScript('holds') });
+      mkdirSync(path.join(dir, 'kept'));
       const failing = path.join(dir, 'ffmpeg-fails.mjs');
       writeFileSync(failing, '#!/usr/bin/env node\nprocess.exit(1);\n', { mode: 0o755 });
       const env = { ...process.env, FFMPEG_BIN: failing, OPENAI_API_KEY: '' };
-      const res = await runCli(['run', path.join(dir, 'demo.md'), '--serve-dir', path.join(dir, 'site'), '--mode', 'proof', '--no-narrate', '-o', path.join(dir, 'out.mp4'), '--screenshots', path.join(dir, 'shots')], { cwd: dir, env });
-      assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
-      assert.match(res.stdout, /· screenshot → 01-the-card-shows\.png/, 'the run took the screenshot before its video failed');
-      assert.deepEqual(readdirSync(path.join(dir, 'shots')), []);
-      assert.equal(existsSync(path.join(dir, 'out.mp4')), false);
+      const run = (shots: string, output: string): ReturnType<typeof runCli> =>
+        runCli(['run', 'demo.md', '--serve-dir', 'site', '--mode', 'proof', '--no-narrate', '-o', output, '--screenshots', shots], { cwd: dir, env });
+      const [made, kept] = await Promise.all([run('made/shots', 'made.mp4'), run('kept', 'kept.mp4')]);
+      for (const res of [made, kept]) {
+        assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
+        assert.match(res.stdout, /· screenshot → 01-the-card-shows\.png/, 'the run took the screenshot before its video failed');
+      }
+      assert.equal(existsSync(path.join(dir, 'made')), false, 'the run removes the directories it made for its screenshots');
+      assert.deepEqual(readdirSync(path.join(dir, 'kept')), [], 'the run leaves a directory it did not make, empty');
+      assert.equal(existsSync(path.join(dir, 'made.mp4')) || existsSync(path.join(dir, 'kept.mp4')), false);
     } finally {
+      cleanup();
+    }
+  });
+
+  test("names a proof video's frame of each step as it names the step's screenshot", async () => {
+    const { dir, cleanup } = scratchDir();
+    try {
+      const caption = 'The card shows once the page has loaded every part of its content';
+      writeFiles(dir, { 'site/card.html': '<!doctype html><div class="card">card</div>', 'demo.md': cardScript('holds').replace('The card shows', caption) });
+      const env = { ...process.env, FFMPEG_BIN: stubFfmpeg(dir), OPENAI_API_KEY: '' };
+      const res = await runCli(['run', 'demo.md', '--serve-dir', 'site', '--mode', 'proof', '--no-narrate', '--keep', '-o', 'out.mp4', '--screenshots', 'shots'], { cwd: dir, env });
+      assert.equal(res.code, 0, `${res.stdout}${res.stderr}`);
+      const [shot] = readdirSync(path.join(dir, 'shots'));
+      const [kept] = readdirSync(path.join(dir, '.captures'));
+      const frames = readdirSync(path.join(dir, '.captures', kept));
+      assert.ok(frames.includes(shot), `the proof video's frame of the step is named ${shot}: ${frames.join(', ')}`);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('refuses a screenshot directory that would also hold its working directory, making nothing', async () => {
+    const { dir, cleanup } = scratchDir();
+    const elsewhere = scratchDir();
+    try {
+      const res = await runCli(['run', SAMPLE, '--serve-dir', SAMPLE_APP, '--screenshots', '.', '-o', path.join(elsewhere.dir, 'demo.mp4')], { cwd: dir });
+      assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
+      assert.match(res.stderr, /screenshots: .* would also hold .*\/\.captures, which the run writes too/);
+      assert.deepEqual(readdirSync(dir), []);
+      assert.deepEqual(readdirSync(elsewhere.dir), []);
+    } finally {
+      elsewhere.cleanup();
       cleanup();
     }
   });
