@@ -354,7 +354,8 @@ Each image that differs gets a diff image of its name in `golden-diff/` in the r
 directory: the golden image faded to grey with each differing pixel in red, or, when the
 two are not the same size, the golden image and the run's side by side. A comparison
 replaces the diff images of the one before it, so it clears `golden-diff/` first. Golden
-images kept in it are refused, by whatever path names them, before anything is removed.
+images kept in it are refused before anything is removed, by whatever path names them and
+however it capitalizes `golden-diff`.
 
 `--update` rewrites the golden images from the run. It writes each image the run changed or
 added, removes each golden image the run does not have, and leaves each one that matches as

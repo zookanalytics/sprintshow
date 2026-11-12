@@ -148,9 +148,11 @@ images of the one before it, so `golden-diff/` holds only the current difference
 Because a comparison clears `golden-diff/`, a golden directory that is `golden-diff/` or
 lies in it is refused before anything is removed or written, and so is one that is the
 run's own directory. Which directory a path names is read from the file system, by device
-and inode, so a symbolic link, `..`, or a name that differs only in letter case on a
-Mac's default volume does not hide it. A golden directory not made yet is refused when it would be made
-there.
+and inode, so a symbolic link or `..` does not hide it. A golden directory not made yet is
+refused when it would be made there. A name that differs from `golden-diff` only in
+letter case is refused on every host, because a Mac's default volume takes it for
+`golden-diff`. Whether a golden directory is refused therefore does not depend on the
+volume, or on whether an earlier comparison made `golden-diff/`.
 
 `--update` writes the run's new and changed images into the golden directory, removes the
 golden images the run lacks, and leaves the matches alone. A screenshot that moved within

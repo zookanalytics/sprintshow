@@ -5,11 +5,11 @@
 // differing when its colour moves past the threshold. A difference writes a diff image into
 // the run's golden-diff/, and a name only one side has is a difference too. Golden images
 // in the run's golden-diff/, which a comparison clears, are refused by any path that names
-// them. Updating writes the run's new and changed images, removes the golden images the
-// run lacks, and leaves the matches as committed. It removes before it writes, so an image
-// whose name changed only in letter case survives a Mac's default volume, which takes the
-// two names for one. The command exits 0 when every image matches or the update is
-// written, 3 when an image differs, and 1 when nothing could be compared.
+// them and in any letter case. Updating writes the run's new and changed images, removes
+// the golden images the run lacks, and leaves the matches as committed. It removes before
+// it writes, so an image whose name changed only in letter case survives a Mac's default
+// volume, which takes the two names for one. The command exits 0 when every image matches
+// or the update is written, 3 when an image differs, and 1 when nothing could be compared.
 //
 // The images are made here with pngjs, so these tests need no browser and no simulator.
 
@@ -193,7 +193,7 @@ describe('compareGolden', () => {
     assert.throws(() => compareGolden({ ...d, maxDiffPixels: -1, log: quiet }), /whole number/);
   });
 
-  test("golden images in the run's golden-diff/ are refused before anything is removed, by any path that names them", (t) => {
+  test("golden images in the run's golden-diff/ are refused before anything is removed, by any path that names them and in any letter case", (t) => {
     const d = dirs({ 'a.png': png(4, 4, BLACK) }, null);
     t.after(d.cleanup);
     const diffDir = path.join(d.runDir, DIFF_DIR);
@@ -203,8 +203,9 @@ describe('compareGolden', () => {
     const [link, deepLink] = [path.join(path.dirname(d.runDir), 'link'), path.join(path.dirname(d.runDir), 'deep-link')];
     symlinkSync(diffDir, link);
     symlinkSync(references, deepLink);
-    const named = [diffDir, references, link, path.join(link, 'references'), deepLink, path.join(references, '..')];
-    if (IGNORES_CASE) named.push(path.join(d.runDir, DIFF_DIR.toUpperCase()), path.join(d.runDir, DIFF_DIR.toUpperCase(), 'REFERENCES'));
+    // path.join would drop the `..` before the comparison saw it.
+    const upper = path.join(d.runDir, DIFF_DIR.toUpperCase());
+    const named = [diffDir, references, link, path.join(link, 'references'), deepLink, `${references}${path.sep}..`, upper, path.join(upper, 'REFERENCES')];
     for (const goldenDir of named) {
       assert.throws(() => compareGolden({ runDir: d.runDir, goldenDir, log: quiet }), /is in the run's golden-diff\/, which each comparison clears to write its diff images/, goldenDir);
       assert.throws(() => updateGolden({ runDir: d.runDir, goldenDir, log: quiet }), /is in the run's golden-diff\//, goldenDir);
@@ -217,8 +218,7 @@ describe('compareGolden', () => {
   test("a golden directory not made yet is refused in the run's golden-diff/ too, and a directory beside it is not", (t) => {
     const d = dirs({ 'a.png': png(4, 4, BLACK) }, null);
     t.after(d.cleanup);
-    const refused = [path.join(d.runDir, DIFF_DIR), path.join(d.runDir, DIFF_DIR, 'references')];
-    if (IGNORES_CASE) refused.push(path.join(d.runDir, DIFF_DIR.toUpperCase(), 'references'));
+    const refused = [path.join(d.runDir, DIFF_DIR), path.join(d.runDir, DIFF_DIR, 'references'), path.join(d.runDir, DIFF_DIR.toUpperCase(), 'references')];
     for (const goldenDir of refused) assert.throws(() => updateGolden({ runDir: d.runDir, goldenDir, log: quiet }), /is in the run's golden-diff\//, goldenDir);
     assert.ok(!existsSync(path.join(d.runDir, DIFF_DIR)), 'nothing is made');
     for (const goldenDir of [path.join(d.runDir, `${DIFF_DIR}-kept`), path.join(d.runDir, 'golden')]) {

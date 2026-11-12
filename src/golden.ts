@@ -142,8 +142,9 @@ function identity(p: string): string | null {
 /**
  * Whether `dir`, which need not exist yet, is the directory `name` in the existing
  * directory `parent`, or would lie inside it. Each alias of a path is seen through: a
- * symbolic link, `..`, and a name that differs only in letter case, which a Mac's default
- * volume takes for the same name.
+ * symbolic link, `..`, and a name that differs only in letter case. A Mac's default
+ * volume takes such a name for `name` itself, so it counts as `name` on every host,
+ * whether or not `name` exists yet, and the answer does not change with the volume.
  */
 function within(dir: string, parent: string, name: string): boolean {
   const target = identity(path.join(parent, name));
@@ -158,7 +159,7 @@ function within(dir: string, parent: string, name: string): boolean {
   for (let p = realpathSync(at); ; next = path.basename(p), p = path.dirname(p)) {
     const id = identity(p);
     if (target !== null && id === target) return true;
-    if (target === null && id === parentId && next?.toLowerCase() === name.toLowerCase()) return true;
+    if (id === parentId && next?.toLowerCase() === name.toLowerCase()) return true;
     if (path.dirname(p) === p) return false;
   }
 }
