@@ -199,3 +199,4 @@ Where the repository has chosen to diverge from the design above:
 | Divergence | Why a reader must know it | Retired by |
 |---|---|---|
 | The package is not on npm. | A consumer runs a checkout's `src/cli.ts`, and the README's `npx` and `npm install` lines fail. | Publishing the package, which needs the npm account owner's credentials (ss-rck). |
+| iOS capture runs `xcodebuild` with the caller's whole environment, the Vercel bypass key included. | The rule that a key is written nowhere does not hold there. A consuming app's build script that prints its environment writes the key into `xcodebuild`'s build log, which a run keeps when it errors or is given `--keep`. | Withholding the keys only the engine uses from `xcodebuild` and `xcrun`, as from a terminal script's shell (ss-gsgun). |
