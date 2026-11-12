@@ -12,10 +12,11 @@
 // pixels differ. pixelmatch decides whether a pixel differs: its colour has moved further
 // than `threshold` (0 to 1, a distance in the OKLab colour space), and the pixel is not
 // an anti-aliased edge, whose shade can move between two renderings of one screen. Each
-// difference writes a diff image into `golden-diff/` in the run's directory: the golden
-// image faded to grey with its differing pixels in red, or, for two images of different
-// sizes, the golden image and the run's side by side. A comparison clears `golden-diff/`
-// before it writes there, so golden images kept in it are refused before anything moves.
+// image that differs from its golden image gets a diff image in `golden-diff/` in the
+// run's directory: the golden image faded to grey with its differing pixels in red, or,
+// for two images of different sizes, the golden image and the run's side by side. A name
+// only one side has gets none. A comparison clears `golden-diff/` before it writes there,
+// so golden images kept in it are refused before anything moves.
 //
 // Updating rewrites the golden images from the run: an image the run changed or added is
 // written, a golden image the run no longer has is removed, and one that matches is left

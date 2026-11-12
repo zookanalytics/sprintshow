@@ -86,7 +86,7 @@ when asked.
 | Capture ([walkthrough.ts](../src/walkthrough.ts), [capture.ts](../src/capture.ts), [screenshot.ts](../src/screenshot.ts), [overlay.ts](../src/overlay.ts)) | Turn a script's steps into a recorded take, a frame per step, or a PNG of the last step or of each, and draw a video's captions, cards and pointer. | A run's working directory: its frames or its recording, and when each step shows. | Judge a step: each step's result comes from Step proof. |
 | Video ([assemble.ts](../src/assemble.ts), [ffmpeg.ts](../src/ffmpeg.ts)) | Encode frames or a recording into an MP4, and lay narration and a music bed under it. | The frames manifest, the narration track and the audio mix. | Need the app or a browser: it works from files on disk. |
 | [iOS capture](../src/simulator.ts) | Run an iOS app's UI tests on a throwaway simulator device for each appearance, light then dark, and save each screenshot they attach. | Each pass's device, from its creation to its deletion, and a run's working directory: its build, its result bundles and its test logs. | Drive the app or judge a test: the app's UI tests do both. |
-| [Golden images](../src/golden.ts) | Compare a run with its golden images, draw a diff image of each difference, and rewrite the golden images from a run. | Each image's verdict against its golden image, and the diff images in a run's `golden-diff/`. | Depend on what made a run: any directory of PNGs compares the same way. |
+| [Golden images](../src/golden.ts) | Compare a run with its golden images, draw a diff image of each image that differs, and rewrite the golden images from a run. | Each image's verdict against its golden image, and the diff images in a run's `golden-diff/`. | Depend on what made a run: any directory of PNGs compares the same way. |
 | Samples ([demos/](../demos/), [sample-app](../examples/sample-app/), [sample-cli](../examples/sample-cli/), [sample-ios](../examples/sample-ios/)) | Give a capture something to drive with no app of one's own. | The sample scripts and the sample app and terminal program they drive, and the sample iOS app with its UI test. | Need anything the package does not ship. |
 
 How the domains meet in a capture and in a comparison:
@@ -117,7 +117,7 @@ What a user runs, and the domains each draws on:
 | `sprintshow screenshot` | One PNG of the state the last step leaves, with nothing of the engine's drawn on it. | Demo script, App origin and Page or Terminal session, Step proof, Capture |
 | `sprintshow screenshot --each-step` | A PNG of the state each step leaves, named in step order: a run to keep as golden images. | Demo script, App origin and Page or Terminal session, Step proof, Capture, Golden images |
 | `sprintshow simulator` | A PNG of each screenshot an iOS app's UI tests attach, in light and in dark, and a video of each pass when asked. | iOS capture, Golden images |
-| `sprintshow golden` | A run compared with its golden images, with a diff image of each difference, or the golden images rewritten from the run. | Golden images |
+| `sprintshow golden` | A run compared with its golden images, with a diff image of each image that differs, or the golden images rewritten from the run. | Golden images |
 | `sprintshow assemble` | An MP4 from the frames and manifest of an agent's own capture. | Video |
 | `sprintshow lint` | A script's findings, before a capture. | Demo script, Lint findings |
 | The library | Each command's driver and the parts under it, for a caller that prepares its own page or drives its own steps. | Every domain but Samples |
