@@ -3,16 +3,19 @@
 // A run's PNGs are compared by name with the golden images. Two images match when they are
 // the same size and no more of their pixels differ than the comparison allows, a pixel
 // differing when its colour moves past the threshold. A difference writes a diff image into
-// the run's golden-diff/, and a name only one side has is a difference too. Updating
-// writes the run's new and changed images, removes the golden images the run lacks, and
-// leaves the matches as committed. The command exits 0 when every image matches or the
-// update is written, 3 when an image differs, and 1 when nothing could be compared.
+// the run's golden-diff/, and a name only one side has is a difference too. Golden images
+// in the run's golden-diff/, which a comparison clears, are refused by any path that names
+// them. Updating writes the run's new and changed images, removes the golden images the
+// run lacks, and leaves the matches as committed. It removes before it writes, so an image
+// whose name changed only in letter case survives a Mac's default volume, which takes the
+// two names for one. The command exits 0 when every image matches or the update is
+// written, 3 when an image differs, and 1 when nothing could be compared.
 //
 // The images are made here with pngjs, so these tests need no browser and no simulator.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 
@@ -53,6 +56,17 @@ function dirs(run: Record<string, Buffer>, golden: Record<string, Buffer> | null
   }
   return { runDir, goldenDir, cleanup };
 }
+
+/** Whether the volume the scratch directories are made on takes two names that differ only in letter case for one, as a Mac's default volume does. */
+const IGNORES_CASE = ((): boolean => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    writeFileSync(path.join(dir, 'Probe'), '');
+    return existsSync(path.join(dir, 'probe'));
+  } finally {
+    cleanup();
+  }
+})();
 
 describe('compareGolden', () => {
   test('a run whose images are the golden ones matches, and writes no diff image', (t) => {
@@ -171,11 +185,46 @@ describe('compareGolden', () => {
     assert.throws(() => compareGolden({ ...d, log: quiet }), /holds no PNG to compare/);
     assert.throws(() => compareGolden({ runDir: path.join(d.runDir, 'absent'), goldenDir: d.goldenDir, log: quiet }), /does not exist/);
     assert.throws(() => compareGolden({ runDir: d.goldenDir, goldenDir: d.goldenDir, log: quiet }), /one directory/);
+    if (IGNORES_CASE) assert.throws(() => compareGolden({ runDir: d.runDir, goldenDir: path.join(path.dirname(d.runDir), 'RUN'), log: quiet }), /one directory/);
     writeFileSync(path.join(d.runDir, 'a.png'), 'not a png');
     assert.throws(() => compareGolden({ ...d, log: quiet }), /cannot read .*a\.png as a PNG/);
     writeFileSync(path.join(d.runDir, 'a.png'), png(4, 4, WHITE));
     assert.throws(() => compareGolden({ ...d, threshold: 2, log: quiet }), /threshold is a number from 0 to 1/);
     assert.throws(() => compareGolden({ ...d, maxDiffPixels: -1, log: quiet }), /whole number/);
+  });
+
+  test("golden images in the run's golden-diff/ are refused before anything is removed, by any path that names them", (t) => {
+    const d = dirs({ 'a.png': png(4, 4, BLACK) }, null);
+    t.after(d.cleanup);
+    const diffDir = path.join(d.runDir, DIFF_DIR);
+    const references = path.join(diffDir, 'references');
+    mkdirSync(references, { recursive: true });
+    for (const dir of [diffDir, references]) writeFileSync(path.join(dir, 'a.png'), png(4, 4, WHITE));
+    const [link, deepLink] = [path.join(path.dirname(d.runDir), 'link'), path.join(path.dirname(d.runDir), 'deep-link')];
+    symlinkSync(diffDir, link);
+    symlinkSync(references, deepLink);
+    const named = [diffDir, references, link, path.join(link, 'references'), deepLink, path.join(references, '..')];
+    if (IGNORES_CASE) named.push(path.join(d.runDir, DIFF_DIR.toUpperCase()), path.join(d.runDir, DIFF_DIR.toUpperCase(), 'REFERENCES'));
+    for (const goldenDir of named) {
+      assert.throws(() => compareGolden({ runDir: d.runDir, goldenDir, log: quiet }), /is in the run's golden-diff\/, which each comparison clears to write its diff images/, goldenDir);
+      assert.throws(() => updateGolden({ runDir: d.runDir, goldenDir, log: quiet }), /is in the run's golden-diff\//, goldenDir);
+    }
+    assert.deepEqual(readdirSync(diffDir).sort(), ['a.png', 'references']);
+    assert.deepEqual(readdirSync(references), ['a.png'], 'every golden image is still there');
+    assert.deepEqual(pixel(path.join(diffDir, 'a.png'), 0, 0), WHITE, 'and none became a diff image');
+  });
+
+  test("a golden directory not made yet is refused in the run's golden-diff/ too, and a directory beside it is not", (t) => {
+    const d = dirs({ 'a.png': png(4, 4, BLACK) }, null);
+    t.after(d.cleanup);
+    const refused = [path.join(d.runDir, DIFF_DIR), path.join(d.runDir, DIFF_DIR, 'references')];
+    if (IGNORES_CASE) refused.push(path.join(d.runDir, DIFF_DIR.toUpperCase(), 'references'));
+    for (const goldenDir of refused) assert.throws(() => updateGolden({ runDir: d.runDir, goldenDir, log: quiet }), /is in the run's golden-diff\//, goldenDir);
+    assert.ok(!existsSync(path.join(d.runDir, DIFF_DIR)), 'nothing is made');
+    for (const goldenDir of [path.join(d.runDir, `${DIFF_DIR}-kept`), path.join(d.runDir, 'golden')]) {
+      assert.equal(updateGolden({ runDir: d.runDir, goldenDir, log: quiet }).written.length, 1, goldenDir);
+      assert.equal(compareGolden({ runDir: d.runDir, goldenDir, log: quiet }).differences, 0, goldenDir);
+    }
   });
 });
 
@@ -207,6 +256,24 @@ describe('updateGolden', () => {
     t.after(d.cleanup);
     updateGolden({ ...d, log: quiet });
     assert.ok(statSync(path.join(d.goldenDir, 'a.png')).isFile());
+  });
+
+  test('an image whose name changed only in letter case is written under its new name, and the old name removed', (t) => {
+    const d = dirs({ 'Board.png': png(4, 4, BLACK) }, { 'board.png': png(4, 4, WHITE) });
+    t.after(d.cleanup);
+    const res = updateGolden({ ...d, log: quiet });
+    assert.deepEqual(res.removed, [path.join(d.goldenDir, 'board.png')]);
+    assert.deepEqual(res.written, [path.join(d.goldenDir, 'Board.png')]);
+    assert.deepEqual(readdirSync(d.goldenDir), ['Board.png']);
+    assert.deepEqual(readFileSync(path.join(d.goldenDir, 'Board.png')), readFileSync(path.join(d.runDir, 'Board.png')));
+    assert.equal(compareGolden({ ...d, log: quiet }).differences, 0, 'the run matches the golden images it wrote');
+  });
+
+  test('two images of the run whose names differ only in letter case are refused before anything changes', { skip: IGNORES_CASE && 'this volume cannot hold two names that differ only in letter case' }, (t) => {
+    const d = dirs({ 'Board.png': png(4, 4, BLACK), 'board.png': png(4, 4, WHITE) }, { 'gone.png': png(4, 4, WHITE) });
+    t.after(d.cleanup);
+    assert.throws(() => updateGolden({ ...d, log: quiet }), /the run's Board\.png and board\.png differ only in letter case/);
+    assert.deepEqual(readdirSync(d.goldenDir), ['gone.png'], 'nothing is written or removed');
   });
 });
 

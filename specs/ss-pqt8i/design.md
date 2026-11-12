@@ -145,9 +145,23 @@ output, the golden image faded to grey with each differing pixel in red. For two
 is the golden image and the run's side by side on grey. A comparison removes the diff
 images of the one before it, so `golden-diff/` holds only the current differences.
 
+Because a comparison clears `golden-diff/`, a golden directory that is `golden-diff/` or
+lies in it is refused before anything is removed or written, and so is one that is the
+run's own directory. Which directory a path names is read from the file system, by device
+and inode, so a symbolic link, `..`, or a name that differs only in letter case on a
+Mac's default volume does not hide it. A golden directory not made yet is refused when it would be made
+there.
+
 `--update` writes the run's new and changed images into the golden directory, removes the
 golden images the run lacks, and leaves the matches alone. A screenshot that moved within
 the tolerance therefore does not churn a committed file.
+
+Names match as spelled, letter case included, so an image whose name changed only in
+case is a new image and a missing one. The update removes before it writes. On a Mac's
+default volume, writing `Board.png` first would write through `board.png`, and removing
+`board.png` would then take the new image with it. A run that holds two images whose
+names differ only in case is refused before anything changes, since they would be one
+golden image on that volume.
 
 `golden` exits 0 when every image matches or the update is written, 3 when something
 differs, and 1 when nothing could be compared. That follows the captures, whose 3 means

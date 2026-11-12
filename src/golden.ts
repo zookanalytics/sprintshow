@@ -14,11 +14,14 @@
 // an anti-aliased edge, whose shade can move between two renderings of one screen. Each
 // difference writes a diff image into `golden-diff/` in the run's directory: the golden
 // image faded to grey with its differing pixels in red, or, for two images of different
-// sizes, the golden image and the run's side by side.
+// sizes, the golden image and the run's side by side. A comparison clears `golden-diff/`
+// before it writes there, so golden images kept in it are refused before anything moves.
 //
 // Updating rewrites the golden images from the run: an image the run changed or added is
 // written, a golden image the run no longer has is removed, and one that matches is left
 // as it is, so a run whose pixels moved within the tolerance changes no committed file.
+// A Mac's default volume takes two names that differ only in letter case for one file, so
+// a run with two such images is refused, and the removals come before the writes.
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -126,7 +129,45 @@ interface Checked {
   diffs: Map<string, PNG>;
 }
 
-/** Hold each image of the run against its golden image. Throws when the run's directory holds no PNG, or names the golden images' directory. */
+/** The file `p` is, as its device and inode, so two paths to one file give one answer; null when there is none to read. */
+function identity(p: string): string | null {
+  try {
+    const s = statSync(p, { bigint: true });
+    return `${s.dev}:${s.ino}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `dir`, which need not exist yet, is the directory `name` in the existing
+ * directory `parent`, or would lie inside it. Each alias of a path is seen through: a
+ * symbolic link, `..`, and a name that differs only in letter case, which a Mac's default
+ * volume takes for the same name.
+ */
+function within(dir: string, parent: string, name: string): boolean {
+  const target = identity(path.join(parent, name));
+  const parentId = identity(parent);
+  let at = path.resolve(dir);
+  // The name, under `at`, of the next directory on the way to `dir`.
+  let next: string | undefined;
+  while (!existsSync(at)) {
+    next = path.basename(at);
+    at = path.dirname(at);
+  }
+  for (let p = realpathSync(at); ; next = path.basename(p), p = path.dirname(p)) {
+    const id = identity(p);
+    if (target !== null && id === target) return true;
+    if (target === null && id === parentId && next?.toLowerCase() === name.toLowerCase()) return true;
+    if (path.dirname(p) === p) return false;
+  }
+}
+
+/**
+ * Hold each image of the run against its golden image. Throws, before anything is written
+ * or removed, when the run's directory holds no PNG, or when the golden images' directory
+ * is the run's or lies in the run's `golden-diff/`, which a comparison clears.
+ */
 function check(opts: GoldenOptions): Checked {
   const { runDir, goldenDir } = opts;
   const threshold = opts.threshold ?? DEFAULT_THRESHOLD;
@@ -134,7 +175,9 @@ function check(opts: GoldenOptions): Checked {
   if (!(threshold >= 0 && threshold <= 1)) throw new Error(`golden: the threshold is a number from 0 to 1 (got ${opts.threshold})`);
   if (!(Number.isInteger(maxDiffPixels) && maxDiffPixels >= 0)) throw new Error(`golden: the pixels that may differ are a whole number, 0 or more (got ${opts.maxDiffPixels})`);
   if (!existsSync(runDir) || !statSync(runDir).isDirectory()) throw new Error(`golden: the run's directory ${runDir} does not exist`);
-  if (existsSync(goldenDir) && realpathSync(goldenDir) === realpathSync(runDir)) throw new Error('golden: the run and the golden images are one directory; name two');
+  const runId = identity(runDir);
+  if (runId !== null && identity(goldenDir) === runId) throw new Error('golden: the run and the golden images are one directory; name two');
+  if (within(goldenDir, runDir, DIFF_DIR)) throw new Error(`golden: ${goldenDir} is in the run's ${DIFF_DIR}/, which each comparison clears to write its diff images; keep the golden images in another directory`);
   const run = new Set(pngsIn(runDir));
   if (run.size === 0) throw new Error(`golden: ${runDir} holds no PNG to compare`);
   const golden = new Set(pngsIn(goldenDir));
@@ -179,7 +222,8 @@ function howItDiffers(image: GoldenImage): string {
  * Compare a run's images with the golden images, writing a diff image into the run's
  * `golden-diff/` for each pair that differs. The diff images of an earlier comparison of
  * the run are removed first. Throws when the run's directory does not exist or holds no
- * PNG, the two directories are one, or a PNG cannot be read.
+ * PNG, the two directories are one, the golden images' directory lies in the run's
+ * `golden-diff/`, or a PNG cannot be read.
  */
 export function compareGolden(opts: GoldenOptions): GoldenComparison {
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -205,23 +249,37 @@ export function compareGolden(opts: GoldenOptions): GoldenComparison {
 /**
  * Rewrite the golden images from a run: write each image the run changed or added, remove
  * each golden image the run does not have, and leave each match as it is. Creates the
- * golden images' directory when it does not exist. Throws as compareGolden does.
+ * golden images' directory when it does not exist. Throws as compareGolden does, and,
+ * before anything is written, when two of the run's images have names that differ only in
+ * letter case, which are one file on a Mac's default volume.
  */
 export function updateGolden(opts: GoldenOptions): GoldenUpdate {
   const log = opts.log ?? ((m: string) => console.log(m));
   const { images } = check(opts);
+  const kept = images.filter((i) => i.status !== 'missing');
+  const byFold = new Map<string, string>();
+  for (const { name } of kept) {
+    const other = byFold.get(name.toLowerCase());
+    if (other) throw new Error(`golden: the run's ${other} and ${name} differ only in letter case, so they would be one golden image on a Mac's default volume; name them apart`);
+    byFold.set(name.toLowerCase(), name);
+  }
   const written: string[] = [];
   const removed: string[] = [];
   log(`golden: updating the golden images in ${opts.goldenDir} from ${opts.runDir}`);
   mkdirSync(opts.goldenDir, { recursive: true });
-  for (const image of images) {
+  // The golden images the run lacks go first. On a volume that ignores letter case, an
+  // image whose name changed only in case, such as board.png to Board.png, is then
+  // written as a new file, rather than written through the old one and removed with it.
+  for (const image of images.filter((i) => i.status === 'missing')) {
+    const golden = path.join(opts.goldenDir, image.name);
+    rmSync(golden);
+    removed.push(golden);
+    log(`  − ${image.name}: removed, the run has no image of its name`);
+  }
+  for (const image of kept) {
     const golden = path.join(opts.goldenDir, image.name);
     if (image.status === 'match') {
       log(`  ✓ ${image.name}: unchanged`);
-    } else if (image.status === 'missing') {
-      rmSync(golden);
-      removed.push(golden);
-      log(`  − ${image.name}: removed, the run has no image of its name`);
     } else {
       copyFileSync(path.join(opts.runDir, image.name), golden);
       written.push(golden);
