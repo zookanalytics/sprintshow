@@ -19,7 +19,9 @@
 // shows every cell of a terminal at each limit of the sizes the parser accepts, clear of
 // the caption bar. The shell and every program it still runs end before the capture
 // returns, even a program that handles SIGHUP and however slowly the host lists them, and
-// the walkthrough ends them only once its recording is flushed.
+// the walkthrough ends them only once its recording is flushed. The shell inherits the
+// engine's environment less the Vercel bypass key, which only the engine uses, and the
+// variables that describe another terminal. OPENAI_API_KEY reaches it.
 //
 // They need a headless Chromium and skip without one (see browser-fixture.ts).
 
@@ -34,7 +36,8 @@ import { parseDemoScript, parseAssertion, parseKeys, parseMatcher, TERMINAL_COLS
 import { openSurface, runStep, runAction, checkAssertion, awaitAssertion, ACTION_TIMEOUT, COMMAND_TIMEOUT, VIEWPORT, type StepProof, type Surface } from '../src/browser.ts';
 import { showCaption } from '../src/overlay.ts';
 import { captureHeightLimit, captureScreenshot } from '../src/screenshot.ts';
-import { TERMINAL_WINDOW, expandToSession, terminalPress, terminalRun, terminalWaitForScreen } from '../src/terminal.ts';
+import { TERMINAL_WINDOW, expandToSession, shellEnv, terminalPress, terminalRun, terminalWaitForScreen } from '../src/terminal.ts';
+import { VERCEL_BYPASS_VAR } from '../src/vercel.ts';
 import { launchBrowser, scratchDir, writeFiles, runCli, stepLines, stubFfmpeg, pngSize, pngPixels, rgba, alphaAt, HIGH_DPI_ARGS, REPO } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
@@ -771,4 +774,16 @@ test('a capture whose shell cannot start fails with a reason and saves nothing',
   } finally {
     cleanup();
   }
+});
+
+test("the shell inherits the engine's environment less the Vercel bypass key and what describes another terminal, and keeps OPENAI_API_KEY", () => {
+  const env = shellEnv({ PATH: '/usr/bin:/bin', HOME: '/home/demo', OPENAI_API_KEY: 'openai-key', [VERCEL_BYPASS_VAR]: 'bypass-key', TMUX: '/tmp/tmux-1/default,1,0', COLUMNS: '200' });
+  assert.equal(VERCEL_BYPASS_VAR in env, false);
+  assert.equal(Object.values(env).includes('bypass-key'), false, 'no variable carries the bypass key');
+  assert.equal(env.OPENAI_API_KEY, 'openai-key');
+  assert.equal(env.PATH, '/usr/bin:/bin');
+  assert.equal(env.HOME, '/home/demo');
+  assert.equal('TMUX' in env, false);
+  assert.equal('COLUMNS' in env, false);
+  assert.equal(env.TERM, 'xterm-256color');
 });

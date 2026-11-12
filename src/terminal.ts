@@ -27,6 +27,7 @@ import { errors, type Page } from 'playwright';
 import type { Assertion, Matcher, PressKey, TerminalSpec } from './demo-script.ts';
 import { pressKeys, type PressPace } from './keyboard.ts';
 import { esc, ACCENT, ACCENT_FAIL, BG, FG, MUTED, FONT } from './overlay.ts';
+import { VERCEL_BYPASS_VAR } from './vercel.ts';
 
 /** The window a still captures: the title bar and the terminal below it. */
 export const TERMINAL_WINDOW = '#ss-window';
@@ -62,6 +63,12 @@ const FOREIGN_TERMINAL_VARS = [
 
 /** Variables that would change the session's prompt, its line editing, or what bash runs at start. */
 const SHELL_STATE_VARS = ['PROMPT_COMMAND', 'PS0', 'PS2', 'SHELLOPTS', 'BASHOPTS', 'BASH_ENV', 'ENV'];
+
+/**
+ * Keys only the engine uses, withheld so that a step that prints the shell's environment
+ * cannot film them. OPENAI_API_KEY is not one: a demo of a tool that calls OpenAI needs it.
+ */
+const ENGINE_KEY_VARS = [VERCEL_BYPASS_VAR];
 
 /** The font sizes the terminal is drawn at: the largest at which the window fits the stage. */
 const FONT_SIZES = { max: 24, min: 1 };
@@ -335,14 +342,15 @@ export function shellDir(cwd?: string): string {
 }
 
 /**
- * The shell's environment: the engine's own, less what describes another terminal or
- * would change the prompt and line editing, plus the terminal's type, the marked prompt,
- * no history file, no inputrc, and a UTF-8 locale when none is named.
+ * The shell's environment: the engine's own, less the keys only the engine uses and what
+ * describes another terminal or would change the prompt and line editing, plus the
+ * terminal's type, the marked prompt, no history file, no inputrc, and a UTF-8 locale when
+ * none is named.
  */
 export function shellEnv(base: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) if (v !== undefined) env[k] = v;
-  for (const k of [...FOREIGN_TERMINAL_VARS, ...SHELL_STATE_VARS]) delete env[k];
+  for (const k of [...ENGINE_KEY_VARS, ...FOREIGN_TERMINAL_VARS, ...SHELL_STATE_VARS]) delete env[k];
   Object.assign(env, {
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
