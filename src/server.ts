@@ -257,7 +257,9 @@ async function serveIosApp(command: string, cwd: string, readyTimeout: number, l
   child.stdout?.on('data', (d: Buffer) => read('out', d));
   child.stderr?.on('data', (d: Buffer) => read('err', d));
   let exit: string | null = null;
-  child.once('exit', (code, signal) => {
+  // The command's last lines, its URL among them, can reach the engine after its exit, so
+  // it has ended once its output is read to the end ('close'), not once it exits.
+  child.once('close', (code, signal) => {
     exit = signal ? `was ended by ${signal}` : `exited ${code}`;
   });
   child.once('error', (e) => {
@@ -283,11 +285,11 @@ async function serveIosApp(command: string, cwd: string, readyTimeout: number, l
 
 /**
  * Stop `child`'s process group with SIGTERM, and resolve once it has exited, or with
- * SIGKILL `ms` later. Resolves whether SIGTERM ended it.
+ * SIGKILL `ms` later. Resolves whether SIGTERM ended it. The group is told to stop even
+ * when `child` has exited, since what it started can outlive it.
  */
 async function stopGroup(child: ChildProcess, ms: number): Promise<boolean> {
   const done = (): boolean => child.exitCode !== null || child.signalCode !== null;
-  if (done()) return true;
   stopChild(child);
   const deadline = Date.now() + ms;
   while (!done() && Date.now() < deadline) await sleep(100);

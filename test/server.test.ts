@@ -96,9 +96,10 @@ test('serve-dir on a named port that is taken rejects the start', async () => {
 const UDID = '265F099F-E558-4E32-82BE-F70A75EC0716';
 const APP_URL = `ios-simulator://${UDID}/com.example.Board`;
 
-/** A stand-in start command: it records what its environment holds and that it was stopped, prints its progress, and then the app's URL unless told to fail or stay silent. */
+/** A stand-in start command: it records its process, what its environment holds and that it was stopped, prints its progress, and then the app's URL unless told to fail or stay silent. */
 const STAND_IN = `import { writeFileSync } from 'node:fs';
 const [record, mode] = process.argv.slice(2);
+writeFileSync(record + '.pid', String(process.pid));
 writeFileSync(record + '.env', JSON.stringify({ bypass: 'VERCEL_AUTOMATION_BYPASS_SECRET' in process.env, speech: 'OPENAI_API_KEY' in process.env, path: Boolean(process.env.PATH) }));
 process.on('SIGTERM', () => { writeFileSync(record + '.stopped', ''); process.exit(0); });
 console.error('building the app');
@@ -112,10 +113,20 @@ setInterval(() => {}, 1 << 30);
 async function withStandIn(fn: (dir: string, record: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(path.join(tmpdir(), 'sprintshow-test-'));
   writeFileSync(path.join(dir, 'start.mjs'), STAND_IN);
+  const record = path.join(dir, 'record');
   try {
-    await fn(dir, path.join(dir, 'record'));
+    await fn(dir, record);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    // A stand-in that a failing test leaves running would hold the engine's pipes open, and
+    // the test file with them.
+    try {
+      const pid = Number(readFileSync(`${record}.pid`, 'utf8'));
+      if (Number.isInteger(pid) && pid > 1) process.kill(pid, 'SIGTERM');
+    } catch {
+      /* none was started, or it has ended */
+    }
+    // One told to stop records it, so the directory can take a moment to stay empty.
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10 });
   }
 }
 
@@ -164,12 +175,28 @@ test("an iOS app's --serve command is ready once it prints the app's simulator U
   });
 });
 
+test("an iOS app's --serve command that exits, leaving running what prints the URL, is ready once the URL comes, and what it left is stopped with its process group", async () => {
+  await withStandIn(async (dir, record) => {
+    const app = await ensureIosApp({ serve: `node start.mjs ${record} ready & exit 0`, cwd: dir, log: quiet });
+    assert.equal(app.baseUrl, APP_URL);
+    await app.stop();
+    await appears(`${record}.stopped`);
+  });
+});
+
 test("an iOS app's --serve command that exits, or prints no URL in time, fails the start with its last output, and one that runs out of time is stopped", async () => {
   await withStandIn(async (dir, record) => {
-    await assert.rejects(
-      ensureIosApp({ serve: `node start.mjs ${record} fail`, cwd: dir, log: quiet }),
-      /`node start.mjs .* fail` exited 65 before it printed its app's simulator URL, ios-simulator:\/\/<device UDID>\/<bundle id>; its last output: building the app \/ booting a device; the URL comes once the app is up \/ xcodebuild exited 65/,
+    const failed = await ensureIosApp({ serve: `node start.mjs ${record} fail`, cwd: dir, log: quiet }).then(
+      () => assert.fail('a command that exits before it prints a URL fails the start'),
+      (e: Error) => e.message,
     );
+    const said = /^server: `node start\.mjs .* fail` exited 65 before it printed its app's simulator URL, ios-simulator:\/\/<device UDID>\/<bundle id>; its last output: (.*)$/.exec(failed);
+    assert.ok(said, failed);
+    // Its standard output and its standard error are two pipes, whose lines reach the
+    // engine in either order, so only the lines of one stream keep the order it wrote them in.
+    const lines = said[1].split(' / ');
+    assert.deepEqual([...lines].sort(), ['booting a device; the URL comes once the app is up', 'building the app', 'xcodebuild exited 65'], failed);
+    assert.ok(lines.indexOf('building the app') < lines.indexOf('xcodebuild exited 65'), failed);
     await assert.rejects(ensureIosApp({ serve: `node start.mjs ${record} silent`, cwd: dir, readyTimeout: 1500, log: quiet }), /printed no simulator URL, ios-simulator:\/\/<device UDID>\/<bundle id>, within 1.5s/);
     await appears(`${record}.stopped`);
   });
