@@ -34,7 +34,7 @@
 // shows the state they settle in. A walkthrough cuts the stretch in which a still is
 // taken from its video (walkthrough.ts).
 
-import { existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
@@ -317,9 +317,45 @@ export function stepFileName(step: DemoStep, total: number): string {
   return `${number}-${slug || 'step'}.png`;
 }
 
-/** Whether `file` is `dir` or lies inside it. */
+/** The most links a path is followed through: the system's own limit (SYMLOOP_MAX), past which it refuses a path as a loop. */
+const MAX_LINKS = 40;
+
+/** Where the link `file` leads, as it is written in the link, or null when `file` is no link. */
+function linkTarget(file: string): string | null {
+  try {
+    return readlinkSync(file);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The place `file` names, as an absolute path through no link, so that two paths to one
+ * place come out alike. The part of `file` that exists is as the system resolves it
+ * (realpath): each link on it followed, and on macOS each name as the disk spells it. A
+ * link just past that part leads to nothing yet, and is followed too, because the run can
+ * make what it leads to, such as its screenshot directory, before it writes through the
+ * link. The names below that do not exist yet, and are kept as they are.
+ */
+function placeOf(file: string, links = 0): string {
+  const missing: string[] = [];
+  for (let at = path.resolve(file); ; at = path.dirname(at)) {
+    let real: string;
+    try {
+      real = realpathSync.native(at);
+    } catch {
+      if (at === path.dirname(at)) return path.resolve(file);
+      missing.unshift(path.basename(at));
+      continue;
+    }
+    const target = missing.length > 0 && links < MAX_LINKS ? linkTarget(path.join(real, missing[0])) : null;
+    return target === null ? path.join(real, ...missing) : placeOf(path.resolve(real, target, ...missing.slice(1)), links + 1);
+  }
+}
+
+/** Whether the place `file` names is the place `dir` names, or lies inside it (placeOf). */
 function within(dir: string, file: string): boolean {
-  const rel = path.relative(path.resolve(dir), path.resolve(file));
+  const rel = path.relative(placeOf(dir), placeOf(file));
   return rel === '' || (rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel));
 }
 

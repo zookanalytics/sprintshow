@@ -23,9 +23,11 @@
 // as on any other, and on a page that cannot take the marker.
 // A run with no video needs a screenshot directory and refuses the video's options, and a
 // directory that holds files, or would also hold the video or the run's working
-// directory, is refused before anything is served or made. A run whose proof fails saves
-// its screenshots and exits 3, and one that saves nothing keeps none of them, nor the
-// directory it made for them.
+// directory, is refused before anything is served or made. The directory and the paths
+// the run writes are compared by the places they name, through a link, one to a
+// directory not made yet, or a name the disk spells in another case. A run whose proof
+// fails saves its screenshots and exits 3, and one that saves nothing keeps none of them,
+// nor the directory it made for them.
 //
 // The tests that drive a page need a headless Chromium and skip without one, and the
 // walkthrough's need a real ffmpeg (see browser-fixture.ts and assemble.test.ts). A proof
@@ -33,14 +35,14 @@
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
 import { parseDemoScript, type DemoStep } from '../src/demo-script.ts';
 import { runDemo } from '../src/run.ts';
 import { afterCuts, captureWalkthrough, screenshotStep, stillCuts, watchRecording, type Cut, type RecordingFrames } from '../src/walkthrough.ts';
-import { captureScreenshots, stepFileName, stepScreenshots } from '../src/screenshot.ts';
+import { captureScreenshots, checkScreenshotDir, stepFileName, stepScreenshots } from '../src/screenshot.ts';
 import { ffmpegBin } from '../src/ffmpeg.ts';
 import { markFrame, showCaption } from '../src/overlay.ts';
 import { VIEWPORT, installPointer } from '../src/browser.ts';
@@ -132,6 +134,33 @@ test('a run refuses a screenshot directory that would also hold its video, befor
     });
     assert.deepEqual(readdirSync(dir), []);
     assert.ok(!lines.some((l) => l.startsWith('server:')), `nothing was served:\n${lines.join('\n')}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('a screenshot directory is refused when it is the place the run writes to by another path: through a link, or a name the disk spells in another case', () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    mkdirSync(path.join(dir, 'real'));
+    symlinkSync('real', path.join(dir, 'link'));
+    // A link to the screenshot directory, which the run makes before it writes its video.
+    symlinkSync('shots', path.join(dir, 'later'));
+    const refuses = (shots: string, video: string): void =>
+      assert.throws(() => checkScreenshotDir(shots, [video]), { message: `screenshots: ${shots} would also hold ${video}, which the run writes too; name a directory the run writes nothing else into` }, `${shots} would hold ${video}`);
+    refuses(path.join(dir, 'link'), path.join(dir, 'real', 'demo.mp4'));
+    refuses(path.join(dir, 'real'), path.join(dir, 'link', 'demo.mp4'));
+    refuses(path.join(dir, 'link', 'new'), path.join(dir, 'real', 'new', 'demo.mp4'));
+    refuses(path.join(dir, 'shots'), path.join(dir, 'later', 'demo.mp4'));
+    // The system's own links, such as macOS's from /var to /private/var, where the scratch directory lies.
+    refuses(path.join(dir, 'real'), path.join(realpathSync(dir), 'real', 'demo.mp4'));
+    // A disk that ignores case holds REAL and real as one directory, and one that does not as two.
+    const upper = path.join(dir, 'REAL', 'demo.mp4');
+    if (existsSync(path.join(dir, 'REAL'))) refuses(path.join(dir, 'real'), upper);
+    else checkScreenshotDir(path.join(dir, 'real'), [upper]);
+    checkScreenshotDir(path.join(dir, 'link'), [path.join(dir, 'elsewhere', 'demo.mp4'), path.join(dir, 'later', 'demo.mp4')]);
+    assert.deepEqual(readdirSync(dir).sort(), ['later', 'link', 'real']);
+    assert.deepEqual(readdirSync(path.join(dir, 'real')), []);
   } finally {
     cleanup();
   }
