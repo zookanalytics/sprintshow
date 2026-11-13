@@ -317,7 +317,11 @@ export function stepFileName(step: DemoStep, total: number): string {
   return `${number}-${slug || 'step'}.png`;
 }
 
-/** The most links a path is followed through: the system's own limit (SYMLOOP_MAX), past which it refuses a path as a loop. */
+/**
+ * The most links a path is followed through, so that a loop of links ends. It is no fewer
+ * than the links a system follows in one path before it refuses the path as a loop, 32 on
+ * macOS and 40 on Linux, so a path the run can write through is followed to its end.
+ */
 const MAX_LINKS = 40;
 
 /** Where the link `file` leads, as it is written in the link, or null when `file` is no link. */
