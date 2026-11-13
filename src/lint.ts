@@ -6,7 +6,7 @@
 //
 // PURE CORE, thin CLI — the same split as demo-script.ts: `lintDemo()` takes a parsed
 // Demo plus an explicit environment snapshot and returns findings, so the rules are
-// unit-tested (lint.test.ts) without git, a browser or a network.
+// unit-tested (lint.test.ts) without a browser or a network.
 //
 // A script drives one surface, a page or a terminal, and the parser reads only that
 // surface's directives and assertions. One written for the other surface is dropped as
@@ -16,7 +16,6 @@
 // A device a page script names is checked against the device names in the environment,
 // which the CLI reads from Playwright's registry, the one a capture looks it up in.
 
-import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { devices } from 'playwright';
@@ -40,26 +39,10 @@ export interface Finding {
 
 /** Everything outside the script that the rules need — passed in so the core stays pure. */
 export interface LintEnv {
-  /**
-   * Known scenario values a `?demo=<scenario>` start URL may name, when the app arms
-   * itself from that query. Empty (the default) turns the check off: a general app has
-   * no such registry, and a caller that does can supply it.
-   */
-  scenarios: string[];
-  /** `git lfs` available on this machine. */
-  lfsInstalled: boolean;
-  /** The MP4 this script would produce is matched by an LFS filter attribute. */
-  lfsTracked: boolean;
   /** OPENAI_API_KEY present → the capture will narrate; absent → silent MP4. */
   narration: boolean;
   /** The device names a `**Device:**` line may name: those in the registry a capture looks a device up in. */
   devices: readonly string[];
-}
-
-/** The scenario named by a `?demo=` query, or null when the start URL has none. */
-export function demoScenarioOf(start: string): string | null {
-  const m = start.match(/[?&]demo=([^&#]+)/);
-  return m ? decodeURIComponent(m[1]) : null;
 }
 
 /**
@@ -156,7 +139,6 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
   // as interaction. A terminal has no start URL: only its steps' actions drive it.
   const surface = surfaceOf(demo);
   const { verbs, assertions } = VOCABULARY[surface];
-  const scenario = demoScenarioOf(demo.start);
   const drivesByAction = demo.steps.some((s) => s.actions.length > 0);
   const hasQuery = demo.start.includes('?');
   if (surface === 'terminal') {
@@ -164,12 +146,6 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
       add('warn', null, `no step runs a command or presses a key — the capture shows the shell's first prompt and nothing else. Add actions (${verbs.join('/')}).`);
     }
     if (demo.start) add('warn', null, `**Start:** \`${demo.start}\` is ignored — a terminal script's shell starts in --cwd, not at a path.`);
-  } else if (scenario && env.scenarios.length && !env.scenarios.includes(scenario)) {
-    add(
-      'error',
-      null,
-      `\`?demo=${scenario}\` is not a known scenario (have: ${env.scenarios.join(', ')}) — the app would open unarmed and every proof would fail.`,
-    );
   } else if (!drivesByAction && !hasQuery) {
     add(
       'warn',
@@ -246,17 +222,6 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
     }
   }
 
-  // ── Publishing: can the artifact this produces actually be committed? ──
-  if (!env.lfsTracked) {
-    add('warn', null, `the MP4 this script produces is not matched by an LFS filter in .gitattributes — committing it would put raw video bytes in git history.`);
-  } else if (!env.lfsInstalled) {
-    add(
-      'warn',
-      null,
-      `git-lfs is NOT installed but .gitattributes claims LFS for this MP4 — a commit here silently stores the raw bytes. Install it first: git lfs install.`,
-    );
-  }
-
   add(
     'info',
     null,
@@ -271,16 +236,6 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
 /** The MP4 path a run would write for this script, by the shared derivation (script filename, slugified, under demos/). */
 export function outputPathFor(scriptPath: string, outDir = path.join(process.cwd(), 'demos')): string {
   return path.join(outDir, `${outputSlug(path.basename(scriptPath, path.extname(scriptPath)))}.mp4`);
-}
-
-function gitOk(args: string[]): boolean {
-  return spawnSync('git', args, { cwd: process.cwd(), encoding: 'utf8' }).status === 0;
-}
-
-/** Does an LFS filter attribute apply to `file`? (`git check-attr filter -- <file>`) */
-function lfsTracked(file: string): boolean {
-  const r = spawnSync('git', ['check-attr', 'filter', '--', file], { cwd: process.cwd(), encoding: 'utf8' });
-  return r.status === 0 && /filter:\s*lfs/.test(r.stdout ?? '');
 }
 
 /** Run the linter as a CLI over `scriptArg`; returns the process exit code. */
@@ -306,9 +261,6 @@ export function lintCli(scriptArg: string | undefined, strict: boolean): number 
 
   const out = outputPathFor(scriptPath);
   const findings = lintDemo(demo, {
-    scenarios: [],
-    lfsInstalled: gitOk(['lfs', 'version']),
-    lfsTracked: lfsTracked(out),
     narration: Boolean(process.env.OPENAI_API_KEY),
     devices: Object.keys(devices),
   });

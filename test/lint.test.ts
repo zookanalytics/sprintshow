@@ -2,8 +2,9 @@
 //
 // The rules make the gap between a generated draft and a proving demo explicit before a
 // capture run, so they are pinned against two fixtures: a raw draft (should light up) and
-// an adapted script (should be quiet). The environment is passed in explicitly, so
-// nothing here shells out to git.
+// an adapted script (should be quiet). The environment is passed in explicitly. One test
+// runs `sprintshow lint` itself, in a directory that is in no git repository, because the
+// command judges the script and nothing about where a caller keeps the video.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +12,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { parseDemoScript } from '../src/demo-script.ts';
-import { lintDemo, demoScenarioOf, looksLikeDirective, looksLikeAssertion, type LintEnv } from '../src/lint.ts';
+import { lintDemo, looksLikeDirective, looksLikeAssertion, type LintEnv } from '../src/lint.ts';
+import { runCli, scratchDir, writeFiles } from './browser-fixture.ts';
 
 /** A well-adapted script: five steps, all driving the page, machine assertions everywhere. */
 const ADAPTED_SCRIPT = `# Demo: Adapted
@@ -47,15 +49,9 @@ const DRAFT = `# Demo: Draft
    _Prove:_ A row appears
 `;
 
-const ENV: LintEnv = { scenarios: [], lfsInstalled: true, lfsTracked: true, narration: false, devices: ['iPhone 15', 'Pixel 7', 'iPad Mini'] };
+const ENV: LintEnv = { narration: false, devices: ['iPhone 15', 'Pixel 7', 'iPad Mini'] };
 
 const messagesFor = (md: string, env: Partial<LintEnv> = {}) => lintDemo(parseDemoScript(md), { ...ENV, ...env });
-
-test('demoScenarioOf pulls the scenario out of the start URL', () => {
-  assert.equal(demoScenarioOf('/?demo=board&anim=off'), 'board');
-  assert.equal(demoScenarioOf('/?anim=off&demo=x'), 'x');
-  assert.equal(demoScenarioOf('/'), null);
-});
 
 test('an adapted script produces no errors and no warnings', () => {
   const findings = messagesFor(ADAPTED_SCRIPT);
@@ -108,18 +104,6 @@ test('a press whose keys do not parse is reported in a page script as in a termi
   assert.deepEqual(findings('**Start:** /'), findings('**Terminal:**'));
 });
 
-test('an unknown scenario is an ERROR only when a registry is supplied', () => {
-  const md = ADAPTED_SCRIPT.replace('/?seed=board', '/?demo=typo-scenario');
-  // No registry (default): the scenario check is off — no error.
-  assert.equal(messagesFor(md).filter((f) => f.severity === 'error').length, 0);
-  // With a registry that does not include it: an error naming what is available.
-  const withRegistry = messagesFor(md, { scenarios: ['board', 'list'] });
-  const errors = withRegistry.filter((f) => f.severity === 'error');
-  assert.equal(errors.length, 1);
-  assert.match(errors[0].message, /not a known scenario/);
-  assert.match(errors[0].message, /board/);
-});
-
 test("a typo'd directive is reported, prose code spans are not", () => {
   const md = `# Demo: X
 
@@ -158,14 +142,16 @@ test('an over-long caption is flagged (it clips on screen)', () => {
   assert.ok(messagesFor(md).some((f) => /caption is 81 chars/.test(f.message)));
 });
 
-test('LFS findings: untracked output, and tracked-but-no-git-lfs', () => {
-  const untracked = messagesFor(ADAPTED_SCRIPT, { lfsTracked: false });
-  assert.ok(untracked.some((f) => /not matched by an LFS filter/.test(f.message)));
-
-  const noBinary = messagesFor(ADAPTED_SCRIPT, { lfsTracked: true, lfsInstalled: false });
-  assert.ok(noBinary.some((f) => /git-lfs is NOT installed/.test(f.message)));
-
-  assert.equal(messagesFor(ADAPTED_SCRIPT).filter((f) => /LFS|git-lfs/.test(f.message)).length, 0);
+test('sprintshow lint passes an adapted script under --strict in a directory that is in no git repository', async () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    writeFiles(dir, { 'demo.md': ADAPTED_SCRIPT });
+    const r = await runCli(['lint', 'demo.md', '--strict'], { cwd: dir });
+    assert.equal(r.code, 0, `${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /✅ clean/);
+  } finally {
+    cleanup();
+  }
 });
 
 test('the info line reports whether the capture will narrate', () => {

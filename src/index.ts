@@ -19,7 +19,7 @@ export { captureScreenshot, type CaptureScreenshotOptions, type ScreenshotResult
 export { runDemo, runScreenshot, type RunDemoOptions, type RunScreenshotOptions, type CaptureMode } from './run.ts';
 
 // The linter core + CLI.
-export { lintDemo, lintCli, demoScenarioOf, looksLikeDirective, looksLikeAssertion, outputPathFor, type Finding, type Severity, type LintEnv } from './lint.ts';
+export { lintDemo, lintCli, looksLikeDirective, looksLikeAssertion, outputPathFor, type Finding, type Severity, type LintEnv } from './lint.ts';
 
 // The server seam.
 export { ensureServer, DEFAULT_PORT, type ServeOptions, type ServerHandle } from './server.ts';
