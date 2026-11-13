@@ -96,12 +96,20 @@ test('serve-dir on a named port that is taken rejects the start', async () => {
 const UDID = '265F099F-E558-4E32-82BE-F70A75EC0716';
 const APP_URL = `ios-simulator://${UDID}/com.example.Board`;
 
-/** A stand-in start command: it records its process, what its environment holds and that it was stopped, prints its progress, and then the app's URL unless told to fail or stay silent. */
+/**
+ * A stand-in start command. It records what its environment holds, and then its process
+ * once it handles SIGTERM. It prints its progress, and then the app's URL unless told to
+ * fail or stay silent. Told to stop, it records that it stopped and exits, a second later
+ * when its stopping is slow, and never when it is deaf to SIGTERM.
+ */
 const STAND_IN = `import { writeFileSync } from 'node:fs';
-const [record, mode] = process.argv.slice(2);
-writeFileSync(record + '.pid', String(process.pid));
+const [record, mode, stopping] = process.argv.slice(2);
+process.on('SIGTERM', () => {
+  if (stopping === 'deaf') return;
+  setTimeout(() => { writeFileSync(record + '.stopped', ''); process.exit(0); }, stopping === 'slow' ? 1000 : 0);
+});
 writeFileSync(record + '.env', JSON.stringify({ bypass: 'VERCEL_AUTOMATION_BYPASS_SECRET' in process.env, speech: 'OPENAI_API_KEY' in process.env, path: Boolean(process.env.PATH) }));
-process.on('SIGTERM', () => { writeFileSync(record + '.stopped', ''); process.exit(0); });
+writeFileSync(record + '.pid', String(process.pid));
 console.error('building the app');
 console.log('booting a device; the URL comes once the app is up');
 if (mode === 'fail') { console.error('xcodebuild exited 65'); process.exit(65); }
@@ -118,14 +126,15 @@ async function withStandIn(fn: (dir: string, record: string) => Promise<void>): 
     await fn(dir, record);
   } finally {
     // A stand-in that a failing test leaves running would hold the engine's pipes open, and
-    // the test file with them.
+    // the test file with them. One deaf to SIGTERM ends only when it is killed.
     try {
       const pid = Number(readFileSync(`${record}.pid`, 'utf8'));
-      if (Number.isInteger(pid) && pid > 1) process.kill(pid, 'SIGTERM');
+      if (Number.isInteger(pid) && pid > 1) process.kill(pid, 'SIGKILL');
     } catch {
       /* none was started, or it has ended */
     }
-    // One told to stop records it, so the directory can take a moment to stay empty.
+    // A stand-in can still be writing a record as it is killed, so the directory can take a
+    // moment to stay empty.
     rmSync(dir, { recursive: true, force: true, maxRetries: 10 });
   }
 }
@@ -135,6 +144,20 @@ async function appears(file: string, ms = 10000): Promise<void> {
   const deadline = Date.now() + ms;
   while (!existsSync(file)) {
     if (Date.now() > deadline) assert.fail(`${file} did not appear within ${ms / 1000}s`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+/** Resolve once process `pid` has ended, or fail after `ms`. */
+async function ended(pid: number, ms = 5000): Promise<void> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    if (Date.now() > deadline) assert.fail(`process ${pid} still ran ${ms / 1000}s on`);
     await new Promise((r) => setTimeout(r, 50));
   }
 }
@@ -175,12 +198,34 @@ test("an iOS app's --serve command is ready once it prints the app's simulator U
   });
 });
 
-test("an iOS app's --serve command that exits, leaving running what prints the URL, is ready once the URL comes, and what it left is stopped with its process group", async () => {
+test("an iOS app's --serve command that exits, leaving running what prints the URL, is ready once the URL comes, and stopping it waits until what it left has stopped", async () => {
   await withStandIn(async (dir, record) => {
-    const app = await ensureIosApp({ serve: `node start.mjs ${record} ready & exit 0`, cwd: dir, log: quiet });
+    const app = await ensureIosApp({ serve: `node start.mjs ${record} ready slow & exit 0`, cwd: dir, log: quiet });
     assert.equal(app.baseUrl, APP_URL);
     await app.stop();
-    await appears(`${record}.stopped`);
+    assert.equal(existsSync(`${record}.stopped`), true, 'stop resolved once what the command left had taken its second to stop');
+  });
+});
+
+test("what an iOS app's --serve command left running is killed once it has had the stop timeout to stop, and the log says so", async () => {
+  await withStandIn(async (dir, record) => {
+    const lines: string[] = [];
+    const app = await ensureIosApp({ serve: `node start.mjs ${record} ready deaf & exit 0`, cwd: dir, stopTimeout: 1500, log: (m) => lines.push(m) });
+    const pid = Number(readFileSync(`${record}.pid`, 'utf8'));
+    const asked = Date.now();
+    await app.stop();
+    assert.ok(Date.now() - asked >= 1500, 'it had the stop timeout to stop');
+    await ended(pid);
+    assert.match(lines.join('\n'), /what `node start\.mjs .* ready deaf & exit 0` started did not all exit within 1\.5s of SIGTERM, so what was left was killed/);
+  });
+});
+
+test("an iOS app's --serve command that exits before it prints a URL has what it left running stopped before the start fails", async () => {
+  await withStandIn(async (dir, record) => {
+    // What it starts sends its output elsewhere, so the command's own output ends with it.
+    const command = `node start.mjs ${record} silent > /dev/null 2>&1 & until [ -e ${record}.pid ]; do sleep 0.05; done; exit 3`;
+    await assert.rejects(ensureIosApp({ serve: command, cwd: dir, log: quiet }), /exited 3 before it printed its app's simulator URL/);
+    assert.equal(existsSync(`${record}.stopped`), true, 'what the command left was stopped');
   });
 });
 

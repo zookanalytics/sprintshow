@@ -20,9 +20,11 @@
 // and where, and stops it once the run ends, as it does a dev server. A port has no
 // meaning for an app on a simulator, and an app is not served from a directory, so
 // `--port` and `--serve-dir` are refused. The command runs with the engine's environment
-// less the keys the engine holds, as every tool the engine starts for an iOS app does,
-// and its stopping can take as long as deleting a device does, which the engine waits
-// for.
+// less the keys the engine holds, as every tool the engine starts for an iOS app does.
+// Stopping it stops its whole process group, which runs on after the command itself
+// while anything it started does, and can take as long as deleting a device does. The
+// engine waits until every process in the group has exited, and kills what is left of it
+// after a minute.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
@@ -201,8 +203,8 @@ export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
 
 /** How long an iOS app's `--serve` command has to print its app's simulator URL. Building the app and booting a device can take minutes. */
 export const IOS_READY_TIMEOUT_MS = 600_000;
-/** How long an iOS app's `--serve` command has to exit once told to stop, which can mean deleting its device, before it is killed. */
-const IOS_STOP_MS = 60_000;
+/** How long the processes of an iOS app's `--serve` command have to exit once told to stop, which can mean deleting its device, before they are killed. */
+export const IOS_STOP_TIMEOUT_MS = 60_000;
 /** How many of the last lines a `--serve` command printed are kept, for the message of one that fails. */
 const OUTPUT_LINES = 5;
 
@@ -214,7 +216,7 @@ const OUTPUT_LINES = 5;
  * command exits or runs out of time before it prints one, or when `serveDir` or `port`
  * is given.
  */
-export async function ensureIosApp(opts: ServeOptions & { readyTimeout?: number }): Promise<ServerHandle> {
+export async function ensureIosApp(opts: ServeOptions & { readyTimeout?: number; stopTimeout?: number }): Promise<ServerHandle> {
   const log = opts.log ?? ((m: string) => console.log(m));
   if (opts.serveDir) throw new Error(`server: an iOS app is not served from a directory; pass --base-url ${SIMULATOR_URL_FORM}, or --serve "<command>" that brings the app up and prints that URL`);
   if (opts.port !== undefined) throw new Error("server: an iOS app script takes no --port; its --serve command prints the app's simulator URL once the app is up");
@@ -224,12 +226,12 @@ export async function ensureIosApp(opts: ServeOptions & { readyTimeout?: number 
     log(`app: using ${simulatorUrl(app)}`);
     return { baseUrl: simulatorUrl(app), stop: async () => {} };
   }
-  if (opts.serve) return serveIosApp(opts.serve, opts.cwd ?? process.cwd(), opts.readyTimeout ?? IOS_READY_TIMEOUT_MS, log);
+  if (opts.serve) return serveIosApp(opts.serve, opts.cwd ?? process.cwd(), opts.readyTimeout ?? IOS_READY_TIMEOUT_MS, opts.stopTimeout ?? IOS_STOP_TIMEOUT_MS, log);
   throw new Error(`no app: pass --base-url ${SIMULATOR_URL_FORM}, or --serve "<command>" that brings the app up and prints that URL`);
 }
 
-/** Start `command`, and resolve once it prints a simulator URL, with a handle that stops it. */
-async function serveIosApp(command: string, cwd: string, readyTimeout: number, log: (m: string) => void): Promise<ServerHandle> {
+/** Start `command`, and resolve once it prints a simulator URL, with a handle that stops it and what it started. */
+async function serveIosApp(command: string, cwd: string, readyTimeout: number, stopTimeout: number, log: (m: string) => void): Promise<ServerHandle> {
   log(`app: starting \`${command}\`…`);
   // Detached, so its whole process group can be stopped: the command starts children.
   const child = spawn(command, { cwd, env: toolEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true, shell: true });
@@ -267,12 +269,16 @@ async function serveIosApp(command: string, cwd: string, readyTimeout: number, l
   });
 
   const stop = async (): Promise<void> => {
-    if (!(await stopGroup(child, IOS_STOP_MS))) log(`app: \`${command}\` did not exit within ${IOS_STOP_MS / 1000}s of SIGTERM, so it was killed`);
+    if (!(await stopGroup(child, stopTimeout))) log(`app: what \`${command}\` started did not all exit within ${stopTimeout / 1000}s of SIGTERM, so what was left was killed`);
   };
   const said = (): string => (output.length ? `; its last output: ${output.join(' / ')}` : '');
   const deadline = Date.now() + readyTimeout;
   while (!found) {
-    if (exit) throw new Error(`server: \`${command}\` ${exit} before it printed its app's simulator URL, ${SIMULATOR_URL_FORM}${said()}`);
+    if (exit) {
+      // What the command started can run on after it, its output sent elsewhere.
+      await stop();
+      throw new Error(`server: \`${command}\` ${exit} before it printed its app's simulator URL, ${SIMULATOR_URL_FORM}${said()}`);
+    }
     if (Date.now() > deadline) {
       await stop();
       throw new Error(`server: \`${command}\` printed no simulator URL, ${SIMULATOR_URL_FORM}, within ${readyTimeout / 1000}s${said()}`);
@@ -284,18 +290,33 @@ async function serveIosApp(command: string, cwd: string, readyTimeout: number, l
 }
 
 /**
- * Stop `child`'s process group with SIGTERM, and resolve once it has exited, or with
- * SIGKILL `ms` later. Resolves whether SIGTERM ended it. The group is told to stop even
- * when `child` has exited, since what it started can outlive it.
+ * Whether process group `pgid` still has a process in it. A group whose processes the
+ * engine may not signal still has them.
+ */
+function groupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * Stop `child`'s process group with SIGTERM, and resolve once every process in it has
+ * exited, or with SIGKILL to what is left of it `ms` later. Resolves whether SIGTERM ended
+ * it. The group outlives `child` while anything `child` started runs, so it is the group
+ * that is waited for.
  */
 async function stopGroup(child: ChildProcess, ms: number): Promise<boolean> {
-  const done = (): boolean => child.exitCode !== null || child.signalCode !== null;
+  const pgid = child.pid;
+  if (!pgid) return true;
   stopChild(child);
   const deadline = Date.now() + ms;
-  while (!done() && Date.now() < deadline) await sleep(100);
-  if (done()) return true;
+  while (groupAlive(pgid) && Date.now() < deadline) await sleep(100);
+  if (!groupAlive(pgid)) return true;
   try {
-    process.kill(-(child.pid as number), 'SIGKILL');
+    process.kill(-pgid, 'SIGKILL');
   } catch {
     /* it has ended */
   }
