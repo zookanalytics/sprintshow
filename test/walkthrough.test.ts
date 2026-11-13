@@ -9,16 +9,17 @@
 // runs to the end of the recording, so `-shortest` cuts no picture.
 //
 // narrationSlots is pinned on its own. The recording's frames are pinned against a page
-// drawn black at a known time, found in the video. A narrated walkthrough is pinned end to
-// end. It opens a page that draws 1 s after it is asked for and loads 1.5 s after that.
-// The cover and the caption bar each keep the page busy for 1 s once the page has added
-// them. So the recording may start with the blank page or with the page's first frame, the
-// cover appears at least 2.5 s in, and the browser draws the cover and the first step's
-// caption about 1 s after the page changed, and later still after the engine asked it to.
-// A tone stands in for each clip in place of a real voice. The test reads, from the MP4,
-// when each tone sounds and when the cover, the first step's caption and the closing card
-// show. A step that ends at once comes before the closing card, so a slot held longer than
-// its step would show as a late closing clip.
+// drawn black at a known time, found in the video, and the recording holds one every
+// 40 ms from its start. A narrated walkthrough is pinned end to end. It opens a page that
+// draws 1 s after it is asked for and loads 1.5 s after that. The cover and the caption
+// bar each keep the page busy for 1 s once the page has added them. So the recording may
+// start with the blank page or with the page's first frame, the cover appears at least
+// 2.5 s in, and the browser draws the cover and the first step's caption about 1 s after
+// the page changed, and later still after the engine asked it to. A tone stands in for
+// each clip in place of a real voice. The test reads, from the MP4, when each tone sounds
+// and when the cover, the first step's caption and the closing card show. A step that ends
+// at once comes before the closing card, so a slot held longer than its step would show
+// as a late closing clip.
 //
 // The browser-backed tests need a headless Chromium and a real ffmpeg, and skip without
 // them (see browser-fixture.ts and assemble.test.ts).
@@ -34,7 +35,7 @@ import path from 'node:path';
 import { captureWalkthrough, narrationSlots, watchRecording } from '../src/walkthrough.ts';
 import { ffmpegBin, probeDuration } from '../src/ffmpeg.ts';
 import { VIEWPORT } from '../src/browser.ts';
-import { launchBrowser, scratchDir } from './browser-fixture.ts';
+import { launchBrowser, scratchDir, patchLuma, firstFrame } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
 after(() => browser?.close());
@@ -75,19 +76,6 @@ test('a slot of no length is dropped, and a mark outside the recording is held t
   );
 });
 
-/** The time of each frame of `file`, and the mean luma of an 8x8 patch of it centred on (x, y). */
-function patchLuma(file: string, x: number, y: number): { t: number; luma: number }[] {
-  const res = spawnSync(ffmpegBin() as string, ['-hide_banner', '-i', file, '-an', '-vf', `crop=8:8:${x - 4}:${y - 4},showinfo`, '-f', 'null', '-'], { encoding: 'utf8', maxBuffer: 1 << 26 });
-  return [...res.stderr.matchAll(/pts_time:\s*([\d.]+).*?mean:\[(\d+)/g)].map((m) => ({ t: Number(m[1]), luma: Number(m[2]) }));
-}
-
-/** The first frame from `from` on whose patch matches `pred`, or a failure naming `what`. */
-function firstFrame(frames: { t: number; luma: number }[], from: number, pred: (luma: number) => boolean, what: string): number {
-  const hit = frames.find((f) => f.t >= from && pred(f.luma));
-  assert.ok(hit, `no frame from ${from}s shows ${what}`);
-  return hit.t;
-}
-
 /** The times the audio of `file` sounds after silence, in seconds, and 0 when it opens on sound. */
 function onsets(file: string): number[] {
   const res = spawnSync(ffmpegBin() as string, ['-hide_banner', '-i', file, '-vn', '-af', 'silencedetect=n=-40dB:d=0.05', '-f', 'null', '-'], { encoding: 'utf8' });
@@ -96,7 +84,7 @@ function onsets(file: string): number[] {
   return firstSilence && Number(firstSilence[1]) < 0.05 ? ends : [0, ...ends];
 }
 
-test('the recording starts at its first frame, and a change the page makes shows in the video from the first frame drawn after it', { skip: skip || needsFfmpeg }, async () => {
+test('the recording starts at its first frame and holds a frame every 40 ms, and a change the page makes shows in the video from the first frame drawn after it', { skip: skip || needsFfmpeg }, async () => {
   const { dir, cleanup } = scratchDir();
   const context = await browser!.newContext({ viewport: VIEWPORT, recordVideo: { dir, size: VIEWPORT } });
   try {
@@ -115,7 +103,14 @@ test('the recording starts at its first frame, and a change the page makes shows
     const start = recording.start();
     const shown = recording.firstFrom(drawnAt);
     assert.ok(start !== null && shown !== null, 'the recording has a first frame, and a frame drawn after the page turned black');
-    const black = firstFrame(patchLuma(await video.path(), 320, 300), 0, (l) => l < 100, 'the page drawn black');
+    const frames = patchLuma(await video.path(), 320, 300);
+    // A walkthrough counts the frames it cuts from its recording on this grid.
+    assert.deepEqual(
+      frames.map((f) => Math.round(f.t * 1000)),
+      frames.map((_, i) => i * 40),
+      'the recording holds a frame every 40 ms from its start',
+    );
+    const black = firstFrame(frames, 0, (l) => l < 100, 'the page drawn black');
     // The video is cut in 40 ms frames, and shows a drawn frame from the one that starts at
     // most a little over 40 ms before the frame was drawn.
     const at = (shown - start) / 1000;

@@ -4,6 +4,10 @@
 // which this layer launches a browser for and makes as the script's device
 // (contextOptions). A terminal script takes no server: its steps run in the engine's own
 // terminal, whose shell starts in `cwd`.
+//
+// A run returns a video, screenshots or both, as its caller chooses: the video's driver
+// saves each step's screenshot as it drives the steps, and a run with no video drives
+// them with the screenshots' own driver (captureScreenshots).
 
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -11,9 +15,9 @@ import { chromium, type BrowserContextOptions, type Page } from 'playwright';
 
 import { parseDemoScript, outputSlug, type Demo } from './demo-script.ts';
 import { ensureServer, type ServeOptions, type ServerHandle } from './server.ts';
-import { captureProof, type CaptureResult } from './capture.ts';
+import { captureProof, capturesRoot, type CaptureResult } from './capture.ts';
 import { captureWalkthrough } from './walkthrough.ts';
-import { captureScreenshot, AREA_CONFLICT, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
+import { captureScreenshot, captureScreenshots, checkScreenshotDir, AREA_CONFLICT, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
 import { chromiumLaunchArgs, contextOptions } from './browser.ts';
 import { shellDir } from './terminal.ts';
 
@@ -31,7 +35,39 @@ export interface RunDemoOptions extends ServeOptions {
   keep?: boolean;
   /** Launch the browser headed (walkthrough only). */
   headed?: boolean;
+  /**
+   * Save a PNG of the state each step leaves into this directory, a new or empty one,
+   * named for the step, such as `01-the-board-boots-empty.png`. Each shows the app alone,
+   * with no caption, card or pointer on it.
+   */
+  screenshotDir?: string;
+  /** Make no video, so the run returns its screenshots alone. Needs `screenshotDir`, and takes none of the video's options. */
+  noVideo?: boolean;
   log?: (m: string) => void;
+}
+
+/** What a run returns: its video, unless it made none, and its screenshots, when it took them. */
+export interface RunResult extends Omit<CaptureResult, 'outputPath'> {
+  /** The MP4, or null for a run that made no video. */
+  outputPath: string | null;
+}
+
+/** The video's options, each by the flag that sets it, which a run with no video refuses rather than ignores. */
+const VIDEO_OPTIONS: [keyof RunDemoOptions, string][] = [
+  ['mode', '--mode'],
+  ['outputPath', '-o'],
+  ['musicPath', '--music'],
+  ['noNarrate', '--no-narrate'],
+  ['keep', '--keep'],
+  ['headed', '--headed'],
+];
+
+/** Throw when `opts` asks for no video and gives no screenshot directory, or gives an option only a video takes. */
+function checkOutputs(opts: RunDemoOptions): void {
+  if (!opts.noVideo) return;
+  if (!opts.screenshotDir) throw new Error('run: a run with no video returns its screenshots alone, so it needs a directory for them (--screenshots <dir>)');
+  const given = VIDEO_OPTIONS.filter(([key]) => opts[key] !== undefined && opts[key] !== null && opts[key] !== false).map(([, flag]) => flag);
+  if (given.length) throw new Error(`run: a run with no video takes none of the video's options; drop ${given.join(', ')}`);
 }
 
 function loadDemo(script: string | Demo): { demo: Demo; name: string } {
@@ -71,17 +107,36 @@ async function withHeadlessPage<T>(pageOpts: BrowserContextOptions, use: (page: 
   }
 }
 
-export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
+/**
+ * Bring up the server, drive the demo's steps, and tear the server down. The run returns a
+ * video in `mode`, a PNG of the state each step leaves in `screenshotDir`, or both. A run
+ * with no video drives the steps in a fresh headless page made as the script's device. A
+ * failed proof still saves the outputs and is counted in `failures`, and a run that throws
+ * saves none of them.
+ */
+export async function runDemo(opts: RunDemoOptions): Promise<RunResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
+  checkOutputs(opts);
   const { demo, name } = loadDemo(opts.script);
   const mode: CaptureMode = opts.mode ?? 'walkthrough';
   const outputPath = opts.outputPath ?? path.join(process.cwd(), 'demos', `${name}.mp4`);
-  log(`demo: "${demo.title}" — ${demo.steps.length} steps · ${mode} mode`);
-  // Checked before a server or a browser is spent: a device the registry does not hold throws here.
+  const outputs = opts.noVideo ? 'screenshots alone' : `${mode} mode${opts.screenshotDir ? ' and screenshots' : ''}`;
+  log(`demo: "${demo.title}" — ${demo.steps.length} steps · ${outputs}`);
+  // Checked before a server or a browser is spent: a device the registry does not hold
+  // throws here, and so does a screenshot directory the driver would refuse. Only the
+  // driver makes the directory, so a run that stops before it leaves none behind.
   const device = contextOptions(demo);
+  if (opts.screenshotDir) checkScreenshotDir(opts.screenshotDir, opts.noVideo ? [] : [outputPath, capturesRoot()]);
 
   const server = await serverFor(demo, opts);
   try {
+    if (opts.noVideo) {
+      const shots = await withHeadlessPage(device, (page) =>
+        captureScreenshots({ page, baseUrl: server.baseUrl, cwd: opts.cwd, demo, screenshotDir: opts.screenshotDir as string, log }),
+      );
+      return { outputPath: null, narrated: false, music: false, failures: shots.failures, capturesDir: null, screenshots: shots.screenshots };
+    }
+
     if (mode === 'walkthrough') {
       return await captureWalkthrough({
         baseUrl: server.baseUrl,
@@ -92,6 +147,7 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
         musicPath: opts.musicPath,
         keep: opts.keep,
         headed: opts.headed,
+        screenshotDir: opts.screenshotDir,
         log,
       });
     }
@@ -106,6 +162,7 @@ export async function runDemo(opts: RunDemoOptions): Promise<CaptureResult> {
         noNarrate: opts.noNarrate,
         musicPath: opts.musicPath,
         keep: opts.keep,
+        screenshotDir: opts.screenshotDir,
         log,
       }),
     );

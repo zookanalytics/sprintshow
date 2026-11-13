@@ -7,8 +7,8 @@ description: What the sprintshow demo-capture engine is for, the systems it meet
 
 sprintshow is a demo-capture engine, packaged as `@zookanalytics/sprintshow` with a
 command-line interface and a library. A markdown demo script drives an app in a browser
-or a shell in a terminal, and the engine turns the run into a video or a screenshot, with
-each step's claim checked against the screen.
+or a shell in a terminal, and the engine turns the run into a video, screenshots or both,
+with each step's claim checked against the screen.
 
 ## Scope
 
@@ -29,8 +29,12 @@ the living docs that hold them:
 ## Purpose and quality goals
 
 sprintshow gives an AI agent a way to show a person the work it just did, in a quick,
-unpolished demo like a team's sprint demo. One script drives each kind of capture: a
-walkthrough video, a proof video of one frame per step, or a screenshot.
+unpolished demo like a team's sprint demo. It is the automated user: it is given a script
+with its goals and the app to demonstrate, drives the app, and returns a video, screenshots
+or both, in one flow for every kind of app it drives. A script's goals are what each step
+says it must show, its proof. One script drives each kind of capture: a walkthrough video,
+a proof video of one frame per step, a screenshot of each step, or one screenshot of the
+state the last step leaves.
 
 The quality goals, in rank order:
 
@@ -47,12 +51,12 @@ The quality goals, in rank order:
 ## Context
 
 The boundary is the capture. sprintshow takes a demo script and an app or a shell, and
-leaves an MP4 or a PNG at a path for the caller to publish.
+leaves an MP4, PNGs or both at the paths the caller names, for the caller to publish.
 
 | Who or what | Its role |
 |---|---|
 | An agent or a developer | Writes the script, runs a command or calls the library, and reads the log and the exit code. |
-| A person watching, such as a pull request's reviewer | Watches the MP4 or looks at the PNG wherever the caller puts it. |
+| A person watching, such as a pull request's reviewer | Watches the MP4 or looks at the PNGs wherever the caller puts them. |
 | The app under demo | Answers over HTTP at an origin: a server already running, a dev-server command sprintshow starts and stops, or a static directory sprintshow serves. |
 | bash, and the programs a terminal script runs | Run on the host in a pseudo-terminal, in the directory the caller names. |
 | Chromium, through Playwright | Shows every page, the engine's terminal page included, records the walkthrough and takes every screenshot. |
@@ -72,7 +76,7 @@ leaves an MP4 or a PNG at a path for the caller to publish.
 | Page ([browser.ts](../src/browser.ts), [vercel.ts](../src/vercel.ts)) | Open a page script's app in Chromium as the script's device, past Vercel's sign-in when the app is behind it. | The browser context: its device, its viewport, and the cookie that passes Vercel's sign-in. | Send the bypass key beyond the app's origin. |
 | [Terminal session](../src/terminal.ts) | Run a terminal script's bash in a pseudo-terminal, shown by xterm.js in the capture's page. | The shell and its jobs, the screen and its scrollback, and the last command's exit status. | Interpret the shell's output itself: xterm.js reads every escape sequence. |
 | Step proof ([browser.ts](../src/browser.ts), [keyboard.ts](../src/keyboard.ts)) | Run one step's actions on the page or the terminal, then check its proof. | Each step's result: its proof held, failed with a reason, or was manual. | End the capture: an action that does not settle is logged, and the proof decides the step. |
-| Capture ([walkthrough.ts](../src/walkthrough.ts), [capture.ts](../src/capture.ts), [screenshot.ts](../src/screenshot.ts), [overlay.ts](../src/overlay.ts)) | Turn a script's steps into a recorded take, a frame per step, or one PNG, and draw a video's captions, cards and pointer. | A run's working directory: its frames or its recording, and when each step shows. | Judge a step: each step's result comes from Step proof. |
+| Capture ([walkthrough.ts](../src/walkthrough.ts), [capture.ts](../src/capture.ts), [screenshot.ts](../src/screenshot.ts), [overlay.ts](../src/overlay.ts)) | Turn a script's steps into a recorded take, a frame per step, a PNG of each step, or one PNG, and draw a video's captions, cards and pointer. | A run's working directory: its frames or its recording, and when each step shows. A run's screenshot directory, which holds that run's PNGs and nothing else. | Judge a step: each step's result comes from Step proof. Draw anything of its own into a PNG, or show a PNG being taken in a video. |
 | Video ([assemble.ts](../src/assemble.ts), [ffmpeg.ts](../src/ffmpeg.ts)) | Encode frames or a recording into an MP4, and lay narration and a music bed under it. | The frames manifest, the narration track and the audio mix. | Need the app or a browser: it works from files on disk. |
 | Samples ([demos/](../demos/), [sample-app](../examples/sample-app/), [sample-cli](../examples/sample-cli/)) | Give a capture something to drive with no app of one's own. | The sample scripts, and the sample app and terminal program they drive. | Need anything the package does not ship. |
 
@@ -99,6 +103,7 @@ What a user runs, and the domains each draws on:
 |---|---|---|
 | `sprintshow run` | A walkthrough: one continuous take at a human pace, with live captions and a pointer. | Demo script, App origin and Page or Terminal session, Step proof, Capture, Video |
 | `sprintshow run --mode proof` | A proof video: one captioned frame per step. | Demo script, App origin and Page or Terminal session, Step proof, Capture, Video |
+| `sprintshow run --screenshots <dir>` | A PNG of the state each step leaves, with nothing of the engine's drawn on it, beside either video, or alone with `--no-video`. | Demo script, App origin and Page or Terminal session, Step proof, Capture, and Video for a run that makes one |
 | `sprintshow screenshot` | One PNG of the state the last step leaves, with nothing of the engine's drawn on it. | Demo script, App origin and Page or Terminal session, Step proof, Capture |
 | `sprintshow assemble` | An MP4 from the frames and manifest of an agent's own capture. | Video |
 | `sprintshow lint` | A script's findings, before a capture. | Demo script, Lint findings |
@@ -158,6 +163,9 @@ What a user runs, and the domains each draws on:
   environment.
 - The proof video and an agent that drives its own browser share one hand-off: frames and
   a `manifest.json`, which `assemble` encodes.
+- sprintshow keeps no golden images and compares no screenshot with another: comparing a
+  run's screenshots with references is the consumer's work.
+- sprintshow never builds or installs the app it demonstrates.
 
 ## Debt
 

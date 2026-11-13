@@ -1,6 +1,7 @@
 // On-screen chrome rendered inside the page: the step caption bar and the cover /
 // scrutiny cards. Rendering in the DOM (not with ffmpeg `drawtext`) keeps text crisp in
-// the app's own font and lets the walkthrough path show live, animated captions.
+// the app's own font and lets the walkthrough path show live, animated captions. A
+// marker, a no-break space, makes the browser draw a frame that shows nothing new.
 //
 // The still-frame path injects a caption, screenshots, and removes it; the walkthrough
 // path leaves the caption up and updates it in place, and shows the cards as full-screen
@@ -15,6 +16,9 @@ export const BG = '#0f1115';
 export const FG = '#e7e9ee';
 export const MUTED = '#9aa3b2';
 export const FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+
+/** The elements this module draws in a page: the caption bar and a card. */
+export const OVERLAY_CHROME = '#__ss_caption__,#__ss_card__';
 
 /** HTML-escape text bound for `innerHTML` / `setContent`. */
 export function esc(s: string): string {
@@ -134,6 +138,50 @@ async function shownAt(page: Page, id: string): Promise<number | null> {
       { id, timeout: SHOWN_TIMEOUT_MS },
     )
     .catch(() => null);
+}
+
+let marks = 0;
+
+/**
+ * Make the browser draw a frame that shows nothing new: put a fresh marker in the page in
+ * place of the last, marked for the page's Element Timing. Resolves with the wall-clock
+ * time in ms of the frame in which the browser first showed it, or null when the browser
+ * reports none within SHOWN_TIMEOUT_MS. It resolves null too when the page cannot take the
+ * marker, such as one whose document is being replaced by another or has no body.
+ *
+ * The marker is text, a no-break space, which has no ink. A page's Content Security Policy
+ * can refuse an image, which then never shows, but it has no say over text. Element Timing
+ * reports no text drawn transparent, so the marker is drawn in an opaque colour, and in a
+ * font the system holds, which never waits for a web font to load.
+ *
+ * The video keeps frames drawn while the marker is in the page, so the page's stylesheets
+ * must not draw it. Its tag is the engine's own, which a rule for the page's own elements,
+ * such as one for every span, does not select. Its inline style resets its properties
+ * (`all: initial`) and sets the few it needs, each important, which outranks every rule of
+ * a page's stylesheet that does select it. A ::before, ::after or ::first-line rule that
+ * selects it, such as one for every element, can still draw on it, because no style on an
+ * element reaches its pseudo-elements.
+ */
+export async function markFrame(page: Page): Promise<number | null> {
+  const id = `__ss_mark_${++marks}`;
+  const marked = await page.evaluate((id) => {
+    document.getElementById('__ss_mark__')?.remove();
+    const mark = document.createElement('sprintshow-mark');
+    mark.id = '__ss_mark__';
+    mark.setAttribute('elementtiming', id);
+    mark.textContent = ' ';
+    // `all` comes first, because it resets the properties that the rest then set.
+    const style = { all: 'initial', position: 'fixed', left: '0', top: '0', font: '1px/1px sans-serif', color: '#000', 'z-index': '2147483647', 'pointer-events': 'none' };
+    for (const [name, value] of Object.entries(style)) mark.style.setProperty(name, value, 'important');
+    document.body.appendChild(mark);
+    return true;
+  }, id).catch(() => false);
+  return marked ? shownAt(page, id) : null;
+}
+
+/** Take the marker out of the page. */
+export async function removeMarker(page: Page): Promise<void> {
+  await page.evaluate(() => document.getElementById('__ss_mark__')?.remove()).catch(() => {});
 }
 
 export async function removeCaption(page: Page): Promise<void> {

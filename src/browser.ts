@@ -111,6 +111,9 @@ const POINTER_INIT = `(() => {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build); else build();
 })()`;
 
+/** The elements the pointer draws in a page: the pointer and its ripples. */
+export const POINTER_CHROME = '#__ss_pointer__,.__ss_ripple__';
+
 /** Register the pointer so every navigation re-installs it. Call once, before the first goto. */
 export async function installPointer(page: Page): Promise<void> {
   await page.addInitScript(POINTER_INIT);

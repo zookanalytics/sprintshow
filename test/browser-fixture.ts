@@ -6,7 +6,7 @@
 // fails them, so a broken browser never passes as a missing one.
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,6 +15,7 @@ import { createInflate } from 'node:zlib';
 import { chromium, type Browser, type Page } from 'playwright';
 
 import { chromiumLaunchArgs } from '../src/browser.ts';
+import { ffmpegBin } from '../src/ffmpeg.ts';
 import { ensureServer } from '../src/server.ts';
 
 export const REPO = path.join(import.meta.dirname, '..');
@@ -229,4 +230,17 @@ export async function pngPixels(file: string, points: { x: number; y: number }[]
     }
   }
   return found;
+}
+
+/** The time of each frame of `file`, and the mean luma of an 8x8 patch of it centred on (x, y). */
+export function patchLuma(file: string, x: number, y: number): { t: number; luma: number }[] {
+  const res = spawnSync(ffmpegBin() as string, ['-hide_banner', '-i', file, '-an', '-vf', `crop=8:8:${x - 4}:${y - 4},showinfo`, '-f', 'null', '-'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+  return [...res.stderr.matchAll(/pts_time:\s*([\d.]+).*?mean:\[(\d+)/g)].map((m) => ({ t: Number(m[1]), luma: Number(m[2]) }));
+}
+
+/** The first frame from `from` on whose patch matches `pred`, or a failure naming `what`. */
+export function firstFrame(frames: { t: number; luma: number }[], from: number, pred: (luma: number) => boolean, what: string): number {
+  const hit = frames.find((f) => f.t >= from && pred(f.luma));
+  assert.ok(hit, `no frame from ${from}s shows ${what}`);
+  return hit.t;
 }
