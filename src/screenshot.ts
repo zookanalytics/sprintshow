@@ -31,10 +31,10 @@
 // it. Each is the area a screenshot takes by default: a page script's viewport, a
 // terminal script's window, or an iOS app's screen. A video's driver takes a page's or a
 // terminal's in the page it films, where the engine draws its caption, cards, pointer and
-// terminal backdrop, so a still is taken with a style that leaves those out. A still first waits for the animations running in
-// the page to end, the engine's, such as a click's ripple, as well as the app's, so it
-// shows the state they settle in. A walkthrough cuts the stretch in which a still is
-// taken from its video (walkthrough.ts).
+// terminal backdrop, so a still is taken with a style that leaves those out. A still
+// first waits for the animations running in the page to end, the engine's, such as a
+// click's ripple, as well as the app's, so it shows the state they settle in. A
+// walkthrough cuts the stretch in which a still is taken from its video (walkthrough.ts).
 
 import { existsSync, mkdirSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
