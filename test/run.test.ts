@@ -6,20 +6,21 @@
 // named for the step, as a proof video names its frame of the step. A screenshot shows
 // the app alone: the screenshots a run with a video takes match, pixel for pixel, those a
 // run with no video takes, in whose page the engine draws nothing, and the last matches
-// the PNG `sprintshow screenshot` saves. A still waits on every animation running in the
-// page, the engine's as well as the app's, and a click's ripple has ended longer before
-// the still than a cut reaches. A walkthrough's video shows no trace of taking them: it
-// holds the frames of its recording less those it cuts for them, every frame from the
-// first step's caption to the closing card shows the caption, no frame shows a terminal's
-// window laid out as a still, a step that ends at once shows its caption before the cut
-// for its screenshot, a step that moves to another page, leaving its caption behind, gets
-// no caption back, and no frame of a page whose stylesheet decorates every element shows
-// anything at its top-left corner, where the engine's frame marker sits. A cut takes in
-// every frame within reach of its still, and a moment after it moves up by the frames it
-// drops. The stretch a still can show ends at a frame drawn after the still that the
-// recording has, and frames are drawn until one reaches it, on a page whose Content
-// Security Policy refuses an image from a data: URL as on any other, and on a page that
-// cannot take the marker.
+// the PNG `sprintshow screenshot` saves. A still shows none of the engine's chrome, nor
+// anything it holds, whatever the page's stylesheet gives the elements it holds. A still
+// waits on every animation running in the page, the engine's as well as the app's, and a
+// click's ripple has ended longer before the still than a cut reaches. A walkthrough's
+// video shows no trace of taking them: it holds the frames of its recording less those it
+// cuts for them, every frame from the first step's caption to the closing card shows the
+// caption, no frame shows a terminal's window laid out as a still, a step that ends at
+// once shows its caption before the cut for its screenshot, a step that moves to another
+// page, leaving its caption behind, gets no caption back, and no frame of a page whose
+// stylesheet decorates every element shows anything at its top-left corner, where the
+// engine's frame marker sits. A cut takes in every frame within reach of its still, and a
+// moment after it moves up by the frames it drops. The stretch a still can show ends at a
+// frame drawn after the still that the recording has, and frames are drawn until one
+// reaches it, on a page whose Content Security Policy refuses an image from a data: URL
+// as on any other, and on a page that cannot take the marker.
 // A run with no video needs a screenshot directory and refuses the video's options, and a
 // directory that holds files, or would also hold the video or the run's working
 // directory, is refused before anything is served or made. A run whose proof fails saves
@@ -41,7 +42,7 @@ import { runDemo } from '../src/run.ts';
 import { afterCuts, captureWalkthrough, screenshotStep, stillCuts, watchRecording, type Cut, type RecordingFrames } from '../src/walkthrough.ts';
 import { captureScreenshots, stepFileName, stepScreenshots } from '../src/screenshot.ts';
 import { ffmpegBin } from '../src/ffmpeg.ts';
-import { markFrame } from '../src/overlay.ts';
+import { markFrame, showCaption } from '../src/overlay.ts';
 import { VIEWPORT, installPointer } from '../src/browser.ts';
 import { launchBrowser, scratchDir, serveSite, writeFiles, runCli, stubFfmpeg, pngSize, pixelsApart, alphaAt, patchLuma, firstFrame, REPO } from './browser-fixture.ts';
 
@@ -510,6 +511,32 @@ describe('a still and its marker on a page of their own', { skip }, () => {
     } finally {
       await page.close();
       cleanup();
+    }
+  });
+
+  test("a still leaves out the engine's chrome with all it holds, whatever the page's stylesheet gives the elements it holds", async () => {
+    // Each rule shows part of an element hidden by its visibility: a child, a
+    // pseudo-element, or the element itself as it eases out.
+    for (const rule of ['span{visibility:visible}', '*::after{content:"after";visibility:visible}', '*{transition:all 1s!important}']) {
+      const { dir, cleanup } = scratchDir();
+      const page = await browser!.newPage({ viewport: VIEWPORT });
+      try {
+        await installPointer(page);
+        await page.route('http://chrome.test/', (r) => r.fulfill({ contentType: 'text/html', body: `<style>${rule}</style><body style="margin:0;background:#fff"><main id="app">app</main></body>` }));
+        await page.goto('http://chrome.test/');
+        const still = async (name: string): Promise<Buffer> => {
+          const shots = stepScreenshots(STEP, path.join(dir, name), quiet);
+          await shots.take(page, STEP.steps[0]);
+          return readFileSync(shots.saved[0]);
+        };
+        const bare = await still('bare');
+        await page.evaluate(() => (window as unknown as { __ss: { moveTo(x: number, y: number): void } }).__ss.moveTo(300, 300));
+        await showCaption(page, 1, 1, 'The page shows', false);
+        assert.equal(await pixelsApart(page, bare, await still('chrome'), 32), 0, `the caption and the pointer show in a still of a page styled ${rule}`);
+      } finally {
+        await page.close();
+        cleanup();
+      }
     }
   });
 
