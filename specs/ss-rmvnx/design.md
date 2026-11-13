@@ -75,9 +75,9 @@ stand in for input a driver cannot give, and a relaunch would lose them.
 ### The gestures each action maps to
 
 An iOS app script reads a page script's grammar, less what has no meaning on a device:
-`goto`, `resize`, `focused` and `eval`. `focused` was tried: WebDriverAgent's `focused`
-attribute stayed false for a field that held the keyboard and took the typing, because on
-iOS it reports the focus engine, which is tvOS's.
+`goto`, `resize`, `focused` and `eval`. `focused` was tried. WebDriverAgent's `focused`
+attribute is XCUITest's `hasFocus` (`XCUIElement+FBWebDriverAttributes.m`), and it stayed
+false for a field that held the keyboard and took the typing.
 
 | Action | Gesture |
 |---|---|
