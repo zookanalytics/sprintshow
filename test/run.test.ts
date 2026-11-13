@@ -6,13 +6,14 @@
 // named for the step, as a proof video names its frame of the step. A screenshot shows
 // the app alone: the screenshots a run with a video takes match, pixel for pixel, those a
 // run with no video takes, in whose page the engine draws nothing, and the last matches
-// the PNG `sprintshow screenshot` saves. A still waits on the page's own animations and
-// not on the engine's. A walkthrough's video shows no trace of taking them: it holds the
-// frames of its recording less those it cuts for them, every frame from the first step's
-// caption to the closing card shows the caption, no frame shows a terminal's window laid
-// out as a still, a step that ends at once shows its caption before the cut for its
-// screenshot, a step that moves to another page, leaving its caption behind, gets no
-// caption back, and no frame of a page whose stylesheet decorates every element shows
+// the PNG `sprintshow screenshot` saves. A still waits on every animation running in the
+// page, the engine's as well as the app's, and a click's ripple has ended longer before
+// the still than a cut reaches. A walkthrough's video shows no trace of taking them: it
+// holds the frames of its recording less those it cuts for them, every frame from the
+// first step's caption to the closing card shows the caption, no frame shows a terminal's
+// window laid out as a still, a step that ends at once shows its caption before the cut
+// for its screenshot, a step that moves to another page, leaving its caption behind, gets
+// no caption back, and no frame of a page whose stylesheet decorates every element shows
 // anything at its top-left corner, where the engine's frame marker sits. A cut takes in
 // every frame within reach of its still, and a moment after it moves up by the frames it
 // drops. The stretch a still can show ends at a frame drawn after the still that the
@@ -41,7 +42,7 @@ import { afterCuts, captureWalkthrough, screenshotStep, stillCuts, watchRecordin
 import { captureScreenshots, stepFileName, stepScreenshots } from '../src/screenshot.ts';
 import { ffmpegBin } from '../src/ffmpeg.ts';
 import { markFrame } from '../src/overlay.ts';
-import { VIEWPORT } from '../src/browser.ts';
+import { VIEWPORT, installPointer } from '../src/browser.ts';
 import { launchBrowser, scratchDir, serveSite, writeFiles, runCli, stubFfmpeg, pngSize, pixelsApart, alphaAt, patchLuma, firstFrame, REPO } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
@@ -481,7 +482,7 @@ describe('a still and its marker on a page of their own', { skip }, () => {
     }
   });
 
-  test("a still waits on the page's own animations, and not on the engine's pointer, caption or card", async () => {
+  test("a still waits on every animation running in the page: the app's, and the engine's ripple, pointer, caption and card", async () => {
     const { dir, cleanup } = scratchDir();
     const page = await browser!.newPage({ viewport: VIEWPORT });
     try {
@@ -505,7 +506,37 @@ describe('a still and its marker on a page of their own', { skip }, () => {
         }
       });
       await stepScreenshots(STEP, path.join(dir, 'shots'), quiet).take(page, STEP.steps[0]);
-      assert.deepEqual(await page.evaluate(() => (window as unknown as { __waited: string[] }).__waited), ['app']);
+      assert.deepEqual((await page.evaluate(() => (window as unknown as { __waited: string[] }).__waited)).sort(), ['app', 'caption', 'card', 'pointer', 'ripple']);
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test("a walkthrough's still begins once a click's ripple has ended, longer after it than the still's cut reaches", async () => {
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage({ viewport: VIEWPORT });
+    try {
+      await installPointer(page);
+      await page.route('http://ripple.test/', (r) => r.fulfill({ contentType: 'text/html', body: '<body style="margin:0;background:#fff"><main id="app">app</main></body>' }));
+      await page.goto('http://ripple.test/');
+      // The ripple a walkthrough's click draws, and the time its animation ends, or is cut
+      // short as the ripple leaves the page.
+      await page.evaluate(() => {
+        const w = window as unknown as { __ended?: number; __ss: { ripple(x: number, y: number): void } };
+        w.__ss.ripple(200, 200);
+        const ripple = document.getAnimations().find((a) => (a as CSSAnimation).animationName === '__ss_r') as Animation;
+        const ended = (): void => void (w.__ended = performance.timeOrigin + performance.now());
+        ripple.finished.then(ended, ended);
+      });
+      const recording: RecordingFrames = { start: () => 0, firstFrom: (wall) => wall + 1 };
+      const bare = { settle: async () => {}, close: async () => {} };
+      const shown = await screenshotStep(page, bare, stepScreenshots(STEP, path.join(dir, 'shots'), quiet), recording, STEP.steps[0], quiet);
+      const ended = await page.evaluate(() => (window as unknown as { __ended?: number }).__ended);
+      assert.ok(ended !== undefined, 'the ripple ran to its end');
+      // The cut reaches 200 ms before the still, the frame before the cut starts up to 40 ms
+      // before that, and it shows the page as the browser drew it up to 20 ms earlier still.
+      assert.ok(shown.from - ended > 260, `the still began ${Math.round(shown.from - ended)} ms after the ripple ended`);
     } finally {
       await page.close();
       cleanup();

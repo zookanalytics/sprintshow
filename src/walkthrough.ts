@@ -19,9 +19,11 @@
 // chrome is a frame the filmed page draws, and the recording can show it. The video cuts
 // the frames of the stretch in which each still is taken, reaching a little before the
 // still and a little past the first frame of the recording that shows the walkthrough
-// again (stillCuts). The page holds one state on both sides of a cut, so the video runs
-// on as if no still were taken, and each mark the narration is laid on moves up by the
-// frames the cuts before it drop.
+// again (stillCuts). A still waits for the animations running in the page to end, the
+// engine's as well as the app's, and the engine changes nothing else the video can show
+// for a while on either side of it. So unless the app moves on its own, the page holds
+// one state on both sides of a cut, and the video runs on as if no still were taken. Each
+// mark the narration is laid on moves up by the frames the cuts before it drop.
 
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -115,16 +117,20 @@ export interface Cut {
 /**
  * How far, in ms, a cut reaches past each end of a still's stretch, so that it takes in
  * every frame of the still, which the recording can show some way from when the browser
- * drew it: at 25 frames a second, from up to 60 ms before to 20 ms after. The reach is
- * several times that, which costs the video nothing, since the page does not change in
- * the QUIET_MS on either side of a still.
+ * drew it: from up to 60 ms before to 20 ms after. The reach is several times that, and
+ * it costs the video nothing unless the app moves on its own. A still waits for the
+ * animations running in the page to end, the engine's as well as the app's, for up to a
+ * second (screenshot.ts). From then until QUIET_MS past the frame that shows the
+ * walkthrough again, the engine changes nothing the video can show but the still, so the
+ * frames the reach takes in show the page as the frames on both sides of the cut show it.
  */
 const CUT_REACH_MS = 200;
 
 /**
- * How long the page stays still before a screenshot is taken, and once the recording shows
- * the walkthrough again after it: longer than a cut reaches, by two frames, so the frames
- * on both sides of a cut show the page in one state.
+ * How long the engine changes nothing in the page before a screenshot is taken, once the
+ * animations running in it have ended, and after it, once the recording shows the
+ * walkthrough again: longer than a cut reaches, by two frames, so the frames on both sides
+ * of a cut show the page in one state.
  */
 const QUIET_MS = CUT_REACH_MS + 2 * FRAME_MS;
 
