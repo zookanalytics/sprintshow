@@ -11,6 +11,18 @@
 //
 // The start URL in the demo script is always just a path (+ query); the origin comes
 // from whichever of these is in effect.
+//
+// An iOS app script's app comes the same two ways, through the same options
+// (ensureIosApp). `--base-url` takes the simulator URL of an app already running on a
+// booted device, ios-simulator://<device UDID>/<bundle id> (simulator.ts). `--serve` takes
+// the repo's command that brings the app up on a simulator: the engine starts it, waits
+// until it prints the app's simulator URL on its standard output, which says the app is up
+// and where, and stops it once the run ends, as it does a dev server. A port has no
+// meaning for an app on a simulator, and an app is not served from a directory, so
+// `--port` and `--serve-dir` are refused. The command runs with the engine's environment
+// less the keys the engine holds, as every tool the engine starts for an iOS app does,
+// and its stopping can take as long as deleting a device does, which the engine waits
+// for.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
@@ -18,13 +30,15 @@ import type { AddressInfo } from 'node:net';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+import { isSimulatorUrl, parseSimulatorUrl, simulatorUrl, toolEnv, SIMULATOR_URL_FORM } from './simulator.ts';
+
 /** The port a `serve` command is polled on when no port is named. */
 export const DEFAULT_PORT = 5173;
 
 export interface ServeOptions {
-  /** Reuse a running server at this origin; nothing is spawned or torn down. */
+  /** Reuse a running server at this origin, or an iOS app at this simulator URL; nothing is spawned or torn down. */
   baseUrl?: string | null;
-  /** Shell command to spawn as the dev server (e.g. `npm run dev`). */
+  /** Shell command to spawn as the dev server (e.g. `npm run dev`), or that brings an iOS app up on a simulator and prints its URL. */
   serve?: string | null;
   /** Directory to serve with the built-in static file server. */
   serveDir?: string | null;
@@ -134,6 +148,10 @@ export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
     throw new Error(`server: the port must be a whole number from 1 to 65535 (got ${opts.port})`);
   }
 
+  if (opts.baseUrl && isSimulatorUrl(opts.baseUrl)) {
+    throw new Error(`server: ${opts.baseUrl} names an iOS app on a simulator, which a script that declares **Platform:** iOS drives; this script drives a page, at a web app's origin`);
+  }
+
   if (opts.baseUrl) {
     const baseUrl = opts.baseUrl.replace(/\/$/, '');
     log(`server: using ${baseUrl}`);
@@ -179,6 +197,107 @@ export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
   }
 
   throw new Error('no server: pass --base-url <url>, --serve "<command>", or --serve-dir <dir>');
+}
+
+/** How long an iOS app's `--serve` command has to print its app's simulator URL. Building the app and booting a device can take minutes. */
+export const IOS_READY_TIMEOUT_MS = 600_000;
+/** How long an iOS app's `--serve` command has to exit once told to stop, which can mean deleting its device, before it is killed. */
+const IOS_STOP_MS = 60_000;
+/** How many of the last lines a `--serve` command printed are kept, for the message of one that fails. */
+const OUTPUT_LINES = 5;
+
+/**
+ * Bring up the iOS app an iOS app script drives, and return a handle whose base URL is the
+ * app's simulator URL: the app `baseUrl` names, already running, or the app a `serve`
+ * command brings up and names by printing its simulator URL on a line of its standard
+ * output. Throws when neither is given, when the URL is not a simulator URL, when the
+ * command exits or runs out of time before it prints one, or when `serveDir` or `port`
+ * is given.
+ */
+export async function ensureIosApp(opts: ServeOptions & { readyTimeout?: number }): Promise<ServerHandle> {
+  const log = opts.log ?? ((m: string) => console.log(m));
+  if (opts.serveDir) throw new Error(`server: an iOS app is not served from a directory; pass --base-url ${SIMULATOR_URL_FORM}, or --serve "<command>" that brings the app up and prints that URL`);
+  if (opts.port !== undefined) throw new Error("server: an iOS app script takes no --port; its --serve command prints the app's simulator URL once the app is up");
+  if (opts.baseUrl) {
+    const app = parseSimulatorUrl(opts.baseUrl);
+    if (!app) throw new Error(`server: an iOS app script takes its app's simulator URL, ${SIMULATOR_URL_FORM}, as --base-url (got "${opts.baseUrl}")`);
+    log(`app: using ${simulatorUrl(app)}`);
+    return { baseUrl: simulatorUrl(app), stop: async () => {} };
+  }
+  if (opts.serve) return serveIosApp(opts.serve, opts.cwd ?? process.cwd(), opts.readyTimeout ?? IOS_READY_TIMEOUT_MS, log);
+  throw new Error(`no app: pass --base-url ${SIMULATOR_URL_FORM}, or --serve "<command>" that brings the app up and prints that URL`);
+}
+
+/** Start `command`, and resolve once it prints a simulator URL, with a handle that stops it. */
+async function serveIosApp(command: string, cwd: string, readyTimeout: number, log: (m: string) => void): Promise<ServerHandle> {
+  log(`app: starting \`${command}\`…`);
+  // Detached, so its whole process group can be stopped: the command starts children.
+  const child = spawn(command, { cwd, env: toolEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true, shell: true });
+  child.unref();
+  const output: string[] = [];
+  const keep = (line: string): void => {
+    if (!line.trim()) return;
+    output.push(line.trim());
+    output.splice(0, Math.max(0, output.length - OUTPUT_LINES));
+  };
+  let partial = { out: '', err: '' };
+  let found: string | null = null;
+  const read = (stream: 'out' | 'err', data: Buffer): void => {
+    const lines = (partial[stream] + data.toString('utf8')).split('\n');
+    partial = { ...partial, [stream]: lines.pop() ?? '' };
+    for (const line of lines) {
+      keep(line);
+      if (stream === 'out' && !found) {
+        const app = parseSimulatorUrl(line.match(/ios-simulator:\/\/\S+/i)?.[0] ?? '');
+        if (app) found = simulatorUrl(app);
+      }
+    }
+  };
+  // The streams are read to their end, so a command that keeps printing never blocks on a full pipe.
+  child.stdout?.on('data', (d: Buffer) => read('out', d));
+  child.stderr?.on('data', (d: Buffer) => read('err', d));
+  let exit: string | null = null;
+  child.once('exit', (code, signal) => {
+    exit = signal ? `was ended by ${signal}` : `exited ${code}`;
+  });
+  child.once('error', (e) => {
+    exit = `could not start: ${e.message}`;
+  });
+
+  const stop = async (): Promise<void> => {
+    if (!(await stopGroup(child, IOS_STOP_MS))) log(`app: \`${command}\` did not exit within ${IOS_STOP_MS / 1000}s of SIGTERM, so it was killed`);
+  };
+  const said = (): string => (output.length ? `; its last output: ${output.join(' / ')}` : '');
+  const deadline = Date.now() + readyTimeout;
+  while (!found) {
+    if (exit) throw new Error(`server: \`${command}\` ${exit} before it printed its app's simulator URL, ${SIMULATOR_URL_FORM}${said()}`);
+    if (Date.now() > deadline) {
+      await stop();
+      throw new Error(`server: \`${command}\` printed no simulator URL, ${SIMULATOR_URL_FORM}, within ${readyTimeout / 1000}s${said()}`);
+    }
+    await sleep(100);
+  }
+  log(`app: ready at ${found}`);
+  return { baseUrl: found, stop };
+}
+
+/**
+ * Stop `child`'s process group with SIGTERM, and resolve once it has exited, or with
+ * SIGKILL `ms` later. Resolves whether SIGTERM ended it.
+ */
+async function stopGroup(child: ChildProcess, ms: number): Promise<boolean> {
+  const done = (): boolean => child.exitCode !== null || child.signalCode !== null;
+  if (done()) return true;
+  stopChild(child);
+  const deadline = Date.now() + ms;
+  while (!done() && Date.now() < deadline) await sleep(100);
+  if (done()) return true;
+  try {
+    process.kill(-(child.pid as number), 'SIGKILL');
+  } catch {
+    /* it has ended */
+  }
+  return false;
 }
 
 function stopChild(child: ChildProcess): void {

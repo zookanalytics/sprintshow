@@ -58,6 +58,8 @@ const SAMPLE_APP = path.join(REPO, 'examples', 'sample-app');
 const TERMINAL = path.join(REPO, 'demos', 'terminal.md');
 const SAMPLE_CLI = path.join(REPO, 'examples', 'sample-cli');
 const quiet = (): void => {};
+/** A page's surface, which holds nothing and whose stills the page gives. */
+const PAGE = { settle: async () => {}, close: async () => {} };
 
 test("a step's screenshot is named for its number, padded so the names sort in step order, and its caption, cut at a word", () => {
   const step = (index: number, narration: string): DemoStep => ({ index, narration, actions: [], description: '', droppedCodes: [] });
@@ -535,7 +537,7 @@ describe('a still and its marker on a page of their own', { skip }, () => {
           (document.querySelector(selector) as Element).animate([{ opacity: 1 }, { opacity: 0.5 }], 10_000).id = id;
         }
       });
-      await stepScreenshots(STEP, path.join(dir, 'shots'), quiet).take(page, STEP.steps[0]);
+      await stepScreenshots(STEP, path.join(dir, 'shots'), quiet).take(page, PAGE, STEP.steps[0]);
       assert.deepEqual((await page.evaluate(() => (window as unknown as { __waited: string[] }).__waited)).sort(), ['app', 'caption', 'card', 'pointer', 'ripple']);
     } finally {
       await page.close();
@@ -555,7 +557,7 @@ describe('a still and its marker on a page of their own', { skip }, () => {
         await page.goto('http://chrome.test/');
         const still = async (name: string): Promise<Buffer> => {
           const shots = stepScreenshots(STEP, path.join(dir, name), quiet);
-          await shots.take(page, STEP.steps[0]);
+          await shots.take(page, PAGE, STEP.steps[0]);
           return readFileSync(shots.saved[0]);
         };
         const bare = await still('bare');
