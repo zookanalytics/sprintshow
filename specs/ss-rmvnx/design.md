@@ -38,8 +38,8 @@ WebDriverAgent's runner app is built once with `xcodebuild build-for-testing` fo
 simulator, by `npm run provision:webdriveragent`. It goes into
 `~/Library/Caches/sprintshow/webdriveragent/<WebDriverAgent version>-xcode-<Xcode build>`,
 and only its products are kept. A run installs that build through the driver's
-preinstalled mode (`usePreinstalledWDA` with `prebuiltWDAPath`), which launches the runner
-with simctl and not xcodebuild, and removes it when the run ends.
+preinstalled mode (`usePreinstalledWDA` with `prebuiltWDAPath`), which launches the
+installed runner without xcodebuild, and removes it when the run ends.
 
 That mode removes every other WebDriverAgent runner app on the device, by bundle name,
 before it installs its own. The runner is therefore built with the bundle identifier
