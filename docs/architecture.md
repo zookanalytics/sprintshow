@@ -161,8 +161,4 @@ What a user runs, and the domains each draws on:
 
 ## Debt
 
-Where the repository has chosen to diverge from the design above:
-
-| Divergence | Why a reader must know it | Retired by |
-|---|---|---|
-| The package is not on npm. | A consumer runs a checkout's `src/cli.ts`, and the README's `npx` and `npm install` lines fail. | Publishing the package, which needs the npm account owner's credentials (ss-rck). |
+The repository does not diverge from the design above.
