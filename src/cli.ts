@@ -23,7 +23,7 @@ Usage:
   sprintshow assemble <captures-dir> [options]  Frames + manifest.json → narrated mp4
   sprintshow lint <demo.md> [--strict]         Check a demo script before capturing
   sprintshow provision webdriveragent          Build the runner app Appium installs on an
-                                               iOS app's device, once for each Xcode
+                                               iOS app's device
 
 run options:
   --mode <walkthrough|proof>  walkthrough (default): one continuous recorded take.
