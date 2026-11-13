@@ -87,7 +87,7 @@ test('run and screenshot both refuse a --port that is not a whole number, before
   }
 });
 
-test('provision builds what it names, webdriveragent, and refuses anything else before it builds', async () => {
+test('provision refuses anything but webdriveragent, and any option, before it builds', async () => {
   for (const args of [[], ['ffmpeg'], ['webdriveragent', 'ffmpeg'], ['webdriveragent', '--headed']]) {
     const res = await runCli(['provision', ...args]);
     assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
