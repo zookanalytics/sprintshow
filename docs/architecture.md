@@ -6,9 +6,9 @@ description: What the sprintshow demo-capture engine is for, the systems it meet
 # sprintshow architecture
 
 sprintshow is a demo-capture engine, packaged as `@zookanalytics/sprintshow` with a
-command-line interface and a library. A markdown demo script drives an app in a browser
-or a shell in a terminal, and the engine turns the run into a video, screenshots or both,
-with each step's claim checked against the screen.
+command-line interface and a library. A markdown demo script drives an app in a browser,
+a shell in a terminal, or an iOS app on a simulator, and the engine turns the run into a
+video, screenshots or both, with each step's claim checked against the screen.
 
 ## Scope
 
@@ -39,8 +39,8 @@ state the last step leaves.
 The quality goals, in rank order:
 
 1. **Truthful.** A capture shows what the app or the shell did. Each step's proof is
-   checked against the live page or terminal, and a failed proof is reported, never
-   hidden.
+   checked against the live page, terminal or app, and a failed proof is reported,
+   never hidden.
 2. **Unattended.** An agent runs a capture with no person present, on a macOS or Linux
    host and beside other captures. The run asks nothing, leaves nothing running, and
    either saves its output or says what stopped it.
@@ -57,9 +57,11 @@ leaves an MP4, PNGs or both at the paths the caller names, for the caller to pub
 |---|---|
 | An agent or a developer | Writes the script, runs a command or calls the library, and reads the log and the exit code. |
 | A person watching, such as a pull request's reviewer | Watches the MP4 or looks at the PNGs wherever the caller puts them. |
-| The app under demo | Answers over HTTP at an origin: a server already running, a dev-server command sprintshow starts and stops, or a static directory sprintshow serves. |
+| The app under demo | Answers over HTTP at an origin: a server already running, a dev-server command sprintshow starts and stops, or a static directory sprintshow serves. An iOS app runs on a booted iOS Simulator device instead, named by its simulator URL: an app already running, or one the repo's start command brings up, which sprintshow starts and stops. |
 | bash, and the programs a terminal script runs | Run on the host in a pseudo-terminal, in the directory the caller names. |
-| Chromium, through Playwright | Shows every page, the engine's terminal page included, records the walkthrough and takes every screenshot. |
+| Chromium, through Playwright | Shows every page, the engine's terminal and device pages included, records the walkthrough, and takes every screenshot but an iOS app's. |
+| Appium, its XCUITest driver, and WebDriverAgent | Drive an iOS app for a run: a server sprintshow starts, which installs WebDriverAgent's runner app on the device, acts on the app, reads its elements, streams its screen and takes its screenshots. |
+| Xcode and its iOS Simulator runtime, on the host | Build the runner app once, and run the devices and the `simctl` through which sprintshow reads and sets a device's state. |
 | ffmpeg | Encodes, mixes and muxes every video. |
 | OpenAI's speech API | Voices each caption when `OPENAI_API_KEY` is set. |
 | Vercel's Deployment Protection | Stands in front of a protected deployment, and lets the engine through with the key in `VERCEL_AUTOMATION_BYPASS_SECRET`. |
@@ -71,13 +73,14 @@ leaves an MP4, PNGs or both at the paths the caller names, for the caller to pub
 |---|---|---|---|
 | [Demo script](../src/demo-script.ts) | Read a markdown demo script into a parsed demo. | The grammar, and a script's parsed header, steps, actions, proofs and scrutiny items. | Run anything: other parts run what it parses. |
 | [Lint findings](../src/lint.ts) | Report what a capture would ignore or get wrong in a script, before one runs. | The lint rules, and their findings on one script. | Start a browser, a server or a shell. |
-| [App origin](../src/server.ts) | Give a page script an origin: a server already running, a dev server it starts and stops, or a static directory it serves. | The origin, and any server process a run started. | Start anything for a terminal script, which runs with no server. |
+| [App origin](../src/server.ts) | Give a page script an origin: a server already running, a dev server it starts and stops, or a static directory it serves. Give an iOS app script its app's simulator URL: an app already running, or one a start command it starts and stops brings up. | The origin or the simulator URL, and any server process or start command a run started. | Start anything for a terminal script, which runs with no server. |
 | Page ([browser.ts](../src/browser.ts), [vercel.ts](../src/vercel.ts)) | Open a page script's app in Chromium as the script's device, past Vercel's sign-in when the app is behind it. | The browser context: its device, its viewport, and the cookie that passes Vercel's sign-in. | Send the bypass key beyond the app's origin. |
 | [Terminal session](../src/terminal.ts) | Run a terminal script's bash in a pseudo-terminal, shown by xterm.js in the capture's page. | The shell and its jobs, the screen and its scrollback, and the last command's exit status. | Interpret the shell's output itself: xterm.js reads every escape sequence. |
-| Step proof ([browser.ts](../src/browser.ts), [keyboard.ts](../src/keyboard.ts)) | Run one step's actions on the page or the terminal, then check its proof. | Each step's result: its proof held, failed with a reason, or was manual. | End the capture: an action that does not settle is logged, and the proof decides the step. |
+| iOS app ([ios.ts](../src/ios.ts), [appium.ts](../src/appium.ts), [simulator.ts](../src/simulator.ts), [webdriveragent.ts](../src/webdriveragent.ts)) | Connect to an iOS app script's app through Appium, and show the device's screen in the capture's page from the frames WebDriverAgent streams. | The Appium server and session a run started, the runner app it installed, and the appearance and status bar it gave the device. | Create, boot or delete a device, or end or remove the app. |
+| Step proof ([browser.ts](../src/browser.ts), [keyboard.ts](../src/keyboard.ts)) | Run one step's actions on the page, the terminal or the iOS app, then check its proof. | Each step's result: its proof held, failed with a reason, or was manual. | End the capture: an action that does not settle is logged, and the proof decides the step. |
 | Capture ([walkthrough.ts](../src/walkthrough.ts), [capture.ts](../src/capture.ts), [screenshot.ts](../src/screenshot.ts), [overlay.ts](../src/overlay.ts)) | Turn a script's steps into a recorded take, a frame per step, a PNG of each step, or one PNG, and draw a video's captions, cards and pointer. | A run's working directory: its frames or its recording, and when each step shows. A run's screenshot directory, which holds that run's PNGs and nothing else. | Judge a step: each step's result comes from Step proof. Draw anything of its own into a PNG, or show a PNG being taken in a video. |
 | Video ([assemble.ts](../src/assemble.ts), [ffmpeg.ts](../src/ffmpeg.ts)) | Encode frames or a recording into an MP4, and lay narration and a music bed under it. | The frames manifest, the narration track and the audio mix. | Need the app or a browser: it works from files on disk. |
-| Samples ([demos/](../demos/), [sample-app](../examples/sample-app/), [sample-cli](../examples/sample-cli/)) | Give a capture something to drive with no app of one's own. | The sample scripts, and the sample app and terminal program they drive. | Need anything the package does not ship. |
+| Samples ([demos/](../demos/), [sample-app](../examples/sample-app/), [sample-cli](../examples/sample-cli/), [sample-ios](../examples/sample-ios/)) | Give a capture something to drive with no app of one's own. | The sample scripts, and the sample web app, terminal program and iOS app they drive, with the iOS app's start command. | Need anything the package does not ship. |
 
 How the domains meet in a capture:
 
@@ -86,11 +89,14 @@ flowchart LR
   script[Demo script] -->|parsed demo| capture[Capture]
   script -->|parsed demo| lint[Lint findings]
   origin[App origin] -->|origin| page[Page]
+  origin -->|simulator URL| ios[iOS app]
   capture -->|opens| page
   capture -->|opens| term[Terminal session]
+  capture -->|connects to and shows| ios
   capture -->|each step| proof[Step proof]
   proof -->|acts on and reads| page
   proof -->|acts on and reads| term
+  proof -->|acts on and reads| ios
   capture -->|frames or recording| video[Video]
 ```
 
@@ -100,10 +106,10 @@ What a user runs, and the domains each draws on:
 
 | Vertical | What it gives | Domains it draws on |
 |---|---|---|
-| `sprintshow run` | A walkthrough: one continuous take at a human pace, with live captions and a pointer. | Demo script, App origin and Page or Terminal session, Step proof, Capture, Video |
-| `sprintshow run --mode proof` | A proof video: one captioned frame per step. | Demo script, App origin and Page or Terminal session, Step proof, Capture, Video |
-| `sprintshow run --screenshots <dir>` | A PNG of the state each step leaves, with nothing of the engine's drawn on it, beside either video, or alone with `--no-video`. | Demo script, App origin and Page or Terminal session, Step proof, Capture, and Video for a run that makes one |
-| `sprintshow screenshot` | One PNG of the state the last step leaves, with nothing of the engine's drawn on it. | Demo script, App origin and Page or Terminal session, Step proof, Capture |
+| `sprintshow run` | A walkthrough: one continuous take at a human pace, with live captions and a pointer. | Demo script, App origin and Page, Terminal session or iOS app, Step proof, Capture, Video |
+| `sprintshow run --mode proof` | A proof video: one captioned frame per step. | Demo script, App origin and Page, Terminal session or iOS app, Step proof, Capture, Video |
+| `sprintshow run --screenshots <dir>` | A PNG of the state each step leaves, with nothing of the engine's drawn on it, beside either video, or alone with `--no-video`. | Demo script, App origin and Page, Terminal session or iOS app, Step proof, Capture, and Video for a run that makes one |
+| `sprintshow screenshot` | One PNG of the state the last step leaves, with nothing of the engine's drawn on it. | Demo script, App origin and Page, Terminal session or iOS app, Step proof, Capture |
 | `sprintshow assemble` | An MP4 from the frames and manifest of an agent's own capture. | Video |
 | `sprintshow lint` | A script's findings, before a capture. | Demo script, Lint findings |
 | The library | Each command's driver and the parts under it, for a caller that prepares its own page or drives its own steps. | Every domain but Samples |
@@ -125,15 +131,21 @@ What a user runs, and the domains each draws on:
 - **A key is written nowhere.** The engine reads a key from the environment, never from a
   flag, sends it only to the service it is for, and writes it to no log, caption,
   narration, URL, file or error. A key only the engine uses, such as the Vercel bypass
-  key, stays out of a terminal script's shell.
-- **A capture ends what it started.** It stops the dev server it spawned, closes the
-  browser it launched, and ends the shell with every job the shell runs.
-- **Captures share a host.** A run's static-server port, its working directory under
-  `.captures/` and its temporary files are its own, so captures run side by side.
-- **Binaries are provisioned.** A binary the engine needs, such as Chromium or ffmpeg,
-  comes from a named npm script (`provision:browser`, `provision:ffmpeg`) or from the
-  host, never from a dependency's install script. A part that finds one missing fails
-  with the command that fetches it.
+  key, stays out of a terminal script's shell. No key the engine holds reaches a tool it
+  starts for an iOS app: Appium and all it starts, `xcrun`, `xcodebuild`, or the app's
+  start command.
+- **A capture ends what it started.** It stops the dev server or start command it
+  spawned, closes the browser it launched, ends the shell with every job the shell runs,
+  and stops the Appium server it started. It leaves an iOS app's device as it was given:
+  the runner app removed, and its appearance and status bar put back.
+- **Captures share a host.** A run's static-server port, its Appium server's ports, its
+  working directory under `.captures/` and its temporary files are its own, so captures
+  run side by side.
+- **Binaries are provisioned.** A binary the engine needs, such as Chromium, ffmpeg or
+  WebDriverAgent's runner app, comes from a named npm script (`provision:browser`,
+  `provision:ffmpeg`, `provision:webdriveragent`) or from the host, never from a
+  dependency's install script. A part that finds one missing fails with the command that
+  fetches it.
 - **Behavior lives in the library.** The command-line interface parses flags and calls
   the library's exports, so a library caller can do whatever a command does.
 - **The source runs as written.** Every source file is TypeScript that Node 22.18 or
@@ -148,12 +160,20 @@ What a user runs, and the domains each draws on:
 - The parser keeps what it does not recognize as prose, and the linter reports it. A
   draft in the generic `demo:capture` dialect runs unedited, and adapting one only adds
   lines.
-- A script drives one surface, set by its header: an app's page (`**Start:**`) or a
-  terminal (`**Terminal:**`). It reads only that surface's actions and assertions.
+- A script drives one surface, set by its header: an app's page (`**Start:**`), a
+  terminal (`**Terminal:**`) or an iOS app (`**Platform:** iOS`). It reads only that
+  surface's actions and assertions. An iOS app script's are a page script's, less those
+  a device has no meaning for.
+- Every kind of app is named through the same options: `--base-url` for one already
+  running, and `--serve` for the command that brings one up. An iOS app is named by its
+  simulator URL, `ios-simulator://<device UDID>/<bundle id>`, and its start command says
+  the app is up by printing that URL.
 - Playwright drives Chromium for every capture, and a device a script names is one from
   Playwright's registry.
-- The engine draws its captions, cards, pointer and terminal as DOM in the page, and
-  ffmpeg draws no text. Text drawn in the page stays sharp at any scale.
+- Appium's XCUITest driver drives an iOS app, which a run takes as it stands: brought to
+  the front and never relaunched, so a start command's launch arguments hold.
+- The engine draws its captions, cards, pointer, terminal and an iOS device's screen in
+  the page, and ffmpeg draws no text. Text drawn in the page stays sharp at any scale.
 - The terminal is the engine's own: xterm.js in a page the engine writes, on bash in a
   pseudo-terminal.
 - Signing in to an app and seeding its data are the caller's, who hands a capture a
@@ -168,4 +188,8 @@ What a user runs, and the domains each draws on:
 
 ## Debt
 
-The repository does not diverge from the design above.
+- A signal that ends a capture, such as Ctrl-C, skips its teardown, against **A capture
+  ends what it started**: a dev server or an iOS app's start command keeps running, and
+  a device keeps the runner app, appearance and status bar the run gave it. A reader
+  stopping a capture by hand must put these back. ss-8luwt carries the teardown on a
+  signal.
