@@ -2,7 +2,8 @@
 // simulator nor Appium, as on CI's Linux runners. One HTTP server answers the WebDriver
 // commands the engine sends an iOS app, as Appium answers them, for a sprint board like
 // examples/sample-ios, and streams frames of the board's screen as WebDriverAgent does,
-// as MJPEG. It records each command it is sent.
+// as MJPEG. It records each command it is sent. A test can end the streams of frames, or
+// hold their frames back while the streams stay open.
 //
 // The board has a field, new-task, an Add button, add, a hint, empty-hint, shown only
 // while there is no task, a task element for each task, named task, whose label is its
@@ -31,6 +32,10 @@ export interface StandIn {
   board: Board;
   /** The screen, in points. */
   screen: { width: number; height: number };
+  /** End every stream of the screen's frames, as a connection that drops does, while the commands go on being answered. */
+  endFrames(): void;
+  /** Send no more frames, and leave every stream open, as WebDriverAgent does while it takes no screenshot. */
+  holdFrames(): void;
   close(): Promise<void>;
 }
 
@@ -145,7 +150,9 @@ export async function standInAppium(opts: StandInOptions): Promise<StandIn> {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
+  let held = false;
   const timer = setInterval(() => {
+    if (held) return;
     const jpeg = opts.frame(board);
     for (const res of streams) {
       res.write(`--BoundaryString\r\nContent-type: image/jpg\r\nContent-Length: ${jpeg.length}\r\n\r\n`);
@@ -160,6 +167,12 @@ export async function standInAppium(opts: StandInOptions): Promise<StandIn> {
     commands,
     board,
     screen: { width: 400, height: 800 },
+    endFrames() {
+      for (const res of streams) res.end();
+    },
+    holdFrames() {
+      held = true;
+    },
     async close() {
       clearInterval(timer);
       for (const s of sockets) s.destroy();

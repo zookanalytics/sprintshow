@@ -2,8 +2,9 @@
 // Appium and the app it drives (appium-stand-in.ts), so they need no simulator. They pin
 // what the step runner sends the app for each action, how each proof reads the app's
 // elements, that the page draws the frames of the device's screen, and settles on one
-// taken after a step, that a step's still is the device's own screenshot, and where a
-// tap's touch lands in the page. test/ios-live.test.ts drives a real app on a simulator.
+// taken after a step, that settling fails once the frames stop reaching the page, that a
+// step's still is the device's own screenshot, and where a tap's touch lands in the page.
+// test/ios-live.test.ts drives a real app on a simulator.
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,10 +36,10 @@ async function solid(color: string): Promise<Buffer> {
   }
 }
 
-/** The screen shows red while the board has no task, and green once it has one. */
-async function board(): Promise<{ appium: StandIn; conn: IosConnection }> {
+/** The screen shows red while the board has no task, and green once it has one, or what `withTask` gives in place of green. */
+async function board(withTask?: Buffer): Promise<{ appium: StandIn; conn: IosConnection }> {
   const [red, green] = await Promise.all([solid('#e00000'), solid('#00c000')]);
-  const appium = await standInAppium({ frame: (b: Board) => (b.tasks.length ? green : red), screenshot: PNG });
+  const appium = await standInAppium({ frame: (b: Board) => (b.tasks.length ? (withTask ?? green) : red), screenshot: PNG });
   const session = await AppiumSession.start(appium.url, {}, 5000);
   const udid = '265F099F-E558-4E32-82BE-F70A75EC0716';
   return {
@@ -137,6 +138,59 @@ test('a proof that the app does not bear fails, and a key an iOS app has none of
     assert.match(proof.reason, /_Prove:_ did not hold: `count task >= 1`/);
     assert.ok(!appium.commands.slice(at).some((c) => c.startsWith('POST /keys')));
     assert.ok(Date.now() - started >= 9000, 'the proof was polled for its time');
+    await surface.close();
+  } finally {
+    await page.close();
+    await appium.close();
+  }
+});
+
+const DEVICE = /Stand-in \(265F099F-E558-4E32-82BE-F70A75EC0716\)'s screen stopped reaching the page: /;
+
+test("once the screen's frames stop, the next settle fails, though the app goes on answering and the step's proof holds", { skip }, async () => {
+  const { appium, conn } = await board();
+  const page = await browser!.newPage({ viewport: VIEWPORT });
+  try {
+    const lines: string[] = [];
+    const surface = await showIosApp(page, conn, { title: 'x', log: (m) => lines.push(m) });
+    assert.equal(await screenCentre(page), 'red');
+    appium.endFrames();
+    const proof = await runStep(page, '', SCRIPT.steps[1], SCRIPT.steps.length, false, quiet);
+    assert.equal(proof.proved, true, 'the app took the task');
+    await assert.rejects(surface.settle(), new RegExp(DEVICE.source + 'the stream ended$'));
+    assert.equal(await screenCentre(page), 'red', 'the page still shows the board as it was before the task');
+    assert.match(lines.join('\n'), new RegExp(DEVICE.source + 'the stream ended'), 'the log says when the frames stopped');
+    await surface.close();
+  } finally {
+    await page.close();
+    await appium.close();
+  }
+});
+
+test('a stream of the screen that stays open but sends no frame fails the settle once the frame wait has passed', { skip }, async () => {
+  const { appium, conn } = await board();
+  const page = await browser!.newPage({ viewport: VIEWPORT });
+  try {
+    const surface = await showIosApp(page, conn, { title: 'x', log: quiet, frameWait: 1500 });
+    appium.holdFrames();
+    const started = Date.now();
+    await assert.rejects(surface.settle(), new RegExp(DEVICE.source + 'no frame taken after the step came within 1\\.5s$'));
+    assert.ok(Date.now() - started >= 1500, 'it waited the frame wait for a frame');
+    await surface.close();
+  } finally {
+    await page.close();
+    await appium.close();
+  }
+});
+
+test('a frame the page cannot draw stops the screen reaching the page, and the next settle fails', { skip }, async () => {
+  const { appium, conn } = await board(Buffer.from('not a JPEG'));
+  const page = await browser!.newPage({ viewport: VIEWPORT });
+  try {
+    const surface = await showIosApp(page, conn, { title: 'x', log: quiet });
+    await runStep(page, '', SCRIPT.steps[1], SCRIPT.steps.length, false, quiet);
+    await assert.rejects(surface.settle(), new RegExp(DEVICE.source + 'the page could not draw a frame: '));
+    assert.equal(await screenCentre(page), 'red');
     await surface.close();
   } finally {
     await page.close();

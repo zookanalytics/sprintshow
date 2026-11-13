@@ -14,7 +14,9 @@
 // every size whole in one frame.
 //
 // An iOS app is connected to before the recording starts (connectSurface), because a
-// recording films from the page's first frame and connecting takes seconds.
+// recording films from the page's first frame and connecting takes seconds. Its screen is
+// settled once each step is done, so the capture fails, instead of filming on, once the
+// frames of the screen stop reaching the page.
 //
 // Given a screenshot directory, it saves a PNG of the state each step leaves
 // (screenshot.ts) in the page it films. That page alone holds the app's state, since
@@ -35,7 +37,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from 'playwright';
 
-import { parseDemoScript, outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { parseDemoScript, outputSlug, surfaceOf, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
 import { requireFfmpeg, run, probeDuration, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
 import { installPointer, runStep, connectSurface, chromiumLaunchArgs, contextOptions, videoFrame, type Surface, type SurfaceConnection } from './browser.ts';
 import { showCaption, markFrame, removeMarker, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
@@ -304,9 +306,12 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
       const { proved, shownAt } = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
       segments.push({ narration: step.narration, wall: shownAt, card: false });
       if (!proved) failures++;
-      if (shots && surface.still) {
+      if (surfaceOf(demo) === 'ios') {
+        // The page shows an iOS app's screen from the frames its device streams. Settling
+        // films the step's end before the next step starts, and fails the capture once the
+        // frames have stopped, instead of filming a screen the app has moved past.
         await surface.settle();
-        await shots.take(page, surface, step);
+        if (shots) await shots.take(page, surface, step);
       } else if (shots) {
         stills.push(await screenshotStep(page, surface, shots, recording, step, log));
       }

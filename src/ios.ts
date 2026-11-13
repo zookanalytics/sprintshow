@@ -15,8 +15,11 @@
 // page (showIosApp): the device's screen, drawn from the frames WebDriverAgent streams of
 // it, on a backdrop above the caption band. So the videos film it as they film a page,
 // with the engine's captions and cards, and its pointer shows a touch where a step taps.
-// A step's PNG is the device's own screenshot instead, at the device's scale, with nothing
-// of the engine's on it (Surface.still).
+// A capture that makes a video settles the surface once each step is done, until a frame
+// taken after the step is drawn, and fails once the frames stop reaching the page, so its
+// video never shows a screen the app has moved past. A step's PNG is the device's own
+// screenshot instead, at the device's scale, with nothing of the engine's on it
+// (Surface.still).
 //
 // A step's actions go to the app through Appium, as gestures and keys, and its proof reads
 // the app's elements through Appium. A selector names an element by its accessibility
@@ -44,10 +47,13 @@ const IDLE_SESSION_S = 600;
 const STREAM = { mjpegServerFramerate: 25, mjpegScalingFactor: 50, mjpegServerScreenshotQuality: 75 };
 /** How long after a frame is taken it may reach the engine. A frame that reaches it later than this past a moment was taken after it. */
 const FRAME_LAG_MS = 120;
-/** How long `settle` waits for a frame taken after it began. */
-const SETTLE_CAP_MS = 3000;
-/** How long the page waits for the first frame of the screen. */
-const FIRST_FRAME_MS = 30_000;
+/**
+ * How long the page waits for a frame of the screen: the first, or one taken after
+ * `settle` began. WebDriverAgent sends a frame at every tick, and backs off for up to ten
+ * seconds after a screenshot it fails to take, so a screen with no frame for this long is
+ * lost.
+ */
+const FRAME_WAIT_MS = 30_000;
 /** The stage the screen is fitted to: the viewport less a margin all round and the caption bar's band at the bottom, as the terminal's. */
 const STAGE = { margin: 24, band: 72 };
 /** How often an action polls for its element, and a wait for its condition. */
@@ -244,33 +250,46 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * WebDriverAgent streams of the screen as they arrive, the newest each time the page is
  * ready for one. Resolves once the page shows the first frame. The surface's `still` saves
  * the device's own screenshot. Closing it stops the frames; the connection stays open.
+ *
+ * The screen stops reaching the page when the stream ends or the page cannot draw a
+ * frame, and `settle` throws from then on, as it does when no frame taken after it began
+ * reaches the page within `frameWait` ms (default FRAME_WAIT_MS). So a capture that
+ * settles the surface fails, rather than saving a screen the app has moved past.
  */
-export async function showIosApp(page: Page, conn: IosConnection, o: { title: string; log: (m: string) => void }): Promise<Surface> {
+export async function showIosApp(page: Page, conn: IosConnection, o: { title: string; log: (m: string) => void; frameWait?: number }): Promise<Surface> {
+  const frameWait = o.frameWait ?? FRAME_WAIT_MS;
   await page.setContent(deviceDocument(o.title, conn.screen));
   await page.evaluate(installDevice);
 
   let latest: { jpeg: Buffer; at: number } | null = null;
   let shownAt = 0;
   let pumping: Promise<void> | null = null;
-  let detached = false;
-  let ended: Error | null = null;
+  let closed = false;
+  /** Why the screen stopped reaching the page, once it has. */
+  let lost: string | null = null;
+  const lose = (why: string): void => {
+    if (closed || lost) return;
+    lost = why;
+    o.log(`ios: ${conn.device}'s screen stopped reaching the page: ${why}`);
+  };
   const pump = (): void => {
-    if (pumping || detached) return;
+    if (pumping || closed || lost) return;
     pumping = (async () => {
-      while (latest && !detached) {
+      while (latest && !closed && !lost) {
         const frame = latest;
         latest = null;
         await page.evaluate((b64) => (window as unknown as DeviceWindow).__ss_device.draw(b64), frame.jpeg.toString('base64'));
         shownAt = frame.at;
       }
     })()
-      .catch(() => {
-        // The page closed or moved on, so nothing shows the frames any more.
-        detached = true;
+      .catch((e: Error) => {
+        // A page that has closed shows nothing any more, which is no loss of the screen.
+        if (page.isClosed()) closed = true;
+        else lose(`the page could not draw a frame: ${e.message.split('\n')[0]}`);
       })
       .finally(() => {
         pumping = null;
-        if (latest && !detached) pump();
+        if (latest) pump();
       });
   };
   const stream: FrameStream = readMjpeg(
@@ -279,24 +298,21 @@ export async function showIosApp(page: Page, conn: IosConnection, o: { title: st
       latest = { jpeg, at: Date.now() };
       pump();
     },
-    (e) => {
-      ended = e ?? new Error('the stream ended');
-      if (!detached) o.log(`ios: the screen's frames stopped: ${ended.message}`);
-    },
+    (e) => lose(e?.message ?? 'the stream ended'),
   );
   shown.set(page, { conn });
 
   const close = async (): Promise<void> => {
-    detached = true;
+    closed = true;
     stream.close();
     shown.delete(page);
     await pumping;
   };
-  const deadline = Date.now() + FIRST_FRAME_MS;
-  while (shownAt === 0 && !ended && Date.now() < deadline) await sleep(25);
+  const deadline = Date.now() + frameWait;
+  while (shownAt === 0 && !lost && Date.now() < deadline) await sleep(25);
   if (shownAt === 0) {
     await close();
-    throw new Error(`ios: no frame of ${conn.device}'s screen reached the page${ended ? `: ${(ended as Error).message}` : ''}`);
+    throw new Error(`ios: no frame of ${conn.device}'s screen reached the page${lost ? `: ${lost}` : ` within ${frameWait / 1000}s`}`);
   }
 
   return {
@@ -305,8 +321,10 @@ export async function showIosApp(page: Page, conn: IosConnection, o: { title: st
       // next frame taken shows where they end.
       await conn.session.find('__sprintshow_settle__').catch(() => null);
       const since = Date.now() + FRAME_LAG_MS;
-      const cap = Date.now() + SETTLE_CAP_MS;
-      while (!detached && !ended && shownAt < since && Date.now() < cap) await sleep(20);
+      const cap = Date.now() + frameWait;
+      while (!closed && !lost && shownAt < since && Date.now() < cap) await sleep(20);
+      if (closed || shownAt >= since) return;
+      throw new Error(`ios: ${conn.device}'s screen stopped reaching the page: ${lost ?? `no frame taken after the step came within ${frameWait / 1000}s`}`);
     },
     async still(file: string) {
       writeFileSync(file, await conn.session.screenshot());
