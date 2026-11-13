@@ -63,7 +63,6 @@ leaves an MP4, PNGs or both at the paths the caller names, for the caller to pub
 | ffmpeg | Encodes, mixes and muxes every video. |
 | OpenAI's speech API | Voices each caption when `OPENAI_API_KEY` is set. |
 | Vercel's Deployment Protection | Stands in front of a protected deployment, and lets the engine through with the key in `VERCEL_AUTOMATION_BYPASS_SECRET`. |
-| git and git-LFS | Tell the linter whether a committed MP4 would be stored in LFS. |
 | An agent that drives its own browser, such as through `@playwright/mcp` | Hands its frames and manifest to `sprintshow assemble`. sprintshow does not run it. |
 
 ## Domains

@@ -445,11 +445,9 @@ sprintshow assemble .captures/<run> -o out.mp4
 
 See [`examples/agent-mcp`](examples/agent-mcp) for the MCP wiring and the manifest shape.
 
-## Committing demos
+## The sample video
 
-Assembled MP4s are stored in **git-LFS** (`.gitattributes` tracks `*.mp4`): a small pointer
-goes in git history, the bytes go to LFS storage. Run `git lfs install` once per machine
-before committing one. The linter flags a missing LFS filter or a machine without git-lfs.
+`demos/sample.mp4` is in git-LFS, so a clone without git-lfs has a pointer file in its place.
 
 ## License
 
