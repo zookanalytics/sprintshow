@@ -169,6 +169,9 @@ export async function standInAppium(opts: StandInOptions): Promise<StandIn> {
     screen: { width: 400, height: 800 },
     endFrames() {
       for (const res of streams) res.end();
+      // An ended response leaves `streams` only once it closes, and a frame written to it
+      // before then throws.
+      streams.clear();
     },
     holdFrames() {
       held = true;
