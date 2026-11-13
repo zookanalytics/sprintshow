@@ -268,18 +268,22 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
   const browser = opts.browser ?? (await chromium.launch({ headless: !opts.headed, args: chromiumLaunchArgs() }));
   let connection: SurfaceConnection | null = null;
   let context: BrowserContext | null = null;
+  let page: Page;
+  let recording: RecordingFrames;
+  let openedAt: number;
   try {
     connection = await connectSurface(demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, log });
     context = await browser.newContext({ ...device, recordVideo: { dir: capturesDir, size: frameSize } });
+    page = await context.newPage();
+    recording = await watchRecording(page);
+    openedAt = Date.now();
+    await installPointer(page);
   } catch (e) {
+    await context?.close().catch(() => {});
     await connection?.close();
     if (launched) await browser.close();
     throw e;
   }
-  const page = await context.newPage();
-  const recording = await watchRecording(page);
-  const openedAt = Date.now();
-  await installPointer(page);
 
   // Each segment, with a wall-clock time: for a step, when the browser first showed its
   // caption; for the cover and the closing card, when the page added the card; for a tail
