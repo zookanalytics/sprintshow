@@ -214,7 +214,9 @@ const OUTPUT_LINES = 5;
  * command brings up and names by printing its simulator URL on a line of its standard
  * output. Throws when neither is given, when the URL is not a simulator URL, when the
  * command exits or runs out of time before it prints one, or when `serveDir` or `port`
- * is given.
+ * is given. `readyTimeout` is how long the command has to print the URL
+ * (IOS_READY_TIMEOUT_MS by default), and `stopTimeout` how long its processes have to
+ * exit once told to stop before they are killed (IOS_STOP_TIMEOUT_MS by default).
  */
 export async function ensureIosApp(opts: ServeOptions & { readyTimeout?: number; stopTimeout?: number }): Promise<ServerHandle> {
   const log = opts.log ?? ((m: string) => console.log(m));
