@@ -35,7 +35,11 @@ commands.
 ### The runner app is provisioned, with a bundle identifier of its own
 
 WebDriverAgent's runner app is built once with `xcodebuild build-for-testing` for any
-simulator, by `npm run provision:webdriveragent`. It goes into
+simulator, by `sprintshow provision webdriveragent`. A project that installed sprintshow
+runs it with npx, and a checkout of sprintshow runs it with
+`npm run provision:webdriveragent`. It is a command of the CLI because the published
+package holds only the build, so a script that runs the source would fail wherever
+sprintshow is installed. It goes into
 `~/Library/Caches/sprintshow/webdriveragent/<WebDriverAgent version>-xcode-<Xcode build>`,
 and only its products are kept. A run installs that build through the driver's
 preinstalled mode (`usePreinstalledWDA` with `prebuiltWDAPath`), which launches the
@@ -62,7 +66,11 @@ on which device and with which bundle, and any command can print it. sprintshow 
 standard output, not standard error, and reads only whole lines, so a URL cut between two
 writes is never taken for a shorter one. The command has ten minutes to print it, because
 building an app and booting a device take minutes. On SIGTERM it stops the app and deletes
-its device, which sprintshow waits a minute for. `--port` and `--serve-dir` are refused.
+its device. sprintshow sends SIGTERM to the command's whole process group, waits until
+every process in the group has exited, and kills what is left of it after a minute. It
+waits for the group, not the command alone, because a command can leave the process that
+holds the app running in the background and exit. A command that exits before it prints
+the URL has its group stopped the same way. `--port` and `--serve-dir` are refused.
 
 ### A run takes the app as it stands
 
@@ -107,6 +115,16 @@ A step's PNG is the device's own screenshot, at the device's scale, which change
 in the filmed page, so the walkthrough cuts nothing for it. `settle` sends an element
 query, which WebDriverAgent answers once the app is idle, and then waits for a frame that
 reached the engine after it.
+
+`settle` throws when no such frame comes within 30 s, or once the stream has ended or the
+page could not draw a frame. A capture then fails, rather than filming or saving a screen
+the app has moved past while its proofs, which read the app through Appium, still hold.
+WebDriverAgent sends a frame at every tick, and backs off at most 10 s after a screenshot
+it fails to take, so a healthy stream comes well within the wait. Proof mode settles the
+surface after each step, and the walkthrough settles an iOS app after each step, with or
+without screenshots. Reconnecting to the stream once it ends was weighed. It would still
+need the failure for a stream that does not come back, so a run fails at the first loss
+instead, and can be run again.
 
 A walkthrough connects to the app before it starts recording. A recording films a page
 from its first frame, blank or not: a probe that waited 5 s before painting a page made a
