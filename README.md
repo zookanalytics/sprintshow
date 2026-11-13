@@ -385,8 +385,9 @@ script.
 **Assertions** read the app's elements through Appium: `visible <sel>` (the first element
 the selector names is displayed), `hidden <sel>` (none is), `count <sel> <op> <n>`, and
 `text <sel> ~ <matcher>`, which holds when the element's label or its value matches. A
-button's label is its title and its value its state, and a text field's value is what it
-holds. `focused` and `eval` are a page's.
+button's label is its title, and its value is any state the app gives it, as the sample's
+tasks give `done` or `to do`. A text field's value is what it holds. `focused` and `eval`
+are a page's.
 
 **Captures.** The videos show the device's screen, drawn from the frames Appium streams of
 it, on a dark backdrop above the caption bar, and a touch glides to where each step taps.
