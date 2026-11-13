@@ -61,7 +61,7 @@
     "lint:demo": "node src/cli.ts lint demos/sample.md && node src/cli.ts lint demos/terminal.md && node src/cli.ts lint demos/keyboard.md && node src/cli.ts lint demos/ios.md",
     "provision:ffmpeg": "node node_modules/ffmpeg-static/install.js",
     "provision:browser": "playwright install chromium-headless-shell",
-    "provision:webdriveragent": "node src/webdriveragent.ts",
+    "provision:webdriveragent": "node src/cli.ts provision webdriveragent",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

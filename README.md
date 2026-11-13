@@ -75,8 +75,9 @@ Prerequisites, fetched on demand rather than assumed:
   allow.
 - **macOS with Xcode and an iOS Simulator runtime**, for an iOS app demo. Appium and its
   XCUITest driver come with the package. The runner app the driver installs on the device,
-  WebDriverAgent, is built once with the host's Xcode: `npm run provision:webdriveragent`.
-  A run that finds it missing prints this command.
+  WebDriverAgent, is built once with the host's Xcode:
+  `npx sprintshow provision webdriveragent`. A run that finds it missing prints this
+  command.
 
 ## Run a demo
 

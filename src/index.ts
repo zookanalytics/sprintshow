@@ -1,8 +1,9 @@
 // Public library API for @zookanalytics/sprintshow.
 //
-// The CLI (`sprintshow run|screenshot|assemble|lint`) is one consumer of this surface; the
-// same functions are importable for the seed-test bootstrap (hand `captureProof` or
-// `captureScreenshot` a ready page) and for embedding the engine in another tool.
+// The CLI (`sprintshow run|screenshot|assemble|lint|provision`) is one consumer of this
+// surface; the same functions are importable for the seed-test bootstrap (hand
+// `captureProof` or `captureScreenshot` a ready page) and for embedding the engine in
+// another tool.
 
 // The demo-script grammar: parser, types, and slug helpers.
 export * from './demo-script.ts';
@@ -24,6 +25,10 @@ export { lintDemo, lintCli, looksLikeDirective, looksLikeAssertion, outputPathFo
 // The server seam, and the app an iOS app script drives.
 export { ensureServer, ensureIosApp, DEFAULT_PORT, type ServeOptions, type ServerHandle } from './server.ts';
 export { parseSimulatorUrl, simulatorUrl, SIMULATOR_URL_FORM, type SimulatorApp } from './simulator.ts';
+
+// The runner app Appium installs on an iOS app's device, which
+// `sprintshow provision webdriveragent` builds.
+export { provisionRunnerApp } from './webdriveragent.ts';
 
 // Browser primitives for the seed-test bootstrap and custom drivers. A custom driver that
 // runs its steps through `runStep` checks each proof as the built-in captures do, and one

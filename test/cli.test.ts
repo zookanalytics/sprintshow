@@ -1,7 +1,7 @@
 // Tests for what the two capture commands share in the CLI (src/cli.ts): `run` and
 // `screenshot` read their server flags through one mapping, and both exit 0 when the
 // output is saved and every step's proof held, 3 when it is saved but a proof failed, and
-// 1 when nothing is saved.
+// 1 when nothing is saved. Also, what `provision` takes.
 //
 // The tests that save an output need a headless Chromium and skip without one (see
 // browser-fixture.ts). `run` captures in proof mode over a stand-in ffmpeg, so no host
@@ -84,5 +84,14 @@ test('run and screenshot both refuse a --port that is not a whole number, before
     assert.equal(existsSync(path.join(dir, 'out.png')), false);
   } finally {
     cleanup();
+  }
+});
+
+test('provision builds what it names, webdriveragent, and refuses anything else before it builds', async () => {
+  for (const args of [[], ['ffmpeg'], ['webdriveragent', 'ffmpeg'], ['webdriveragent', '--headed']]) {
+    const res = await runCli(['provision', ...args]);
+    assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
+    assert.match(res.stderr, /^provision: name what to build \(webdriveragent\), and no option/, args.join(' '));
+    assert.doesNotMatch(res.stdout, /webdriveragent: /, 'nothing was built or looked up');
   }
 });
