@@ -17,10 +17,11 @@
 // (screenshot.ts) in the page it films. That page alone holds the app's state, since
 // another page would have to drive the app again, so a still that leaves out the engine's
 // chrome is a frame the filmed page draws, and the recording can show it. The video cuts
-// the stretch in which each still is taken, reaching a little before the still and a
-// little past the first frame of the recording that shows the walkthrough again
-// (stillCuts). The page holds one state on both sides of a cut, so the video runs on as
-// if no still were taken, and each mark the narration is laid on moves up with it.
+// the frames of the stretch in which each still is taken, reaching a little before the
+// still and a little past the first frame of the recording that shows the walkthrough
+// again (stillCuts). The page holds one state on both sides of a cut, so the video runs
+// on as if no still were taken, and each mark the narration is laid on moves up by the
+// frames the cuts before it drop.
 
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -99,10 +100,16 @@ export interface Still {
   to: number;
 }
 
-/** A stretch cut from a recording, in seconds from its start. */
+/**
+ * How long each frame of a recording lasts, in ms. Playwright films a page at 25 frames a
+ * second, so the recording's frame `n` lies `n * FRAME_MS` from its start.
+ */
+const FRAME_MS = 40;
+
+/** The frames a video cuts from its recording, from `first` to `last`, numbered from the recording's first frame, 0. */
 export interface Cut {
-  start: number;
-  end: number;
+  first: number;
+  last: number;
 }
 
 /**
@@ -119,29 +126,29 @@ const CUT_REACH_MS = 200;
  * the walkthrough again after it: longer than a cut reaches, by two frames, so the frames
  * on both sides of a cut show the page in one state.
  */
-const QUIET_MS = CUT_REACH_MS + 80;
+const QUIET_MS = CUT_REACH_MS + 2 * FRAME_MS;
 
 /** How long a screenshot waits for a frame that shows the walkthrough again to reach the recording, and how many it draws. */
 const RESHOW_WAIT_MS = 250;
 const RESHOW_TRIES = 8;
 
 /**
- * The stretches cut from a recording that starts at `start`, in wall-clock ms, for
- * `stills`: each still's stretch and CUT_REACH_MS on either side of it, in seconds from the
- * recording's start, rounded to the ms.
+ * The cuts for `stills` from a recording that starts at `start`, in wall-clock ms: each
+ * takes in every frame of the recording that lies within CUT_REACH_MS of its still's
+ * stretch.
  */
 export function stillCuts(stills: Still[], start: number): Cut[] {
-  const at = (wall: number): number => Math.round(wall - start) / 1000;
-  return stills.map((s) => ({ start: at(s.from - CUT_REACH_MS), end: at(s.to + CUT_REACH_MS) }));
+  const frame = (wall: number): number => (wall - start) / FRAME_MS;
+  return stills.map((s) => ({ first: Math.ceil(frame(s.from - CUT_REACH_MS)), last: Math.floor(frame(s.to + CUT_REACH_MS)) }));
 }
 
 /**
  * Where `at`, in ms from a recording's start, falls in its video once `cuts` are taken out:
- * earlier by the length of each cut before it, and at the start of a cut it falls in.
+ * earlier by a frame for each frame they drop that starts before `at`.
  */
 export function afterCuts(at: number, cuts: Cut[]): number {
-  // A cut's bounds are whole ms, which the seconds it is given in carry exactly once rounded.
-  return cuts.reduce((moved, c) => moved - Math.max(0, Math.min(at, Math.round(c.end * 1000)) - Math.round(c.start * 1000)), at);
+  const before = Math.ceil(at / FRAME_MS);
+  return at - FRAME_MS * cuts.reduce((dropped, c) => dropped + Math.max(0, Math.min(c.last + 1, before) - c.first), 0);
 }
 
 /** The frames of a page's recording, each by the wall-clock time in ms the browser drew it at. */
@@ -310,22 +317,22 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
   // the first frame the browser drew after the page added it. That is the card's frame
   // unless the page was drawing frames of its own then. The page, the browser and the
   // engine all tell the host's wall-clock time, so every time is read against the
-  // recording's start, and moved up past the cuts before it.
+  // recording's start, and moved up past the frames the cuts before it drop.
   const marks = segments.map((s) => ({ narration: s.narration, at: afterCuts(((s.card ? recording.firstFrom(s.wall) : null) ?? s.wall) - start, cuts) }));
 
   const tmp = mkdtempSync(path.join(tmpdir(), 'sprintshow-wt-'));
   try {
     const silent = path.join(tmp, 'silent.mp4');
     log(`walkthrough: transcoding recording → ${path.basename(opts.outputPath)}`);
-    // The recording runs at a constant frame rate. The filter drops each cut's frames, and
-    // the frames after a cut are retimed to follow the frame before it.
-    const cut = cuts.length ? `select='not(${cuts.map((c) => `between(t,${c.start},${c.end})`).join('+')})',setpts=N/FRAME_RATE/TB,` : '';
+    // The filter drops each cut's frames by their number, and retimes the frames after a
+    // cut to follow the frame before it.
+    const cut = cuts.length ? `select='not(${cuts.map((c) => `between(n,${c.first},${c.last})`).join('+')})',setpts=N/FRAME_RATE/TB,` : '';
     run(['-y', '-i', webmPath, '-vf', `${cut}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p`, '-c:v', 'libx264', '-crf', '22', '-preset', 'slow', '-an', silent]);
 
     // The transcode is the picture the MP4 shows, so its length ends the last slot. ffmpeg
-    // prints the length of a file it wrote, and the time the flush ended stands in only
-    // when the probe reads none.
-    const endMs = Math.round(probeDuration(silent) * 1000) || flushedAt - start;
+    // prints the length of a file it wrote, and the time the flush ended, moved up past
+    // the frames the cuts drop, stands in only when the probe reads none.
+    const endMs = Math.round(probeDuration(silent) * 1000) || afterCuts(flushedAt - start, cuts);
     const slots = narrationSlots(marks, endMs);
 
     let audioPath: string | null = null;

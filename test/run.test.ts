@@ -7,17 +7,18 @@
 // the app alone: the screenshots a run with a video takes match, pixel for pixel, those a
 // run with no video takes, in whose page the engine draws nothing, and the last matches
 // the PNG `sprintshow screenshot` saves. A still waits on the page's own animations and
-// not on the engine's. A walkthrough's video shows no trace of taking them: it is shorter
-// than its recording by the stretches it cuts for them, every frame from the first step's
+// not on the engine's. A walkthrough's video shows no trace of taking them: it holds the
+// frames of its recording less those it cuts for them, every frame from the first step's
 // caption to the closing card shows the caption, no frame shows a terminal's window laid
 // out as a still, a step that ends at once shows its caption before the cut for its
 // screenshot, a step that moves to another page, leaving its caption behind, gets no
 // caption back, and no frame of a page whose stylesheet decorates every element shows
-// anything at its top-left corner, where the engine's frame marker sits. A cut reaches
-// past each end of its still, and a moment after it moves up by its length. The stretch
-// a still can show ends at a frame drawn after the still that the recording has, and
-// frames are drawn until one reaches it, on a page whose Content Security Policy refuses
-// an image from a data: URL as on any other, and on a page that cannot take the marker.
+// anything at its top-left corner, where the engine's frame marker sits. A cut takes in
+// every frame within reach of its still, and a moment after it moves up by the frames it
+// drops. The stretch a still can show ends at a frame drawn after the still that the
+// recording has, and frames are drawn until one reaches it, on a page whose Content
+// Security Policy refuses an image from a data: URL as on any other, and on a page that
+// cannot take the marker.
 // A run with no video needs a screenshot directory and refuses the video's options, and a
 // directory that holds files, or would also hold the video or the run's working
 // directory, is refused before anything is served or made. A run whose proof fails saves
@@ -38,7 +39,7 @@ import { parseDemoScript, type DemoStep } from '../src/demo-script.ts';
 import { runDemo } from '../src/run.ts';
 import { afterCuts, captureWalkthrough, screenshotStep, stillCuts, watchRecording, type Cut, type RecordingFrames } from '../src/walkthrough.ts';
 import { captureScreenshots, stepFileName, stepScreenshots } from '../src/screenshot.ts';
-import { ffmpegBin, probeDuration } from '../src/ffmpeg.ts';
+import { ffmpegBin } from '../src/ffmpeg.ts';
 import { markFrame } from '../src/overlay.ts';
 import { VIEWPORT } from '../src/browser.ts';
 import { launchBrowser, scratchDir, serveSite, writeFiles, runCli, stubFfmpeg, pngSize, pixelsApart, alphaAt, patchLuma, firstFrame, REPO } from './browser-fixture.ts';
@@ -63,7 +64,7 @@ test("a step's screenshot is named for its number, padded so the names sort in s
   assert.equal(stepFileName(step(3, '— · —'), 3), '03-step.png');
 });
 
-test('a cut reaches 200 ms past each end of its still, and a moment after it moves up by its length', () => {
+test('a cut takes in every 40 ms frame within 200 ms of its still, and a moment after it moves up by the frames it drops', () => {
   const cuts = stillCuts(
     [
       { from: 11_000, to: 11_070 },
@@ -71,15 +72,16 @@ test('a cut reaches 200 ms past each end of its still, and a moment after it mov
     ],
     1_000,
   );
+  // Each reaches 200 ms past its still: from 9.8 s to 10.27 s, and from 14.3004 s to 14.82 s, of a recording whose frames lie 40 ms apart.
   assert.deepEqual(cuts, [
-    { start: 9.8, end: 10.27 },
-    { start: 14.3, end: 14.82 },
+    { first: 245, last: 256 },
+    { first: 358, last: 370 },
   ]);
   assert.deepEqual(stillCuts([], 1_000), []);
-  // Before the first cut, inside it, between the two, and past both.
+  // Before the first cut, on its first frame, inside it, on the frame after it, between the two, and past both.
   assert.deepEqual(
-    [5_000, 10_000, 12_000, 20_000].map((at) => afterCuts(at, cuts)),
-    [5_000, 9_800, 11_530, 19_010],
+    [5_000, 9_800, 10_010, 10_280, 12_000, 20_000].map((at) => afterCuts(at, cuts)),
+    [5_000, 9_800, 9_770, 9_800, 11_520, 19_000],
   );
 });
 
@@ -305,12 +307,12 @@ describe('a walkthrough takes its screenshots with no trace in its video', { con
         const manifest = JSON.parse(readFileSync(path.join(capturesDir, 'manifest.json'), 'utf8')) as { video: string; cuts: Cut[] };
         const { cuts } = manifest;
         assert.equal(cuts.length, 2, 'the video cuts a stretch for each screenshot');
-        assert.ok(caption < cuts[0].start, `the first step's caption shows at ${caption}s, before the cut for its screenshot at ${cuts[0].start}s`);
-        // Each cut drops whole frames, so it can run a frame longer or shorter than its stretch.
-        const cut = Math.round(cuts.reduce((sum, c) => sum + c.end - c.start, 0) * 1000) / 1000;
-        const recorded = probeDuration(path.join(capturesDir, manifest.video));
-        const shown = probeDuration(video);
-        assert.ok(Math.abs(recorded - cut - shown) < 0.15, `the video runs ${shown}s, its recording ${recorded}s less the ${cut}s it cuts, with no frame held in their place`);
+        // The recording's frames lie 40 ms apart from its start, and the video's match them up to the first cut.
+        const cutAt = cuts[0].first * 0.04;
+        assert.ok(caption < cutAt, `the first step's caption shows at ${caption}s, before the cut for its screenshot at ${cutAt}s`);
+        const recorded = patchLuma(path.join(capturesDir, manifest.video), 320, 300).length;
+        const dropped = cuts.reduce((n, c) => n + c.last - c.first + 1, 0);
+        assert.equal(frames.length, recorded - dropped, `the video holds ${frames.length} frames: its recording's ${recorded} less the ${dropped} its cuts drop, with no frame in their place`);
       });
     } finally {
       await site.close();
