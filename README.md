@@ -127,13 +127,18 @@ for up to a second. It shows the app alone, as `sprintshow screenshot` saves it 
 default: a page script's viewport at the device's scale factor, or a terminal script's
 window with its corners transparent, with no caption, card or pointer drawn on it. A
 walkthrough takes each in the page it films, and cuts the stretch in which it does from
-its video, so the video shows no trace of it. There are two exceptions. An app that moves
-on its own while a PNG is taken, such as with an animation that runs longer than a second
-or a video playing, jumps ahead where the stretch is cut. A page whose stylesheet gives
-elements of every tag a `::before`, `::after` or `::first-line` box can show one at its
-top-left corner just after a PNG is taken. A step whose proof fails still gets its PNG,
-which shows what failed. A run that saves no output keeps none of them, and removes the
-directory if it made it for them.
+its video, so the video shows no trace of it, except in these cases:
+
+- An app that moves on its own while a PNG is taken, such as with an animation that runs
+  longer than a second or a video playing, jumps ahead where the stretch is cut.
+- A page whose stylesheet gives elements of every tag a `::before`, `::after` or
+  `::first-line` box can show one at its top-left corner just after a PNG is taken.
+- A page whose stylesheet forces an opacity transition onto the engine's caption and
+  pointer with `!important`, as `* { transition: all 1s !important }` does, shows them
+  fading back in just after each PNG is taken.
+
+A step whose proof fails still gets its PNG, which shows what failed. A run that saves no
+output keeps none of them, and removes the directory if it made it for them.
 
 sprintshow compares no screenshot with another: keeping reference images and comparing a
 run's screenshots with them is the consumer's work.
