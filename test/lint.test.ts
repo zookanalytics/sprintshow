@@ -353,3 +353,39 @@ test('a terminal script that names a device is warned that its captures ignore i
     { severity: 'warn', step: null, message: "**Device:** is ignored — a terminal script is filmed in the engine's own frame, and its size is its **Terminal:** columns and rows." },
   ]);
 });
+
+test("an iOS app script: a page directive or assertion it does not read is named as a page's, a terminal's as a terminal's, and its **Start:** and **Device:** are ignored", () => {
+  const findings = messagesFor(`# Demo: X
+
+**Platform:** iOS
+**Start:** \`/\`
+**Device:** iPhone 15
+
+## Steps
+
+1. **Page directives an app does not take**
+   \`click add\`
+   \`goto /board\`
+   _Prove:_ the title reads — \`eval document.title\`
+
+2. **A terminal's**
+   \`run ls\`
+   _Prove:_ the shell exited — \`exit == 0\`
+`);
+  const step = (n: number): string[] => findings.filter((f) => f.step === n).map((f) => f.message);
+  assert.ok(step(1).some((m) => /`goto \/board` is a page directive in an iOS app script — it is IGNORED at capture time \(verbs: wait, waitFor, waitForText, click, type, scroll, press\)/.test(m)));
+  assert.ok(step(1).some((m) => /carries `eval document.title`, a page assertion in an iOS app script — the step is NOT checked. Assertions are visible\/hidden\/count\/text/.test(m)));
+  assert.ok(!step(1).some((m) => /`click add`/.test(m)), 'click is an action of an iOS app script');
+  assert.ok(step(2).some((m) => /`run ls` is a terminal directive in an iOS app script/.test(m)));
+  assert.ok(step(2).some((m) => /carries `exit == 0`, a terminal assertion in an iOS app script/.test(m)));
+  const script = findings.filter((f) => f.step === null).map((f) => f.message);
+  assert.ok(script.some((m) => /\*\*Start:\*\* `\/` is ignored — an iOS app script drives the app its caller names/.test(m)));
+  assert.ok(script.some((m) => /\*\*Device:\*\* is ignored — an iOS app script runs on the simulator its caller names/.test(m)));
+  assert.ok(!script.some((m) => /not a device Playwright describes/.test(m)), "an iOS app script's device is not looked up");
+});
+
+test('an iOS app script whose steps perform no action is warned that it shows the app as it was given', () => {
+  const findings = messagesFor(`# Demo: X\n\n**Platform:** iOS\n\n## Steps\n\n1. **The board shows**\n   _Prove:_ the board — \`visible board\`\n`);
+  assert.ok(findings.some((f) => f.step === null && /no step performs an action — the capture shows the app as it was given/.test(f.message)));
+  assert.ok(!findings.some((f) => /prose only/.test(f.message)));
+});

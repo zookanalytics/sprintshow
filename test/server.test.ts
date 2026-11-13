@@ -1,19 +1,23 @@
 // Tests for the server seam (src/server.ts): the built-in static server behind
-// `--serve-dir`.
+// `--serve-dir`, and how an iOS app script's app is named or brought up.
 //
 // With no port named it listens on one the system assigns, so two captures on one host
 // each get a server of their own. A named port that is taken fails the start with an
 // error the caller can report, and a port no server can listen on is refused before
 // anything is served or spawned.
+//
+// An iOS app's `--serve` command is a stand-in here, a node script that prints what a
+// start command prints: the app's simulator URL on a line of its standard output once the
+// app is up. test/ios-live.test.ts runs the sample's real one.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { ensureServer } from '../src/server.ts';
+import { ensureServer, ensureIosApp } from '../src/server.ts';
 
 const quiet = (): void => {};
 
@@ -86,5 +90,87 @@ test('serve-dir on a named port that is taken rejects the start', async () => {
     } finally {
       await new Promise<void>((resolve) => blocker.close(() => resolve()));
     }
+  });
+});
+
+const UDID = '265F099F-E558-4E32-82BE-F70A75EC0716';
+const APP_URL = `ios-simulator://${UDID}/com.example.Board`;
+
+/** A stand-in start command: it records what its environment holds and that it was stopped, prints its progress, and then the app's URL unless told to fail or stay silent. */
+const STAND_IN = `import { writeFileSync } from 'node:fs';
+const [record, mode] = process.argv.slice(2);
+writeFileSync(record + '.env', JSON.stringify({ bypass: 'VERCEL_AUTOMATION_BYPASS_SECRET' in process.env, speech: 'OPENAI_API_KEY' in process.env, path: Boolean(process.env.PATH) }));
+process.on('SIGTERM', () => { writeFileSync(record + '.stopped', ''); process.exit(0); });
+console.error('building the app');
+console.log('booting a device; the URL comes once the app is up');
+if (mode === 'fail') { console.error('xcodebuild exited 65'); process.exit(65); }
+if (mode === 'ready') setTimeout(() => console.log('ready: ${APP_URL}'), 300);
+setInterval(() => {}, 1 << 30);
+`;
+
+/** Run `fn` with the stand-in start command written to a scratch directory, and the path its records go to. */
+async function withStandIn(fn: (dir: string, record: string) => Promise<void>): Promise<void> {
+  const dir = mkdtempSync(path.join(tmpdir(), 'sprintshow-test-'));
+  writeFileSync(path.join(dir, 'start.mjs'), STAND_IN);
+  try {
+    await fn(dir, path.join(dir, 'record'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Resolve once `file` exists, or fail after `ms`. */
+async function appears(file: string, ms = 10000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!existsSync(file)) {
+    if (Date.now() > deadline) assert.fail(`${file} did not appear within ${ms / 1000}s`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+test("an iOS app already running is named by its simulator URL as --base-url, and nothing is started or stopped", async () => {
+  const app = await ensureIosApp({ baseUrl: APP_URL.replace(UDID, UDID.toLowerCase()) + '/', log: quiet });
+  assert.equal(app.baseUrl, APP_URL);
+  await app.stop();
+  await assert.rejects(ensureIosApp({ baseUrl: 'http://localhost:3000', log: quiet }), /an iOS app script takes its app's simulator URL, ios-simulator:\/\/<device UDID>\/<bundle id>, as --base-url \(got "http:\/\/localhost:3000"\)/);
+  await assert.rejects(ensureIosApp({ log: quiet }), /no app: pass --base-url ios-simulator:\/\/<device UDID>\/<bundle id>, or --serve "<command>"/);
+});
+
+test('an iOS app takes no --port and no --serve-dir, and a page script takes no simulator URL', async () => {
+  await assert.rejects(ensureIosApp({ serve: 'true', port: 3000, log: quiet }), /an iOS app script takes no --port/);
+  await assert.rejects(ensureIosApp({ serveDir: '.', log: quiet }), /an iOS app is not served from a directory/);
+  await assert.rejects(ensureServer({ baseUrl: APP_URL, log: quiet }), /names an iOS app on a simulator, which a script that declares \*\*Platform:\*\* iOS drives/);
+});
+
+test("an iOS app's --serve command is ready once it prints the app's simulator URL, gets no key the engine holds, and is stopped with SIGTERM", async () => {
+  await withStandIn(async (dir, record) => {
+    const saved = { bypass: process.env.VERCEL_AUTOMATION_BYPASS_SECRET, speech: process.env.OPENAI_API_KEY };
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET = 'stand-in-bypass';
+    process.env.OPENAI_API_KEY = 'stand-in-speech';
+    let app;
+    try {
+      app = await ensureIosApp({ serve: `node start.mjs ${record} ready`, cwd: dir, log: quiet });
+    } finally {
+      for (const [k, v] of [['VERCEL_AUTOMATION_BYPASS_SECRET', saved.bypass], ['OPENAI_API_KEY', saved.speech]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+    assert.equal(app.baseUrl, APP_URL);
+    assert.deepEqual(JSON.parse(readFileSync(`${record}.env`, 'utf8')), { bypass: false, speech: false, path: true });
+    assert.equal(existsSync(`${record}.stopped`), false);
+    await app.stop();
+    assert.equal(existsSync(`${record}.stopped`), true, 'the command was told to stop, and stop resolved once it had');
+  });
+});
+
+test("an iOS app's --serve command that exits, or prints no URL in time, fails the start with its last output, and one that runs out of time is stopped", async () => {
+  await withStandIn(async (dir, record) => {
+    await assert.rejects(
+      ensureIosApp({ serve: `node start.mjs ${record} fail`, cwd: dir, log: quiet }),
+      /`node start.mjs .* fail` exited 65 before it printed its app's simulator URL, ios-simulator:\/\/<device UDID>\/<bundle id>; its last output: building the app \/ booting a device; the URL comes once the app is up \/ xcodebuild exited 65/,
+    );
+    await assert.rejects(ensureIosApp({ serve: `node start.mjs ${record} silent`, cwd: dir, readyTimeout: 1500, log: quiet }), /printed no simulator URL, ios-simulator:\/\/<device UDID>\/<bundle id>, within 1.5s/);
+    await appears(`${record}.stopped`);
   });
 });
