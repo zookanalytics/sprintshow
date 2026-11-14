@@ -143,9 +143,11 @@ What a user runs, and the domains each draws on:
   run side by side.
 - **Binaries are provisioned.** A binary the engine needs, such as Chromium, ffmpeg or
   WebDriverAgent's runner app, comes from a named command (the npm scripts
-  `provision:browser` and `provision:ffmpeg`, and `sprintshow provision webdriveragent`)
-  or from the host, never from a dependency's install script. A part that finds one
-  missing fails with the command that fetches it.
+  `provision:browser` and `provision:ffmpeg`, and `sprintshow provision appium`) or from
+  the host, never from a dependency's install script. Appium and its XCUITest driver come
+  from `sprintshow provision appium` too, and are not the package's dependencies, so only
+  a host that drives an iOS app carries them. A part that finds one missing fails with the
+  command that fetches it.
 - **Behavior lives in the library.** The command-line interface parses flags and calls
   the library's exports, so a library caller can do whatever a command does.
 - **The source runs as written.** Every source file is TypeScript that Node 22.18 or

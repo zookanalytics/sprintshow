@@ -74,10 +74,11 @@ Prerequisites, fetched on demand rather than assumed:
   installs a prebuilt binary for macOS or Linux (x64 or arm64) with nothing to build or
   allow.
 - **macOS with Xcode and an iOS Simulator runtime**, for an iOS app demo. Appium and its
-  XCUITest driver come with the package. The runner app the driver installs on the device,
-  WebDriverAgent, is built once with the host's Xcode:
-  `npx sprintshow provision webdriveragent`. A run that finds it missing prints this
-  command.
+  XCUITest driver, about 150 MB, do not come with the package, so an install that demos no
+  iOS app does not carry them. `npx sprintshow provision appium` installs them once into
+  the user's cache, at the versions sprintshow pins, and builds the runner app the driver
+  installs on the device, WebDriverAgent, with the host's Xcode. A run that finds either
+  missing prints this command.
 
 ## Run a demo
 

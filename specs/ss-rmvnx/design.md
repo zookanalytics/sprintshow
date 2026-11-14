@@ -23,23 +23,56 @@ The engine runs Appium as a server of its own for each run rather than loading t
 into its process. The driver runs simctl and xcodebuild, and those must not inherit the
 engine's keys. A process of its own is the one place the environment they inherit can be
 set. Its home is the directory whose node_modules holds the driver, because Appium reads
-its extensions from there. appium 3.9 and appium-xcuitest-driver 12.22 are dependencies.
-12.x is the newest driver line that runs on the stable Appium, because 13.x needs Appium
-4's beta.
+its extensions from there. The engine pins appium 3.9.0 and appium-xcuitest-driver
+12.22.8. 12.x is the newest driver line that runs on the stable Appium, because 13.x needs
+Appium 4's beta.
 
 The client is a thin layer over fetch, speaking the W3C WebDriver protocol and Appium's
 extensions. WebdriverIO's clients, `webdriver` 9 and 10, need Node 22.23.4 or later on
 the 22 line, above the engine's floor of 22.18, which CI runs. The engine sends a dozen
 commands.
 
+### Appium is provisioned, not a dependency
+
+Appium and its XCUITest driver are not dependencies of the package. As dependencies they
+added 578 packages to the lockfile, 552 of which install on macOS, about 150 MB, and 18
+moderate `npm audit` advisories, to every install, iOS or not. The operator asked for
+"some other way of factoring it out for places that do not need it" (PR #17, review
+5901847613).
+
+`sprintshow provision appium` installs the two pinned versions with npm into
+`~/Library/Caches/sprintshow/appium/<appium version>-xcuitest-<driver version>`, which is
+Appium's home for every run, and then builds the runner app from the WebDriverAgent
+project in that home. So one command sets a host up for iOS app demos, as
+`provision:browser` sets one up for a page. npm installs into a directory of its own,
+which is moved into place once whole. It runs no install script there, as npm 12 runs none
+it is not allowed to: appium's own does nothing in a project that depends on appium, the
+simulator bindings of `@appium/coresim` ship a prebuilt addon for Apple silicon, and
+`appium-ios-tuntap` serves real devices. The packages below the two pinned ones are the
+versions npm resolves when it installs them, as they are for any project that installs the
+package, and a host keeps the tree it installed. A run that finds no home fails with the
+command.
+
+Two other ways were weighed:
+
+- Optional peer dependencies. npm does not install an optional peer, so a web-only
+  install would carry nothing. But a user who demos an iOS app would install both
+  packages beside sprintshow and keep their versions in its range, and the checkout's
+  own install, CI's included, would still carry them as development dependencies, since
+  its live tests need them.
+- Moving off Appium. AXe drives a simulator with no npm package, but it is a binary from
+  a Homebrew tap, built on Apple's private accessibility APIs, and taking it means
+  writing the surface's driver again. Driving WebDriverAgent directly means doing what the
+  XCUITest driver does to install, launch and connect to the runner app.
+
 ### The runner app is provisioned, with a bundle identifier of its own
 
 WebDriverAgent's runner app is built once with `xcodebuild build-for-testing` for any
-simulator, by `sprintshow provision webdriveragent`. A project that installed sprintshow
-runs it with npx, and a checkout of sprintshow runs it with
-`npm run provision:webdriveragent`. It is a command of the CLI because the published
-package holds only the build, so a script that runs the source would fail wherever
-sprintshow is installed. It goes into
+simulator, by `sprintshow provision appium`, once it has installed Appium. A project that
+installed sprintshow runs it with npx, and a checkout of sprintshow runs it with
+`npm run provision:appium`. It is a command of the CLI because the published package
+holds only the build, so a script that runs the source would fail wherever sprintshow is
+installed. It goes into
 `~/Library/Caches/sprintshow/webdriveragent/<WebDriverAgent version>-xcode-<Xcode build>`,
 and only its products are kept. A run installs that build through the driver's
 preinstalled mode (`usePreinstalledWDA` with `prebuiltWDAPath`), which launches the
