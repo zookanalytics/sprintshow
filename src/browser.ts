@@ -1,11 +1,12 @@
 // Browser-driving primitives shared by the capture drivers: the synthetic pointer and
 // its human-paced glide helpers, the action runner that executes a parsed directive, the
 // assertion evaluator that checks a `_Prove:_` / `_Fail if:_` contract against the live
-// DOM or terminal, the step runner that runs one demo step's actions and then checks its
-// proof, and openSurface, which brings up what a script drives: the app at its start
-// path, past Vercel's sign-in when the app is behind it (vercel.ts), or the engine's own
-// terminal (terminal.ts). contextOptions and videoFrame say what page a capture drives a
-// script in: the device the script names, and the frame its video is filmed in.
+// DOM, terminal or iOS app, the step runner that runs one demo step's actions and then
+// checks its proof, and connectSurface and openSurface, which bring up what a script
+// drives: the app at its start path, past Vercel's sign-in when the app is behind it
+// (vercel.ts), the engine's own terminal (terminal.ts), or an iOS app on a simulator
+// (ios.ts). contextOptions and videoFrame say what page a capture drives a script in: the
+// device the script names, and the frame its video is filmed in.
 //
 // The pointer is a DOM element the engine moves, so a click or a keystroke reads on
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
@@ -13,14 +14,16 @@
 // determinism. A terminal needs no pointer: what is typed shows where the shell echoes it.
 // Nor does a page's `press`: its keys go wherever the page's focus is, and where keys
 // move focus the browser draws the page's own focus ring, unless the page's style hides it.
+// An iOS app's page draws the pointer as a touch, which glides to where a step taps.
 
 import { devices, type BrowserContextOptions, type Page } from 'playwright';
-import { deviceName, unknownDevice, type Assertion, type Demo, type DemoAction, type DemoStep, type Matcher, type ViewportSize } from './demo-script.ts';
+import { compareCount, deviceName, matchText, surfaceOf, unknownDevice, type Assertion, type Demo, type DemoAction, type DemoStep, type Matcher, type ViewportSize } from './demo-script.ts';
 import { pressKeys } from './keyboard.ts';
 import { openTerminal, hasTerminalSession, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
+import { connectIosApp, showIosApp, hasIosApp, runIosAction, checkIosAssertion } from './ios.ts';
 import { passVercelSignIn } from './vercel.ts';
 
-/** The viewport a script that names no device is driven at, and every terminal script's frame. */
+/** The viewport a script that names no device is driven at, and every terminal or iOS app script's frame. */
 export const VIEWPORT = { width: 1280, height: 900 };
 export const ACTION_TIMEOUT = 15000; // per waitFor/waitForText/click/type, and a terminal's waitForScreen
 export const PROVE_TIMEOUT = 10000; // how long a `_Prove:_` assertion is polled before failing
@@ -58,11 +61,11 @@ export function chromiumLaunchArgs(): string[] {
  * names is emulated as Playwright's registry describes it: its viewport, screen, scale
  * factor and user agent, and whether it is a mobile device and has touch. A size is that
  * viewport at scale 1, with no touch. A page script that names no device, and every
- * terminal script, gets VIEWPORT. Throws when the name is not in the registry, before
- * anything is started.
+ * terminal or iOS app script, gets VIEWPORT. Throws when the name is not in the registry,
+ * before anything is started.
  */
 export function contextOptions(demo: Demo): BrowserContextOptions {
-  const device = demo.terminal ? undefined : demo.device;
+  const device = surfaceOf(demo) === 'page' ? demo.device : undefined;
   if (!device) return { viewport: { ...VIEWPORT } };
   if ('viewport' in device) return { viewport: { ...device.viewport } };
   const names = Object.keys(devices);
@@ -114,9 +117,13 @@ const POINTER_INIT = `(() => {
 /** The elements the pointer draws in a page: the pointer and its ripples. */
 export const POINTER_CHROME = '#__ss_pointer__,.__ss_ripple__';
 
+/** The pages the pointer is registered in. */
+const pointed = new WeakSet<Page>();
+
 /** Register the pointer so every navigation re-installs it. Call once, before the first goto. */
 export async function installPointer(page: Page): Promise<void> {
   await page.addInitScript(POINTER_INIT);
+  pointed.add(page);
 }
 
 /** Move the pointer to a viewport coordinate and wait for the CSS glide to settle. */
@@ -125,18 +132,19 @@ export async function glideTo(page: Page, x: number, y: number): Promise<void> {
   await page.waitForTimeout(GLIDE_MS + 40);
 }
 
+/** Glide the pointer to a viewport coordinate and ripple there, as a click or a tap lands. */
+async function glideAndRipple(page: Page, x: number, y: number): Promise<void> {
+  await glideTo(page, x, y);
+  await page.evaluate(({ x, y }) => (window as unknown as { __ss?: { ripple(x: number, y: number): void } }).__ss?.ripple(x, y), { x, y });
+  await page.waitForTimeout(120);
+}
+
 /** Glide the pointer to a selector's centre, ripple, then click it. */
 export async function glideAndClick(page: Page, selector: string): Promise<void> {
   const loc = page.locator(selector).first();
   await loc.scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT }).catch(() => {});
   const box = await loc.boundingBox();
-  if (box) {
-    const x = box.x + box.width / 2;
-    const y = box.y + box.height / 2;
-    await glideTo(page, x, y);
-    await page.evaluate(({ x, y }) => (window as unknown as { __ss?: { ripple(x: number, y: number): void } }).__ss?.ripple(x, y), { x, y });
-    await page.waitForTimeout(120);
-  }
+  if (box) await glideAndRipple(page, box.x + box.width / 2, box.y + box.height / 2);
   await loc.click({ timeout: ACTION_TIMEOUT });
 }
 
@@ -156,10 +164,16 @@ export async function glideAndType(page: Page, selector: string, text: string): 
  * glide, paces a terminal's typing and keys for a viewer, and holds a resized page for a
  * beat; without it the page is driven directly. An action timeout is logged, not thrown —
  * the step's `_Prove:_` is the real gate, so a genuinely stuck step still shows a frame
- * and fails its proof rather than aborting the run.
+ * and fails its proof rather than aborting the run. In a page that shows an iOS app, the
+ * action goes to the app (ios.ts).
  */
 export async function runAction(page: Page, base: string, act: DemoAction, humanize: boolean, log: (m: string) => void): Promise<void> {
   try {
+    if (hasIosApp(page)) {
+      const touch = humanize ? (x: number, y: number) => glideAndRipple(page, x, y) : null;
+      await runIosAction(page, act, { timeout: ACTION_TIMEOUT, keyPause: humanize ? KEY_PAUSE_MS : 0, pause: humanize ? READ_PAUSE_MS : 0, touch });
+      return;
+    }
     switch (act.verb) {
       case 'goto':
         await page.goto(joinUrl(base, act.target), { waitUntil: 'load', timeout: ACTION_TIMEOUT });
@@ -221,20 +235,10 @@ export async function runAction(page: Page, base: string, act: DemoAction, human
   }
 }
 
-function compare(actual: number, op: string, n: number): boolean {
-  switch (op) {
-    case '>=': return actual >= n;
-    case '>': return actual > n;
-    case '==': return actual === n;
-    case '<=': return actual <= n;
-    case '<': return actual < n;
-    default: return false;
-  }
-}
-
-/** Evaluate one assertion against the live page or its terminal (single check, no polling). */
+/** Evaluate one assertion against the live page, its terminal or the iOS app it shows (single check, no polling). */
 export async function checkAssertion(page: Page, a: Assertion): Promise<boolean> {
   try {
+    if (hasIosApp(page)) return await checkIosAssertion(page, a);
     switch (a.kind) {
       case 'visible':
         return await page.locator(a.selector as string).first().isVisible();
@@ -253,12 +257,10 @@ export async function checkAssertion(page: Page, a: Assertion): Promise<boolean>
         return await page.locator(a.selector as string).evaluateAll((els) => els.some((el) => el.matches(':focus')));
       case 'count': {
         const c = await page.locator(a.selector as string).count();
-        return compare(c, a.op as string, a.n as number);
+        return compareCount(c, a.op as string, a.n as number);
       }
-      case 'text': {
-        const t = (await page.locator(a.selector as string).first().textContent()) ?? '';
-        return a.matcher?.type === 'regex' ? new RegExp(a.matcher.value).test(t) : t.includes(a.matcher?.value ?? '');
-      }
+      case 'text':
+        return matchText((await page.locator(a.selector as string).first().textContent()) ?? '', a.matcher);
       case 'eval':
         return Boolean(await page.evaluate(a.expr as string));
       case 'screen':
@@ -331,28 +333,65 @@ export async function runStep(page: Page, base: string, step: DemoStep, total: n
 export interface Surface {
   /** Wait until the surface shows everything it has been sent, so a frame taken now shows it. */
   settle(): Promise<void>;
-  /** Release what the surface holds: a terminal's shell is ended, and a page holds nothing. */
+  /**
+   * Save the state the surface shows now as the PNG `file`, for a surface that takes its
+   * own stills rather than having the page captured: an iOS app's is the device's
+   * screenshot. Absent on a page or a terminal, whose stills the page gives.
+   */
+  still?(file: string): Promise<void>;
+  /** Release what the surface holds: a terminal's shell is ended, a shown iOS app's frames stop, and a page holds nothing. */
+  close(): Promise<void>;
+}
+
+/** What a capture is connected to before a page shows it. */
+export interface SurfaceConnection {
+  /** Bring the surface up in `page`, framed on a backdrop above the caption band when `backdrop` is set, as the videos show it. */
+  show(page: Page, backdrop: boolean): Promise<Surface>;
+  /** Release what the connection holds, once the surface it showed is closed: an iOS app's session and its device's dressing. */
   close(): Promise<void>;
 }
 
 export interface OpenSurfaceOptions {
-  /** The origin a page script's start path is joined onto. A terminal script needs none. */
+  /** The origin a page script's start path is joined onto, or an iOS app script's simulator URL. A terminal script needs none. */
   baseUrl?: string;
   /** The directory a terminal script's shell starts in (default: the working directory). */
   cwd?: string;
-  /** Frame a terminal on a backdrop above the caption band, as the videos show it. A still leaves it off. */
+  /** Frame a terminal or an iOS app on a backdrop above the caption band, as the videos show it. A still leaves it off. */
   backdrop?: boolean;
   log?: (m: string) => void;
 }
 
 /**
- * Bring up what `demo` drives in `page`: for a page script, navigate to its start path on
- * `baseUrl`, once the page's context can pass Vercel's sign-in if the app answers with it
- * (vercel.ts); for a terminal script, write the engine's terminal page and start its
- * shell (terminal.ts). The caller closes the surface once the capture no longer shows it.
+ * Connect to what `demo` drives, before a page shows it. Only an iOS app script's surface
+ * needs it: its connection checks the device, dresses it and starts a session on the app
+ * through Appium (ios.ts), which takes seconds, so a walkthrough connects before it starts
+ * recording. A page's and a terminal's connection holds nothing, and brings everything up
+ * when it shows the surface.
  */
-export async function openSurface(page: Page, demo: Demo, opts: OpenSurfaceOptions): Promise<Surface> {
+export async function connectSurface(demo: Demo, opts: Omit<OpenSurfaceOptions, 'backdrop'>): Promise<SurfaceConnection> {
   const log = opts.log ?? ((m: string) => console.log(m));
+  if (surfaceOf(demo) === 'ios') {
+    const conn = await connectIosApp(opts.baseUrl, log);
+    const show = async (page: Page): Promise<Surface> => {
+      const surface = await showIosApp(page, conn, { title: demo.title, log });
+      // The device page is written in place, which runs no init script, so a page that
+      // shows the pointer gets it here.
+      try {
+        if (pointed.has(page)) await page.evaluate(POINTER_INIT);
+      } catch (e) {
+        await surface.close();
+        throw e;
+      }
+      return surface;
+    };
+    return { show, close: () => conn.close() };
+  }
+  return { show: (page, backdrop) => showSurface(page, demo, { ...opts, backdrop, log }), close: async () => {} };
+}
+
+/** Bring up a page or terminal script's surface in `page`. */
+async function showSurface(page: Page, demo: Demo, opts: OpenSurfaceOptions & { log: (m: string) => void }): Promise<Surface> {
+  const { log } = opts;
   if (demo.terminal) {
     return openTerminal(page, {
       spec: demo.terminal,
@@ -368,4 +407,33 @@ export async function openSurface(page: Page, demo: Demo, opts: OpenSurfaceOptio
   await passVercelSignIn(page, start, log);
   await page.goto(start, { waitUntil: 'load' });
   return { settle: async () => {}, close: async () => {} };
+}
+
+/**
+ * Bring up what `demo` drives in `page`: for a page script, navigate to its start path on
+ * `baseUrl`, once the page's context can pass Vercel's sign-in if the app answers with it
+ * (vercel.ts); for a terminal script, write the engine's terminal page and start its
+ * shell (terminal.ts); for an iOS app script, connect to the app `baseUrl` names and show
+ * its screen (ios.ts). The caller closes the surface once the capture no longer shows it,
+ * which also closes its connection.
+ */
+export async function openSurface(page: Page, demo: Demo, opts: OpenSurfaceOptions): Promise<Surface> {
+  const connection = await connectSurface(demo, opts);
+  let surface: Surface;
+  try {
+    surface = await connection.show(page, Boolean(opts.backdrop));
+  } catch (e) {
+    await connection.close();
+    throw e;
+  }
+  return {
+    ...surface,
+    async close() {
+      try {
+        await surface.close();
+      } finally {
+        await connection.close();
+      }
+    },
+  };
 }

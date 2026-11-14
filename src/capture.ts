@@ -74,7 +74,7 @@ interface StepResult {
 async function proofStep(page: Page, base: string, step: DemoStep, total: number, capturesDir: string, surface: Surface, shots: StepScreenshots | null, log: (m: string) => void): Promise<StepResult> {
   const { proved, manual, reason } = await runStep(page, base, step, total, false, log);
   await surface.settle();
-  await shots?.take(page, step);
+  await shots?.take(page, surface, step);
 
   const file = stepFileName(step, total);
   await showCaption(page, step.index, total, step.narration, !proved);

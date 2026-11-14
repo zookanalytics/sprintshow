@@ -17,6 +17,9 @@ npx @zookanalytics/sprintshow run demos/sample.md --serve-dir examples/sample-ap
 # the same for a command-line session, full-screen program included
 npx @zookanalytics/sprintshow run demos/terminal.md --cwd examples/sample-cli
 
+# the same for an iOS app, which the sample's start command brings up on a simulator
+npx @zookanalytics/sprintshow run demos/ios.md --serve "node examples/sample-ios/serve.mjs"
+
 # a PNG of each step beside the video, or alone with --no-video
 npx @zookanalytics/sprintshow run demos/sample.md --serve-dir examples/sample-app --screenshots shots
 ```
@@ -47,7 +50,9 @@ One script drives each capture:
 
 A script drives an app in a browser page, or, when it declares `**Terminal:**`, a shell in
 a terminal the engine serves itself: commands typed, their output, and full-screen programs.
-Every capture takes either kind (see [Terminal demos](#terminal-demos)).
+When it declares `**Platform:** iOS`, it drives an iOS app on a simulator through Appium.
+Every capture takes each kind (see [Terminal demos](#terminal-demos) and
+[iOS app demos](#ios-app-demos)).
 
 ## Install
 
@@ -68,6 +73,12 @@ Prerequisites, fetched on demand rather than assumed:
 - **bash on `PATH`**, for a terminal demo. Its pty comes from `@lydell/node-pty`, which
   installs a prebuilt binary for macOS or Linux (x64 or arm64) with nothing to build or
   allow.
+- **macOS with Xcode and an iOS Simulator runtime**, for an iOS app demo. Appium and its
+  XCUITest driver, about 150 MB, do not come with the package, so an install that demos no
+  iOS app does not carry them. `npx sprintshow provision appium` installs them once into
+  the user's cache, at the versions sprintshow pins, and builds the runner app the driver
+  installs on the device, WebDriverAgent, with the host's Xcode. A run that finds either
+  missing prints this command.
 
 ## Run a demo
 
@@ -299,6 +310,100 @@ Once a capture is done, the shell and every program it still runs are ended, and
 that ignores SIGHUP is killed.
 `specs/ss-71qt/design.md` records why the surface is built this way.
 
+## iOS app demos
+
+A script that declares `**Platform:** iOS` drives an iOS app on an iOS Simulator device,
+through Appium's XCUITest driver. Its steps go through the same grammar and step runner as a
+page script's, and every capture takes it: the walkthrough, the proof video, a PNG of each
+step, and `sprintshow screenshot`.
+
+```markdown
+# Demo: Sprint board on iOS
+
+**Platform:** iOS
+
+## Steps
+
+1. **Add the first task**
+   `type new-task ~ Ship the demo engine`
+   `click add`
+   _Prove:_ one task is on the board — `count task == 1`
+```
+
+The app is named through the options that name a web app:
+
+```bash
+# an app already running on a booted device, by its simulator URL
+sprintshow run demos/ios.md --base-url ios-simulator://<device UDID>/<bundle id>
+
+# the repo's command that brings the app up on a simulator
+sprintshow run demos/ios.md --serve "node examples/sample-ios/serve.mjs"
+```
+
+`--base-url` takes the app's simulator URL, `ios-simulator://<device UDID>/<bundle id>`: the
+app with that bundle identifier, on the booted device with that UDID (`xcrun simctl list
+devices` lists them). `--serve` takes the command that brings the app up, which sprintshow
+starts in `--cwd`, as it starts a dev server. Once the app is up, the command prints the app's
+simulator URL on a line of its standard output, which tells sprintshow that it is ready and
+where. The URL can stand among other text on its line, as at the end of a sentence or in a
+JSON log line, and it ends with the bundle identifier. sprintshow reads a line once it ends,
+at a newline or at the end of the command's output, so a URL written in two pieces is never
+read as a shorter one. The command then keeps running until sprintshow stops it with SIGTERM,
+when the run ends, and sprintshow waits up to a minute for it to exit.
+`examples/sample-ios/serve.mjs` is such a command: it builds the sample app, creates and boots
+a device of its own, installs and launches the app, prints its URL, and deletes the device
+when it is stopped. A port and a directory have no meaning for an app on a simulator, so
+`--port` and `--serve-dir` are refused.
+
+sprintshow builds, installs and removes no app, and creates, boots, shuts down or deletes no
+device: the caller does, or the command `--serve` starts. A run takes the app as it stands. It
+brings the app to the front without relaunching it, so the launch arguments its command gave
+it hold, and it leaves the app running. For the run, it sets the device's appearance to
+light, the scheme a page is shown in, and when the device's status bar carries no override
+of its own, it shows 9:41, full signal and a charged battery. Appium installs its runner app
+on the device. When the run ends, sprintshow removes the runner app and puts the appearance
+and the status bar back, so the device is left as it was given. A device that holds a
+WebDriverAgent runner app another tool installed is refused, because Appium would remove it.
+
+No key the engine holds, `VERCEL_AUTOMATION_BYPASS_SECRET` or `OPENAI_API_KEY`, reaches
+Appium, the tools it runs, `simctl`, `xcodebuild`, or the command `--serve` starts.
+
+**Selectors.** A selector names an element by its accessibility identifier, such as
+`new-task` for a SwiftUI view given `.accessibilityIdentifier("new-task")`, or by its label
+when it has no identifier, such as `Ship the demo engine`. When several elements share a
+name, an action takes the first.
+
+**Actions** are a page script's, as gestures and keys:
+
+| Action | On an iOS app |
+|---|---|
+| `click <sel>` | Taps the element. |
+| `type <sel> ~ <text>` | Taps the field, clears it, and types the text. |
+| `press <keys>` | Types each key into the field that has the keyboard's focus: `Enter` (Return), `Tab`, `Backspace`, `Space`, or a `"quoted string"`. A press with any other key presses none of its keys, and the linter reports it. |
+| `scroll <sel>` | Scrolls until the element shows. |
+| `waitFor <sel>` | Waits until the element shows. |
+| `waitForText <sel> ~ <text>` | Waits until the element's label or value holds the text. |
+| `wait <ms>` | Pauses. |
+
+`goto` and `resize` have no meaning on a device, and the linter reports either in an iOS app
+script.
+
+**Assertions** read the app's elements through Appium: `visible <sel>` (the first element
+the selector names is displayed), `hidden <sel>` (none is), `count <sel> <op> <n>`, and
+`text <sel> ~ <matcher>`, which holds when the element's label or its value matches. A
+button's label is its title, and its value is any state the app gives it, as the sample's
+tasks give `done` or `to do`. A text field's value is what it holds. `focused` and `eval`
+are a page's.
+
+**Captures.** The videos show the device's screen, drawn from the frames Appium streams of
+it, on a dark backdrop above the caption bar, and a touch glides to where each step taps.
+Each step's PNG, and `sprintshow screenshot`'s, is the device's own screenshot: its whole
+screen at its own scale, status bar included, with nothing of the engine's on it. So
+`--full-page`, `--selector`, `--scale` and `--transparent` are refused for one. A
+walkthrough connects to the app before it starts recording, which takes Appium a few seconds
+to tens of seconds, so the video opens on the cover.
+`specs/ss-rmvnx/design.md` records why the surface is built this way.
+
 ## Exit codes
 
 The exit code of `run` and `screenshot` says what was saved:
@@ -316,6 +421,7 @@ The exit code of `run` and `screenshot` says what was saved:
 **Start:** `/path?query`          ← joined onto the server origin (a page script)
 **Device:** iPhone 15             ← optional: a device, or a size such as 375x812
 **Terminal:** 100x30              ← or this, for a terminal script
+**Platform:** iOS                 ← or this, for an iOS app script
 
 <free prose → the cover subtitle>
 
@@ -335,8 +441,8 @@ The exit code of `run` and `screenshot` says what was saved:
 `waitForText <selector> ~ <substring>` · `click <selector>` · `type <selector> ~ <text>` ·
 `scroll <selector>` (centre a below-the-fold element so the frame shows it) ·
 `press <keys>` · `resize <width>x<height>` (see [Devices](#devices)). A terminal script has
-[its own](#terminal-demos), and each kind of script reads only its own actions and
-assertions.
+[its own](#terminal-demos), an iOS app script [a page's less goto and resize](#ios-app-demos),
+and each kind of script reads only its own actions and assertions.
 
 `press <keys>` presses each key in turn, as it does in a terminal script: a key as
 Playwright names it (`Tab`, `Shift+Tab`, `Enter`, `Escape`, `ArrowDown`, `Space`), or a
@@ -430,8 +536,11 @@ that device: make its context with `contextOptions(demo)`, as they do. The drive
 page's viewport to the one the script starts at, and the rest of the device is the
 context's. A custom driver that runs its steps through `runStep` checks each proof as the
 built-in captures do. For a terminal script, a driver takes a `cwd` in place of a
-`baseUrl`, and `openSurface` brings up what any script drives: the app at its start path,
-or the engine's terminal and its shell.
+`baseUrl`, and for an iOS app script, the app's simulator URL as its `baseUrl`.
+`openSurface` brings up what any script drives: the app at its start path, the engine's
+terminal and its shell, or an iOS app, connected through Appium and shown in the page.
+`connectSurface` connects first and shows the surface later, as the walkthrough does to
+connect to an iOS app before it starts recording.
 
 ## The agent / MCP path
 

@@ -8,10 +8,13 @@
 // Demo plus an explicit environment snapshot and returns findings, so the rules are
 // unit-tested (lint.test.ts) without a browser or a network.
 //
-// A script drives one surface, a page or a terminal, and the parser reads only that
-// surface's directives and assertions. One written for the other surface is dropped as
-// prose, so the linter names the surface it belongs to. A directive whose verb is its
-// own surface's is dropped only when its arguments do not parse, and the linter says so.
+// A script drives one surface, a page, a terminal or an iOS app, and the parser reads
+// only that surface's directives and assertions. One written for another surface is
+// dropped as prose, so the linter names the surface it belongs to. A directive whose verb
+// is its own surface's is dropped only when its arguments do not parse, and the linter
+// says so. A `press` reads its keys the same way on every surface, so a press in an iOS
+// app script can name a key the app has none of, which a capture skips, and the linter
+// warns of it.
 //
 // A device a page script names is checked against the device names in the environment,
 // which the CLI reads from Playwright's registry, the one a capture looks it up in.
@@ -20,7 +23,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { devices } from 'playwright';
 
-import { parseDemoScript, deviceName, unknownDevice, ACTION_VERBS, ASSERTION_KINDS, TERMINAL_VERBS, TERMINAL_ASSERTION_KINDS, VIEWPORT_SIZE_FORM, outputSlug, surfaceOf, type Demo, type SurfaceKind } from './demo-script.ts';
+import { parseDemoScript, deviceName, keysIosLacks, unknownDevice, ACTION_VERBS, ASSERTION_KINDS, IOS_KEYS, TERMINAL_VERBS, TERMINAL_ASSERTION_KINDS, SURFACE_VOCABULARY, VIEWPORT_SIZE_FORM, outputSlug, surfaceOf, type Demo, type SurfaceKind } from './demo-script.ts';
 
 /** Step-count window from the demo-authoring contract: under 5 is thin, over 12 spans too much. */
 const MIN_STEPS = 5;
@@ -75,10 +78,12 @@ const DIRECTIVE_WORDS = new Set([
 ]);
 
 /** Each surface's directives and assertions, as a finding names them. */
-const VOCABULARY: Record<SurfaceKind, { verbs: readonly string[]; assertions: readonly string[] }> = {
-  page: { verbs: ACTION_VERBS, assertions: ASSERTION_KINDS },
-  terminal: { verbs: TERMINAL_VERBS, assertions: TERMINAL_ASSERTION_KINDS },
-};
+const VOCABULARY: Record<SurfaceKind, { verbs: readonly string[]; assertions: readonly string[] }> = SURFACE_VOCABULARY;
+
+/** What a finding calls a script of each surface, after `a` or `an`. */
+const SCRIPT_KIND: Record<SurfaceKind, string> = { page: 'a page script', terminal: 'a terminal script', ios: 'an iOS app script' };
+/** What a finding calls a directive or an assertion of each surface. */
+const OF_SURFACE: Record<SurfaceKind, string> = { page: 'a page', terminal: 'a terminal', ios: 'an iOS app' };
 
 /** What a directive's arguments lack, for each verb whose arguments parseAction can refuse. */
 const ARGUMENTS: Record<string, string> = {
@@ -94,12 +99,12 @@ function ownVerb(code: string, surface: SurfaceKind): string | null {
   return VOCABULARY[surface].verbs.includes(verb) ? verb : null;
 }
 
-/** The surface a code span's lead word is a directive or an assertion of, when that is not `surface`. */
+/** The surface a code span's lead word is a directive or an assertion of, when it is not one of `surface`'s. */
 function otherSurface(code: string, surface: SurfaceKind, kind: 'verbs' | 'assertions'): SurfaceKind | null {
   const lead = leadWord(code);
   const has = (s: SurfaceKind): boolean => VOCABULARY[s][kind].some((w) => w.toLowerCase() === lead);
-  const other: SurfaceKind = surface === 'page' ? 'terminal' : 'page';
-  return has(other) && !has(surface) ? other : null;
+  if (has(surface)) return null;
+  return (Object.keys(VOCABULARY) as SurfaceKind[]).find((s) => s !== surface && has(s)) ?? null;
 }
 
 /** First bare word of a code span, lowercased — '' when it does not start with one. */
@@ -146,6 +151,11 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
       add('warn', null, `no step runs a command or presses a key — the capture shows the shell's first prompt and nothing else. Add actions (${verbs.join('/')}).`);
     }
     if (demo.start) add('warn', null, `**Start:** \`${demo.start}\` is ignored — a terminal script's shell starts in --cwd, not at a path.`);
+  } else if (surface === 'ios') {
+    if (!drivesByAction) {
+      add('warn', null, `no step performs an action — the capture shows the app as it was given and nothing else. Add actions (${verbs.join('/')}).`);
+    }
+    if (demo.start) add('warn', null, `**Start:** \`${demo.start}\` is ignored — an iOS app script drives the app its caller names, as the app stands.`);
   } else if (!drivesByAction && !hasQuery) {
     add(
       'warn',
@@ -157,6 +167,8 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
   // ── Device: one the capture can emulate, on a surface that has one ──
   if (demo.device && surface === 'terminal') {
     add('warn', null, `**Device:** is ignored — a terminal script is filmed in the engine's own frame, and its size is its **Terminal:** columns and rows.`);
+  } else if (demo.device && surface === 'ios') {
+    add('warn', null, `**Device:** is ignored — an iOS app script runs on the simulator its caller names, at that device's size.`);
   } else if (demo.device && 'name' in demo.device && !deviceName(demo.device.name, env.devices)) {
     add('error', null, `${unknownDevice(demo.device.name, env.devices)} — the capture would refuse the script.`);
   }
@@ -183,8 +195,8 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
         'warn',
         step.index,
         attempted.length
-          ? `\`_Prove:_\` carries \`${attempted[0]}\`, ${other ? `a ${other} assertion in a ${surface} script` : 'which is not a recognised assertion'} — the step is NOT checked. Assertions are ${assertions.join('/')}.`
-          : `\`_Prove:_\` is prose only — nothing is checked against the ${surface}. Add an assertion (${assertions.map((k) => `\`${k}\``).join('/')}) to make the step a proof.`,
+          ? `\`_Prove:_\` carries \`${attempted[0]}\`, ${other ? `${OF_SURFACE[other]} assertion in ${SCRIPT_KIND[surface]}` : 'which is not a recognised assertion'} — the step is NOT checked. Assertions are ${assertions.join('/')}.`
+          : `\`_Prove:_\` is prose only — nothing is checked against the ${surface === 'ios' ? 'app' : surface}. Add an assertion (${assertions.map((k) => `\`${k}\``).join('/')}) to make the step a proof.`,
       );
     }
     if (step.failIf && !step.failIf.assertion) {
@@ -205,8 +217,19 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
         step.index,
         own
           ? `\`${code}\` has malformed arguments: ${ARGUMENTS[own] ?? 'they do not parse'} — it is IGNORED at capture time.`
-          : `\`${code}\` ${other ? `is a ${other} directive in a ${surface} script` : 'is not a known directive'} — it is IGNORED at capture time (verbs: ${verbs.join(', ')}).`,
+          : `\`${code}\` ${other ? `is ${OF_SURFACE[other]} directive in ${SCRIPT_KIND[surface]}` : 'is not a known directive'} — it is IGNORED at capture time (verbs: ${verbs.join(', ')}).`,
       );
+    }
+
+    // An iOS app types a character for only some keys, so a capture skips a press that has
+    // another, and the steps after it run without it.
+    if (surface === 'ios') {
+      for (const act of step.actions) {
+        const lacked = keysIosLacks(act.keys ?? []);
+        if (lacked.length) {
+          add('warn', step.index, `\`${act.raw}\` presses ${lacked.join(', ')}, which an iOS app has no key for — the capture SKIPS the whole press. An iOS app takes ${IOS_KEYS.join(', ')} or a "quoted string".`);
+        }
+      }
     }
 
     // A row or column past the terminal's edge is one no screen has.

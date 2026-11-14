@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseDemoScript, parseAction, parseAssertion, parseMatcher, parseKeys, parseTerminalSpec, parseDeviceSpec, parseViewportSize, deviceName, unknownDevice, surfaceOf, slugify, outputSlug, DEFAULT_TERMINAL } from '../src/demo-script.ts';
+import { parseDemoScript, parseAction, parseAssertion, parseMatcher, parseKeys, parseTerminalSpec, parseDeviceSpec, parseViewportSize, deviceName, unknownDevice, surfaceOf, slugify, outputSlug, keysIosLacks, matchText, DEFAULT_TERMINAL } from '../src/demo-script.ts';
 
 const SCRIPT = `# Demo: Task Board
 
@@ -314,6 +314,19 @@ test('terminal: press splits keys from quoted text, and refuses an open or empty
   for (const bad of ['', '"open', '""', '"a"b', 'a"b']) assert.equal(parseKeys(bad), null, bad);
 });
 
+test("the keys a press in an iOS app lacks are those it types no character for, in order, and never text", () => {
+  assert.deepEqual(keysIosLacks(parseKeys('Enter Tab Backspace Space "Escape"') ?? []), []);
+  assert.deepEqual(keysIosLacks(parseKeys('"a" Escape Enter ArrowDown enter constructor') ?? []), ['Escape', 'ArrowDown', 'enter', 'constructor']);
+});
+
+test("a text matcher holds when its regex finds a match in the text, or when the text holds its substring", () => {
+  assert.equal(matchText('2 tasks · 0 done', parseMatcher('/^2 tasks/')), true);
+  assert.equal(matchText('12 tasks · 0 done', parseMatcher('/^2 tasks/')), false);
+  assert.equal(matchText('2 tasks · 0 done', parseMatcher('"0 done"')), true);
+  assert.equal(matchText('2 tasks · 0 done', parseMatcher('1 done')), false);
+  assert.equal(matchText('anything', undefined), true, 'no matcher holds, as an empty substring does');
+});
+
 // ── A page script's device ──
 //
 // `**Device:**` names a device as Playwright's registry names it, or a viewport size, and
@@ -358,4 +371,53 @@ test('deviceName finds a registry name regardless of case and spacing; unknownDe
   assert.equal(unknownDevice('iPhone15', names), '**Device:** "iPhone15" is not a device Playwright describes; the nearest it describes are "iPhone 15", "iPhone 15 Pro", "Pixel 7"');
   assert.equal(unknownDevice('Pixel 8', names).split('; ')[1], 'the nearest it describes are "Pixel 7", "iPhone 15", "iPad Mini"');
   assert.equal(unknownDevice('iPhone 15', []), '**Device:** "iPhone 15" is not a device Playwright describes');
+});
+
+const IOS = `# Demo: Sprint board on iOS
+
+**Platform:** iOS
+
+## Steps
+
+1. **Add a task**
+   \`type new-task ~ Ship it\`
+   \`click add\`
+   \`press "x" Enter\`
+   \`scroll summary\`
+   \`waitForText summary ~ 1 tasks\`
+   \`goto /board\`
+   \`resize 400x800\`
+   _Prove:_ one task — \`count task == 1\`
+   _Fail if:_ the hint still shows — \`visible empty-hint\`
+
+2. **The summary reads it**
+   _Prove:_ the summary — \`text summary ~ /1 tasks/\`
+   _Fail if:_ the page — \`eval true\`
+`;
+
+test("platform: **Platform:** iOS makes an iOS app script, which needs no **Start:** and reads a page script's actions and assertions, less goto, resize, focused and eval", () => {
+  const d = parseDemoScript(IOS);
+  assert.equal(d.platform, 'iOS');
+  assert.equal(surfaceOf(d), 'ios');
+  assert.equal(d.start, '');
+  assert.deepEqual(d.steps[0].actions.map((a) => a.verb), ['type', 'click', 'press', 'scroll', 'waitForText']);
+  assert.deepEqual(d.steps[0].actions[0], { verb: 'type', target: 'new-task', text: 'Ship it', raw: 'type new-task ~ Ship it' });
+  assert.deepEqual(d.steps[0].actions[2].keys, [{ text: 'x' }, { key: 'Enter' }]);
+  assert.deepEqual(d.steps[0].droppedCodes, ['goto /board', 'resize 400x800']);
+  assert.deepEqual(d.steps[0].prove?.assertion, { kind: 'count', selector: 'task', op: '==', n: 1, raw: 'count task == 1' });
+  assert.equal(d.steps[0].failIf?.assertion?.kind, 'visible');
+  assert.deepEqual(d.steps[1].prove?.assertion?.matcher, { type: 'regex', value: '1 tasks' });
+  assert.equal(d.steps[1].failIf?.assertion, undefined);
+  for (const code of ['focused new-task', 'eval 1', 'screen ~ x', 'exit == 0']) assert.equal(parseAssertion(code, 'ios'), null, code);
+  for (const code of ['goto /x', 'resize 400x800', 'run ls', 'waitForScreen /x/']) assert.equal(parseAction(code, 'ios'), null, code);
+  // A selector can hold spaces: an element named by its label.
+  assert.equal(parseAction('click Ship the demo engine', 'ios')?.target, 'Ship the demo engine');
+  assert.equal(parseAssertion('count Ship the demo engine >= 1', 'ios')?.selector, 'Ship the demo engine');
+});
+
+test('platform: **Platform:** reads iOS in any letter case and refuses anything else, and a script declares it or **Terminal:**, not both', () => {
+  assert.equal(parseDemoScript(IOS.replace('**Platform:** iOS', '**Platform:** `ios`')).platform, 'iOS');
+  assert.throws(() => parseDemoScript(IOS.replace('**Platform:** iOS', '**Platform:** Android')), /\*\*Platform:\*\* takes iOS, for an app on its simulator \(got "Android"\)/);
+  assert.throws(() => parseDemoScript(IOS.replace('**Platform:** iOS', '**Platform:** iOS\n**Terminal:** 80x24')), /a script drives one surface; declare \*\*Terminal:\*\* for a terminal or \*\*Platform:\*\* for an app on its simulator, not both/);
+  assert.throws(() => parseDemoScript(IOS.replace('**Platform:** iOS\n', '')), /missing "\*\*Start:\*\* <url>" \(or "\*\*Terminal:\*\*" for a terminal script, or "\*\*Platform:\*\* iOS" for an iOS app\)/);
 });
