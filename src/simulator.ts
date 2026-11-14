@@ -32,9 +32,18 @@ export interface SimulatorApp {
   bundleId: string;
 }
 
-const UDID = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
-const BUNDLE_ID = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*$/;
+/** A device's UDID, as simctl prints it. */
+const UDID_FORM = '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}';
+/** A bundle identifier: letters, digits and hyphens, in parts joined by dots. */
+const BUNDLE_ID_FORM = '[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*';
+const UDID = new RegExp(`^${UDID_FORM}$`, 'i');
+const BUNDLE_ID = new RegExp(`^${BUNDLE_ID_FORM}$`);
 const SIMULATOR_URL = /^ios-simulator:\/\/([^/]+)\/([^/?#]+)\/?$/i;
+/**
+ * A simulator URL among other text: its UDID and its bundle identifier, and what follows
+ * them is not more of a URL, a path, a query, a fragment or more of a word.
+ */
+const SIMULATOR_URL_IN_TEXT = new RegExp(`ios-simulator://(${UDID_FORM})/(${BUNDLE_ID_FORM})/?(?![\\w/?#-]|\\.[\\w-])`, 'i');
 
 /** Whether `url` is written in the simulator URL's scheme, so a page script refuses it and an iOS app script reads it. */
 export function isSimulatorUrl(url: string): boolean {
@@ -46,6 +55,17 @@ export function parseSimulatorUrl(url: string): SimulatorApp | null {
   const m = url.trim().match(SIMULATOR_URL);
   if (!m || !UDID.test(m[1]) || !BUNDLE_ID.test(m[2])) return null;
   return { udid: m[1].toUpperCase(), bundleId: m[2] };
+}
+
+/**
+ * The app the first simulator URL in `text` names, or null when `text` holds none. The URL
+ * can sit among other text, such as at the end of a sentence or in a JSON string, so it
+ * ends with its bundle identifier, and a URL that goes on past it, into a path, a query or
+ * a fragment, names no app, as it does not for parseSimulatorUrl.
+ */
+export function findSimulatorUrl(text: string): SimulatorApp | null {
+  const m = SIMULATOR_URL_IN_TEXT.exec(text);
+  return m ? { udid: m[1].toUpperCase(), bundleId: m[2] } : null;
 }
 
 /** The simulator URL of `app`. */

@@ -1,12 +1,12 @@
 // Tests for the parts of src/simulator.ts that need no simulator: how a simulator URL
-// names an app, the environment every tool the engine starts for an iOS app gets, and
-// how the status bar's overrides are read from simctl's listing. test/ios-live.test.ts
-// drives a real device.
+// names an app, alone or among other text, the environment every tool the engine starts
+// for an iOS app gets, and how the status bar's overrides are read from simctl's
+// listing. test/ios-live.test.ts drives a real device.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { isSimulatorUrl, parseSimulatorUrl, simulatorUrl, statusBarOverrides, toolEnv } from '../src/simulator.ts';
+import { findSimulatorUrl, isSimulatorUrl, parseSimulatorUrl, simulatorUrl, statusBarOverrides, toolEnv } from '../src/simulator.ts';
 
 const UDID = '265F099F-E558-4E32-82BE-F70A75EC0716';
 
@@ -32,6 +32,31 @@ test('a URL with no device UDID, no bundle identifier, or anything past them is 
     `ios-simulator://${UDID}/.com.example`,
   ]) {
     assert.equal(parseSimulatorUrl(url), null, url);
+  }
+});
+
+test('a simulator URL among other text ends with its bundle identifier, and one that goes on past it names no app', () => {
+  const app = { udid: UDID, bundleId: 'com.example.Board' };
+  for (const line of [
+    `ios-simulator://${UDID}/com.example.Board`,
+    `App ready: ios-simulator://${UDID}/com.example.Board.`,
+    `{"url":"ios-simulator://${UDID}/com.example.Board"}`,
+    `ready (ios-simulator://${UDID.toLowerCase()}/com.example.Board/), at last`,
+    `\x1b[32mios-simulator://${UDID}/com.example.Board\x1b[0m`,
+    `a path, ios-simulator://${UDID}/com.example.Board/more, then the app: ios-simulator://${UDID}/com.example.Board`,
+  ]) {
+    assert.deepEqual(findSimulatorUrl(line), app, line);
+  }
+  for (const line of [
+    'booting a device',
+    `ios-simulator://${UDID}/com.example.Board/more`,
+    `ios-simulator://${UDID}/com.example.Board?launch=1`,
+    `ios-simulator://${UDID}/com.example.Board#top`,
+    `ios-simulator://${UDID}/com.example.Board_debug`,
+    'ios-simulator://booted/com.example.Board',
+    `ios-simulator://${UDID}/`,
+  ]) {
+    assert.equal(findSimulatorUrl(line), null, line);
   }
 });
 

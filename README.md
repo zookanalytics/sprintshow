@@ -345,11 +345,15 @@ app with that bundle identifier, on the booted device with that UDID (`xcrun sim
 devices` lists them). `--serve` takes the command that brings the app up, which sprintshow
 starts in `--cwd`, as it starts a dev server. Once the app is up, the command prints the app's
 simulator URL on a line of its standard output, which tells sprintshow that it is ready and
-where. It then keeps running until sprintshow stops it with SIGTERM, when the run ends, and
-sprintshow waits up to a minute for it to exit. `examples/sample-ios/serve.mjs` is such a
-command: it builds the sample app, creates and boots a device of its own, installs and
-launches the app, prints its URL, and deletes the device when it is stopped. A port and a
-directory have no meaning for an app on a simulator, so `--port` and `--serve-dir` are refused.
+where. The URL can stand among other text on its line, as at the end of a sentence or in a
+JSON log line, and it ends with the bundle identifier. sprintshow reads a line once it ends,
+at a newline or at the end of the command's output, so a URL written in two pieces is never
+read as a shorter one. The command then keeps running until sprintshow stops it with SIGTERM,
+when the run ends, and sprintshow waits up to a minute for it to exit.
+`examples/sample-ios/serve.mjs` is such a command: it builds the sample app, creates and boots
+a device of its own, installs and launches the app, prints its URL, and deletes the device
+when it is stopped. A port and a directory have no meaning for an app on a simulator, so
+`--port` and `--serve-dir` are refused.
 
 sprintshow builds, installs and removes no app, and creates, boots, shuts down or deletes no
 device: the caller does, or the command `--serve` starts. A run takes the app as it stands. It

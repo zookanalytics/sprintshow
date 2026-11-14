@@ -94,8 +94,11 @@ has no port. Its command does not know the device's UDID until it has created th
 so the caller cannot name it in advance. The command therefore prints the app's simulator
 URL on a line of its standard output once the app is up. That line says the app is ready,
 on which device and with which bundle, and any command can print it. sprintshow scans
-standard output, not standard error, and reads only whole lines, so a URL cut between two
-writes is never taken for a shorter one. The command has ten minutes to print it, because
+standard output, not standard error, and reads only whole lines, a line ending at a
+newline or at the end of the output, so a URL cut between two writes is never taken for a
+shorter one. The URL can stand among other text on its line, as at the end of a sentence
+or in a JSON log line: it ends with its bundle identifier, and one that goes on into a
+path, a query or a fragment names no app. The command has ten minutes to print it, because
 building an app and booting a device take minutes. On SIGTERM it stops the app and deletes
 its device. sprintshow sends SIGTERM to the command's whole process group, waits until
 every process in the group has exited, and kills what is left of it after a minute. It

@@ -31,8 +31,10 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
+import type { Readable } from 'node:stream';
 
-import { isSimulatorUrl, parseSimulatorUrl, simulatorUrl, toolEnv, SIMULATOR_URL_FORM } from './simulator.ts';
+import { findSimulatorUrl, isSimulatorUrl, parseSimulatorUrl, simulatorUrl, toolEnv, SIMULATOR_URL_FORM } from './simulator.ts';
 
 /** The port a `serve` command is polled on when no port is named. */
 export const DEFAULT_PORT = 5173;
@@ -244,22 +246,22 @@ async function serveIosApp(command: string, cwd: string, readyTimeout: number, s
     output.push(line.trim());
     output.splice(0, Math.max(0, output.length - OUTPUT_LINES));
   };
-  let partial = { out: '', err: '' };
   let found: string | null = null;
-  const read = (stream: 'out' | 'err', data: Buffer): void => {
-    const lines = (partial[stream] + data.toString('utf8')).split('\n');
-    partial = { ...partial, [stream]: lines.pop() ?? '' };
-    for (const line of lines) {
+  // Each stream is read a whole line at a time, and its last line once the stream ends,
+  // newline or none. A stream is read to its end, so a command that keeps printing never
+  // blocks on a full pipe.
+  const read = (stream: Readable | null, scan: boolean): void => {
+    if (!stream) return;
+    createInterface({ input: stream, crlfDelay: Infinity }).on('line', (line) => {
       keep(line);
-      if (stream === 'out' && !found) {
-        const app = parseSimulatorUrl(line.match(/ios-simulator:\/\/\S+/i)?.[0] ?? '');
+      if (scan && !found) {
+        const app = findSimulatorUrl(line);
         if (app) found = simulatorUrl(app);
       }
-    }
+    });
   };
-  // The streams are read to their end, so a command that keeps printing never blocks on a full pipe.
-  child.stdout?.on('data', (d: Buffer) => read('out', d));
-  child.stderr?.on('data', (d: Buffer) => read('err', d));
+  read(child.stdout, true);
+  read(child.stderr, false);
   let exit: string | null = null;
   // The command's last lines, its URL among them, can reach the engine after its exit, so
   // it has ended once its output is read to the end ('close'), not once it exits.

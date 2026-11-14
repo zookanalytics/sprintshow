@@ -99,8 +99,9 @@ const APP_URL = `ios-simulator://${UDID}/com.example.Board`;
 /**
  * A stand-in start command. It records what its environment holds, and then its process
  * once it handles SIGTERM. It prints its progress, and then the app's URL unless told to
- * fail or stay silent. Told to stop, it records that it stopped and exits, a second later
- * when its stopping is slow, and never when it is deaf to SIGTERM.
+ * fail or stay silent, in two writes half a second apart when told to cut it. Told to
+ * stop, it records that it stopped and exits, a second later when its stopping is slow,
+ * and never when it is deaf to SIGTERM.
  */
 const STAND_IN = `import { writeFileSync } from 'node:fs';
 const [record, mode, stopping] = process.argv.slice(2);
@@ -114,6 +115,10 @@ console.error('building the app');
 console.log('booting a device; the URL comes once the app is up');
 if (mode === 'fail') { console.error('xcodebuild exited 65'); process.exit(65); }
 if (mode === 'ready') setTimeout(() => console.log('ready: ${APP_URL}'), 300);
+if (mode === 'cut') {
+  process.stdout.write('ready: ${APP_URL.slice(0, -'.Board'.length)}');
+  setTimeout(() => console.log('${APP_URL.slice(-'.Board'.length)}'), 500);
+}
 setInterval(() => {}, 1 << 30);
 `;
 
@@ -196,6 +201,25 @@ test("an iOS app's --serve command is ready once it prints the app's simulator U
     await app.stop();
     assert.equal(existsSync(`${record}.stopped`), true, 'the command was told to stop, and stop resolved once it had');
   });
+});
+
+test("an iOS app's --serve command's URL is read once its line ends, at a newline or at the end of the output, so a URL cut between two writes is not taken for a shorter one", async () => {
+  await withStandIn(async (dir, record) => {
+    const cut = await ensureIosApp({ serve: `node start.mjs ${record} cut`, cwd: dir, log: quiet });
+    assert.equal(cut.baseUrl, APP_URL);
+    await cut.stop();
+    const exited = await ensureIosApp({ serve: `printf 'ready: %s' '${APP_URL}'`, cwd: dir, log: quiet });
+    assert.equal(exited.baseUrl, APP_URL, 'the last line counts with no newline after it');
+    await exited.stop();
+  });
+});
+
+test("an iOS app's --serve command can print the URL among other text on its line, as at the end of a sentence or in a JSON log line", async () => {
+  for (const line of [`App ready: ${APP_URL}.`, `{"level":"info","url":"${APP_URL}"}`, `see ${APP_URL}/more, or ${APP_URL}, now`]) {
+    const app = await ensureIosApp({ serve: `printf '%s\\n' '${line}'`, cwd: tmpdir(), log: quiet });
+    assert.equal(app.baseUrl, APP_URL, line);
+    await app.stop();
+  }
 });
 
 test("an iOS app's --serve command that exits, leaving running what prints the URL, is ready once the URL comes, and stopping it waits until what it left has stopped", async () => {
