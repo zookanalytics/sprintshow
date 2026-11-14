@@ -103,7 +103,9 @@ test('a frame stream that answers with an error ends with its status, and one th
     let count = 0;
     let ended = false;
     const stream = readMjpeg(`${base}/`, () => count++, () => (ended = true));
-    while (count < 3) await new Promise((r) => setTimeout(r, 10));
+    const deadline = Date.now() + 10_000;
+    while (count < 3 && !ended && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(count >= 3, `${count} of 3 frames arrived before the stream ${ended ? 'ended' : 'had run 10 s'}`);
     stream.close();
     const at = count;
     await new Promise((r) => setTimeout(r, 150));
