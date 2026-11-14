@@ -1,8 +1,9 @@
 // Tests for the engine's side of Appium (src/appium.ts), against stand-ins: the WebDriver
 // client against a server that answers as Appium does (appium-stand-in.ts), the MJPEG
 // reader against a server that streams parts as WebDriverAgent does, split across writes
-// at every place a part can be split, and the install of Appium's home against an npm that
-// writes the packages it is asked for. test/ios-live.test.ts runs the real Appium.
+// at every place a part can be split, the install of Appium's home against an npm that
+// writes the packages it is asked for, and the server's output against a stand-in Appium
+// in that home. test/ios-live.test.ts runs the real Appium.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { AppiumSession, WebDriverError, appiumHome, freePorts, moveIntoPlace, provisionAppium, readMjpeg } from '../src/appium.ts';
+import { AppiumSession, WebDriverError, appiumHome, freePorts, moveIntoPlace, provisionAppium, readMjpeg, startAppium } from '../src/appium.ts';
 import { standInAppium } from './appium-stand-in.ts';
 
 const PNG = Buffer.from('a stand-in screenshot');
@@ -223,4 +224,26 @@ test('free ports are as many as asked for, each a different one, and none is hel
     });
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("Appium's output is kept a whole line at a time, however its writes split the lines", async () => {
+  await withStandInNpm(false, async () => {
+    const home = await provisionAppium(() => {});
+    // A stand-in Appium that answers on the port it is given, and writes a line in two pieces.
+    writeFileSync(
+      path.join(home, 'node_modules', 'appium', 'index.js'),
+      "const port = Number(process.argv[process.argv.indexOf('--port') + 1]);\n" +
+        "require('node:http').createServer((req, res) => res.end('{\"value\":{\"ready\":true}}')).listen(port, '127.0.0.1');\n" +
+        "process.stdout.write('[Appium] Welcome\\n[XCUITestDriver] Unable to start WebDriverAgent ses');\n" +
+        "setTimeout(() => process.stdout.write('sion: xcodebuild failed with code 65\\n'), 100);\n",
+    );
+    const server = await startAppium(() => {});
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!server.output().some((l) => /code 65/.test(l)) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+      assert.deepEqual(server.output(), ['[Appium] Welcome', '[XCUITestDriver] Unable to start WebDriverAgent session: xcodebuild failed with code 65']);
+    } finally {
+      await server.stop();
+    }
+  });
 });

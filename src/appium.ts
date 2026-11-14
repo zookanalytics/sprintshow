@@ -13,8 +13,8 @@
 // It gets the engine's environment less the keys the engine holds (toolEnv), so no key
 // reaches Appium or what it starts: the XCUITest driver, simctl, xcodebuild and
 // WebDriverAgent. npm, when it installs them, gets the same environment. The server listens
-// on a free port of the loopback interface. What it prints is kept, its last lines only,
-// for the message of a session that does not start.
+// on a free port of the loopback interface. What it prints is kept a whole line at a time,
+// its last lines only, for the message of a session that does not start.
 //
 // The client speaks the W3C WebDriver protocol over fetch, with Appium's extensions: its
 // `mobile:` scripts and its settings. WebdriverIO's clients need Node 22.23.4 or later on
@@ -29,6 +29,7 @@ import { request } from 'node:http';
 import { createServer, type AddressInfo, type Server } from 'node:net';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 
 import { toolEnv } from './simulator.ts';
 
@@ -191,12 +192,15 @@ export async function startAppium(log: (m: string) => void): Promise<AppiumServe
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const lines: string[] = [];
-  const keep = (data: Buffer): void => {
-    lines.push(...data.toString('utf8').split('\n').filter((l) => l.trim()));
-    lines.splice(0, Math.max(0, lines.length - LOG_LINES));
-  };
-  child.stdout?.on('data', keep);
-  child.stderr?.on('data', keep);
+  // Each stream is kept a whole line at a time, and its last line once it ends.
+  for (const stream of [child.stdout, child.stderr]) {
+    if (!stream) continue;
+    createInterface({ input: stream, crlfDelay: Infinity }).on('line', (line) => {
+      if (!line.trim()) return;
+      lines.push(line);
+      lines.splice(0, Math.max(0, lines.length - LOG_LINES));
+    });
+  }
   let spawnError: Error | null = null;
   child.once('error', (e) => {
     spawnError = e;
