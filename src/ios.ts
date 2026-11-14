@@ -7,9 +7,11 @@
 // device is booted and has the app, and refuses a device that holds a WebDriverAgent
 // runner app another tool installed, which Appium would remove. It dresses the device
 // (simulator.ts), starts Appium, and starts a session, which installs the engine's runner
-// app (webdriveragent.ts) on the device and launches it. Then it brings the app to the
-// front as the app stands: an app that runs keeps its process, its screen and its state,
-// and one that does not is launched, with no arguments. The session never ends the app.
+// app (webdriveragent.ts) on the device and launches it. Appium and the runner app listen
+// on the loopback interface only, so no other host can watch the screen or drive the
+// device. Then the engine brings the app to the front as the app stands: an app that runs
+// keeps its process, its screen and its state, and one that does not is launched, with no
+// arguments. The session never ends the app.
 //
 // Like the terminal, the surface is a page the engine writes into the capture's browser
 // page (showIosApp): the device's screen, drawn from the frames WebDriverAgent streams of
@@ -145,6 +147,10 @@ export async function connectIosApp(baseUrl: string | undefined, log: (m: string
       // The engine's runner app, installed from its build and launched without xcodebuild.
       'appium:usePreinstalledWDA': true,
       'appium:prebuiltWDAPath': runner,
+      // Its servers, for Appium's commands and for the frames, listen on the loopback
+      // interface only, as Appium's does. Given no address, WebDriverAgent listens on every
+      // interface, where another host could watch the screen and drive the device.
+      'appium:wdaBindingIP': '127.0.0.1',
       'appium:wdaLocalPort': wdaPort,
       'appium:mjpegServerPort': framesPort,
       'appium:wdaLaunchTimeout': SESSION_START_MS,

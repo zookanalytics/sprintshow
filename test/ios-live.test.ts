@@ -9,7 +9,8 @@
 // sprintshow the app's simulator URL as --base-url. The device is set dark first, so the
 // run's light appearance and its putting the device back both show. The second hands
 // sprintshow the sample's start command as --serve, which brings the app up on a device of
-// its own and deletes the device once sprintshow stops it.
+// its own and deletes the device once sprintshow stops it. The third connects to the app
+// as a run does, and reads the addresses the runner app's servers listen on.
 //
 // Each run must save its MP4 and a PNG of each step, at the device's own size, and leave
 // the device as it was given: the app installed and running in the same process, no
@@ -22,6 +23,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { parseDemoScript } from '../src/demo-script.ts';
+import { connectIosApp } from '../src/ios.ts';
 import { stepFileName } from '../src/screenshot.ts';
 import { ffmpegBin, probeDuration } from '../src/ffmpeg.ts';
 import { simulatorUrl, statusBarOverrides, toolEnv, userApps } from '../src/simulator.ts';
@@ -78,6 +80,16 @@ function appProcess(udid: string): number | null {
     .find((l) => l.includes(`UIKitApplication:${BUNDLE_ID}`));
   const pid = Number(line?.trim().split(/\s+/)[0]);
   return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+/** The addresses that the process listening on TCP port `port` listens on, as lsof names them, such as `127.0.0.1:8100` or `*:8100`. */
+function listenerAddresses(port: number): string[] {
+  const pids = tool('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']).trim().split('\n');
+  assert.equal(pids.length, 1, `one process listens on port ${port}: ${pids.join(', ')}`);
+  return tool('lsof', ['-nP', '-a', '-p', pids[0], '-iTCP', '-sTCP:LISTEN', '-Fn'])
+    .split('\n')
+    .filter((l) => l.startsWith('n'))
+    .map((l) => l.slice(1));
 }
 
 /** Check that a run saved its video, and a PNG of each step at the device's size, light as a run sets the appearance. */
@@ -152,5 +164,18 @@ describe('an iOS app on a simulator, through Appium', { skip }, () => {
     await checkOutputs(path.join(out, 'ios.mp4'), path.join(out, 'shots'));
     assert.ok(!simctl('list', 'devices').includes(served), `the command deleted its device ${served}`);
     assert.ok(existsSync(app), "the build the command took is the caller's, and stays");
+  });
+
+  test("the runner app's servers, for Appium's commands and for the frames, listen on the loopback interface only", async () => {
+    const conn = await connectIosApp(simulatorUrl({ udid, bundleId: BUNDLE_ID }), () => {});
+    try {
+      const frames = Number(new URL(conn.frames).port);
+      const listening = listenerAddresses(frames);
+      const ports = new Set(listening.map((a) => Number(a.slice(a.lastIndexOf(':') + 1))));
+      assert.ok(ports.has(frames) && ports.size >= 2, `a server for the commands and one for the frames: ${listening.join(', ')}`);
+      assert.deepEqual(listening.filter((a) => !a.startsWith('127.0.0.1:')), [], `every server is on loopback: ${listening.join(', ')}`);
+    } finally {
+      await conn.close();
+    }
   });
 });
