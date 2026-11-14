@@ -1,15 +1,20 @@
-// Appium, which drives an iOS app for the engine: the server a run starts, the WebDriver
-// client the engine speaks to it with, and the frames WebDriverAgent streams of the
-// device's screen.
+// Appium, which drives an iOS app for the engine: where it is installed, the server a run
+// starts, the WebDriver client the engine speaks to it with, and the frames WebDriverAgent
+// streams of the device's screen.
+//
+// Appium and its XCUITest driver are not dependencies of the package, so an install that
+// drives no iOS app does not carry them. `sprintshow provision appium` installs them with
+// npm, at the versions APPIUM_PACKAGES pins, into Appium's home in the user's cache, one
+// home for each pair of versions. Appium reads its extensions from the node_modules
+// directory of its home (APPIUM_HOME). A run that finds the home missing fails with that
+// command.
 //
 // The server is a child of the engine, started for one run and stopped when the run ends.
 // It gets the engine's environment less the keys the engine holds (toolEnv), so no key
 // reaches Appium or what it starts: the XCUITest driver, simctl, xcodebuild and
-// WebDriverAgent. It listens on a free port of the loopback interface, and finds the
-// XCUITest driver where npm installed it: Appium reads its extensions from the
-// node_modules directory of its home (APPIUM_HOME), so the home is the directory whose
-// node_modules holds the driver. What the server prints is kept, its last lines only, for
-// the message of a session that does not start.
+// WebDriverAgent. npm, when it installs them, gets the same environment. The server listens
+// on a free port of the loopback interface. What it prints is kept, its last lines only,
+// for the message of a session that does not start.
 //
 // The client speaks the W3C WebDriver protocol over fetch, with Appium's extensions: its
 // `mobile:` scripts and its settings. WebdriverIO's clients need Node 22.23.4 or later on
@@ -19,14 +24,26 @@
 // each part, each part's length in its Content-Length header.
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
-import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 import { toolEnv } from './simulator.ts';
 
-const requireHere = createRequire(import.meta.url);
+/** The packages that drive an iOS app, at the versions the engine drives one with. */
+export const APPIUM_PACKAGES: Readonly<Record<'appium' | 'appium-xcuitest-driver', string>> = {
+  appium: '3.9.0',
+  'appium-xcuitest-driver': '12.22.8',
+};
+
+/**
+ * The command that installs Appium and its XCUITest driver and builds the driver's runner
+ * app, as a project that installed sprintshow runs it. A checkout of sprintshow does not
+ * reach its own command through npx, and runs it with `npm run provision:appium`.
+ */
+export const PROVISION_COMMAND = 'npx sprintshow provision appium';
 
 /** How long Appium has to answer once started. */
 const SERVER_START_MS = 60_000;
@@ -47,9 +64,66 @@ export function freePort(): Promise<number> {
   });
 }
 
-/** Appium's home: the directory whose node_modules holds the XCUITest driver. */
+/** Where Appium's home for the pinned versions is, whether or not it is provisioned. */
+function homeDir(): string {
+  const { appium, 'appium-xcuitest-driver': driver } = APPIUM_PACKAGES;
+  return path.join(homedir(), 'Library', 'Caches', 'sprintshow', 'appium', `${appium}-xcuitest-${driver}`);
+}
+
+/** Whether the node_modules directory of `dir` holds every package APPIUM_PACKAGES names. */
+function holdsAppium(dir: string): boolean {
+  return Object.keys(APPIUM_PACKAGES).every((name) => existsSync(path.join(dir, 'node_modules', name, 'package.json')));
+}
+
+/** The pinned versions, as a message names them. */
+function pinned(): string {
+  return `Appium ${APPIUM_PACKAGES.appium} and its XCUITest driver ${APPIUM_PACKAGES['appium-xcuitest-driver']}`;
+}
+
+/**
+ * Appium's home: the directory whose node_modules holds Appium and its XCUITest driver.
+ * Throws, naming the command that installs them, when they are not installed.
+ */
 export function appiumHome(): string {
-  return path.resolve(path.dirname(requireHere.resolve('appium-xcuitest-driver/package.json')), '..', '..');
+  const home = homeDir();
+  if (!holdsAppium(home)) {
+    throw new Error(`appium: ${pinned()} are not installed; install them once with \`${PROVISION_COMMAND}\`, or with \`npm run provision:appium\` in a checkout of sprintshow`);
+  }
+  return home;
+}
+
+/**
+ * Install Appium and its XCUITest driver into Appium's home, unless they are installed,
+ * and resolve with the home. npm installs them into a directory of its own beside the
+ * home, which is moved into place once whole, so an install that fails or is stopped
+ * leaves no home behind. npm runs no package's install script, since nothing the engine
+ * needs comes from one.
+ */
+export async function provisionAppium(log: (m: string) => void = (m) => console.log(m)): Promise<string> {
+  const home = homeDir();
+  if (holdsAppium(home)) {
+    log(`appium: ${pinned()} are installed: ${home}`);
+    return home;
+  }
+  mkdirSync(path.dirname(home), { recursive: true });
+  const work = mkdtempSync(path.join(path.dirname(home), '.install-'));
+  try {
+    log(`appium: installing ${pinned()} with npm…`);
+    writeFileSync(path.join(work, 'package.json'), `${JSON.stringify({ private: true, dependencies: APPIUM_PACKAGES }, null, 2)}\n`);
+    const status = await new Promise<number>((resolve, reject) => {
+      const child = spawn('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: work, env: toolEnv(), stdio: ['ignore', 'inherit', 'inherit'] });
+      child.on('error', (e: NodeJS.ErrnoException) => reject(e.code === 'ENOENT' ? new Error('appium: npm, which installs Appium, is not on PATH') : e));
+      child.on('exit', (code, signal) => resolve(signal ? 128 : (code ?? 1)));
+    });
+    if (status !== 0) throw new Error(`appium: npm exited ${status} installing ${pinned()}`);
+    if (!holdsAppium(work)) throw new Error(`appium: npm succeeded but left no ${pinned()}`);
+    rmSync(home, { recursive: true, force: true });
+    renameSync(work, home);
+    log(`appium: installed ${home}`);
+    return home;
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 }
 
 /** A running Appium server. */
@@ -77,7 +151,7 @@ function exited(child: ChildProcess, ms: number): Promise<boolean> {
 /** Start an Appium server for one run, and resolve once it answers. */
 export async function startAppium(log: (m: string) => void): Promise<AppiumServer> {
   const home = appiumHome();
-  const main = path.join(path.dirname(requireHere.resolve('appium/package.json')), 'index.js');
+  const main = path.join(home, 'node_modules', 'appium', 'index.js');
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, [main, 'server', '--address', '127.0.0.1', '--port', String(port), '--log-no-colors'], {

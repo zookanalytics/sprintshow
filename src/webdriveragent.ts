@@ -1,11 +1,11 @@
 // The runner app that Appium's XCUITest driver installs on a device and drives an iOS app
-// through: WebDriverAgent, which the appium-webdriveragent package ships as an Xcode
-// project.
+// through: WebDriverAgent, which the appium-webdriveragent package the driver depends on
+// ships as an Xcode project, in Appium's home (appium.ts).
 //
-// It is a provisioned binary. `sprintshow provision webdriveragent` builds it once with
-// the host's Xcode, for any iOS Simulator device, into the user's cache, where every run
-// finds it (runnerApp). A build is kept for each WebDriverAgent version and Xcode build,
-// so updating either asks for a new one, and a run that finds none fails with the command
+// It is a provisioned binary. `sprintshow provision appium` builds it once with the host's
+// Xcode, for any iOS Simulator device, into the user's cache, where every run finds it
+// (runnerApp). A build is kept for each WebDriverAgent version and Xcode build, so
+// updating either asks for a new one, and a run that finds none fails with the command
 // that builds it. It is built with the bundle identifier RUNNER_BUNDLE_ID, so a run tells
 // its own runner app from one that another tool installed on the device.
 //
@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
+import { appiumHome, PROVISION_COMMAND } from './appium.ts';
 import { runTool, toolEnv } from './simulator.ts';
 
 /** The bundle identifier the runner app is built with. */
@@ -25,21 +26,12 @@ export const RUNNER_BUNDLE_ID = 'com.zookanalytics.sprintshow.WebDriverAgentRunn
 export const RUNNER_APP_ID = `${RUNNER_BUNDLE_ID}.xctrunner`;
 /** The bundle name every WebDriverAgent runner app has, whoever built it. */
 export const RUNNER_BUNDLE_NAME = 'WebDriverAgentRunner-Runner';
-/**
- * The command that builds the runner app, as a project that installed sprintshow runs it.
- * A checkout of sprintshow does not reach its own command through npx, and runs it with
- * `npm run provision:webdriveragent`.
- */
-export const PROVISION_COMMAND = 'npx sprintshow provision webdriveragent';
-
 /** Where the runner app sits in a build's derived data. */
 const RUNNER_PRODUCT = path.join('Build', 'Products', 'Debug-iphonesimulator', `${RUNNER_BUNDLE_NAME}.app`);
 
-const requireHere = createRequire(import.meta.url);
-
 /** The appium-webdriveragent package the XCUITest driver depends on, which holds WebDriverAgent's Xcode project. */
 function webDriverAgentPackage(): { dir: string; version: string } {
-  const driver = requireHere.resolve('appium-xcuitest-driver/package.json');
+  const driver = path.join(appiumHome(), 'node_modules', 'appium-xcuitest-driver', 'package.json');
   const pkg = createRequire(driver).resolve('appium-webdriveragent/package.json');
   return { dir: path.dirname(pkg), version: (JSON.parse(readFileSync(pkg, 'utf8')) as { version: string }).version };
 }
@@ -69,7 +61,7 @@ export async function runnerApp(): Promise<string> {
   const { dir, version, xcode } = await buildDir();
   const app = path.join(dir, RUNNER_PRODUCT);
   if (!existsSync(app)) {
-    throw new Error(`webdriveragent: the runner app Appium installs on the device is not built for WebDriverAgent ${version} and Xcode ${xcode}; build it once with \`${PROVISION_COMMAND}\`, or with \`npm run provision:webdriveragent\` in a checkout of sprintshow`);
+    throw new Error(`webdriveragent: the runner app Appium installs on the device is not built for WebDriverAgent ${version} and Xcode ${xcode}; build it once with \`${PROVISION_COMMAND}\`, or with \`npm run provision:appium\` in a checkout of sprintshow`);
   }
   return app;
 }

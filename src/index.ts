@@ -26,8 +26,10 @@ export { lintDemo, lintCli, looksLikeDirective, looksLikeAssertion, outputPathFo
 export { ensureServer, ensureIosApp, DEFAULT_PORT, type ServeOptions, type ServerHandle } from './server.ts';
 export { parseSimulatorUrl, simulatorUrl, SIMULATOR_URL_FORM, type SimulatorApp } from './simulator.ts';
 
-// The runner app Appium installs on an iOS app's device, which
-// `sprintshow provision webdriveragent` builds.
+// What `sprintshow provision appium` installs for an iOS app script: Appium and its
+// XCUITest driver (provisionAppium), and then the runner app the driver installs on the
+// device, built from the driver's WebDriverAgent (provisionRunnerApp).
+export { provisionAppium } from './appium.ts';
 export { provisionRunnerApp } from './webdriveragent.ts';
 
 // Browser primitives for the seed-test bootstrap and custom drivers. A custom driver that

@@ -1,14 +1,18 @@
 // Tests for the engine's side of Appium (src/appium.ts), against stand-ins: the WebDriver
-// client against a server that answers as Appium does (appium-stand-in.ts), and the
-// MJPEG reader against a server that streams parts as WebDriverAgent does, split across
-// writes at every place a part can be split. test/ios-live.test.ts runs the real Appium.
+// client against a server that answers as Appium does (appium-stand-in.ts), the MJPEG
+// reader against a server that streams parts as WebDriverAgent does, split across writes
+// at every place a part can be split, and the install of Appium's home against an npm that
+// writes the packages it is asked for. test/ios-live.test.ts runs the real Appium.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
-import { AppiumSession, WebDriverError, readMjpeg } from '../src/appium.ts';
+import { AppiumSession, WebDriverError, appiumHome, provisionAppium, readMjpeg } from '../src/appium.ts';
 import { standInAppium } from './appium-stand-in.ts';
 
 const PNG = Buffer.from('a stand-in screenshot');
@@ -108,4 +112,64 @@ test('a frame stream that answers with an error ends with its status, and one th
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+/**
+ * Run `body` with a home of its own and a stand-in npm first on PATH, which records each
+ * call (its arguments, the package.json it was run beside, and the engine's keys it was
+ * given) and writes the packages that package.json names, or, given `fail`, writes one and
+ * exits 1. The engine's keys are set, so a key that reached npm shows. Resolves with the
+ * recorded calls.
+ */
+async function withStandInNpm(fail: boolean, body: (home: string) => Promise<void>): Promise<string[]> {
+  const dir = mkdtempSync(path.join(tmpdir(), 'sprintshow-appium-'));
+  const bin = path.join(dir, 'bin');
+  const calls = path.join(dir, 'npm-calls');
+  mkdirSync(bin);
+  writeFileSync(
+    path.join(bin, 'npm'),
+    '#!/bin/sh\n' +
+      `printf '%s | %s | %s %s\\n' "$*" "$(tr -d ' \\n' < package.json)" "\${OPENAI_API_KEY:-no OpenAI key}" "\${VERCEL_AUTOMATION_BYPASS_SECRET:-no bypass key}" >> '${calls}'\n` +
+      (fail
+        ? "mkdir -p node_modules/appium && echo '{}' > node_modules/appium/package.json && exit 1\n"
+        : "for p in appium appium-xcuitest-driver; do mkdir -p node_modules/$p && echo '{}' > node_modules/$p/package.json; done\n"),
+    { mode: 0o755 },
+  );
+  const saved = { HOME: process.env.HOME, PATH: process.env.PATH, OPENAI_API_KEY: process.env.OPENAI_API_KEY, VERCEL_AUTOMATION_BYPASS_SECRET: process.env.VERCEL_AUTOMATION_BYPASS_SECRET };
+  Object.assign(process.env, { HOME: path.join(dir, 'home'), PATH: `${bin}${path.delimiter}${process.env.PATH}`, OPENAI_API_KEY: 'sk-engine', VERCEL_AUTOMATION_BYPASS_SECRET: 'bypass-engine' });
+  try {
+    await body(path.join(dir, 'home'));
+    return readFileSync(calls, 'utf8').trim().split('\n');
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const NOT_INSTALLED = /^Error: appium: Appium 3\.9\.0 and its XCUITest driver 12\.22\.8 are not installed; install them once with `npx sprintshow provision appium`, or with `npm run provision:appium` in a checkout of sprintshow$/;
+
+test('provision installs the pinned Appium and XCUITest driver into Appium\'s home with npm, once, with no install script and no key', async () => {
+  const calls = await withStandInNpm(false, async (home) => {
+    assert.throws(() => appiumHome(), NOT_INSTALLED);
+    const logs: string[] = [];
+    const installed = await provisionAppium((m) => logs.push(m));
+    assert.equal(installed, path.join(home, 'Library', 'Caches', 'sprintshow', 'appium', '3.9.0-xcuitest-12.22.8'));
+    assert.equal(appiumHome(), installed);
+    assert.deepEqual(readdirSync(path.dirname(installed)), [path.basename(installed)], 'nothing of the install is left beside the home');
+    assert.equal(await provisionAppium((m) => logs.push(m)), installed);
+    assert.equal(logs.at(-1), `appium: Appium 3.9.0 and its XCUITest driver 12.22.8 are installed: ${installed}`);
+  });
+  assert.deepEqual(calls, ['install --ignore-scripts --no-audit --no-fund | {"private":true,"dependencies":{"appium":"3.9.0","appium-xcuitest-driver":"12.22.8"}} | no OpenAI key no bypass key'], 'npm ran once');
+});
+
+test('an install npm fails leaves no home, and a run still names the command', async () => {
+  const calls = await withStandInNpm(true, async (home) => {
+    await assert.rejects(provisionAppium(() => {}), /^Error: appium: npm exited 1 installing Appium 3\.9\.0 and its XCUITest driver 12\.22\.8$/);
+    assert.deepEqual(readdirSync(path.join(home, 'Library', 'Caches', 'sprintshow', 'appium')), [], 'no home and no install directory');
+    assert.throws(() => appiumHome(), NOT_INSTALLED);
+  });
+  assert.equal(calls.length, 1);
 });

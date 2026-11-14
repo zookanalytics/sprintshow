@@ -87,11 +87,11 @@ test('run and screenshot both refuse a --port that is not a whole number, before
   }
 });
 
-test('provision refuses anything but webdriveragent, and any option, before it builds', async () => {
-  for (const args of [[], ['ffmpeg'], ['webdriveragent', 'ffmpeg'], ['webdriveragent', '--headed']]) {
+test('provision refuses anything but appium, and any option, before it installs', async () => {
+  for (const args of [[], ['ffmpeg'], ['webdriveragent'], ['appium', 'ffmpeg'], ['appium', '--headed']]) {
     const res = await runCli(['provision', ...args]);
     assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
-    assert.match(res.stderr, /^provision: name what to build \(webdriveragent\), and no option/, args.join(' '));
-    assert.doesNotMatch(res.stdout, /webdriveragent: /, 'nothing was built or looked up');
+    assert.match(res.stderr, /^provision: name what to install \(appium\), and no option/, args.join(' '));
+    assert.doesNotMatch(res.stdout, /(appium|webdriveragent): /, 'nothing was installed, built or looked up');
   }
 });

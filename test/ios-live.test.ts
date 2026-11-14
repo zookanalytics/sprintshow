@@ -1,8 +1,8 @@
 // Live tests of an iOS app script: demos/ios.md, driven through Appium on a real iOS
 // Simulator device, against the sample app (examples/sample-ios). They run where a capture
-// of an iOS app can, on macOS with Xcode, an iOS Simulator runtime and the provisioned
-// runner app, and skip elsewhere with the reason, as CI's Linux runners do. There,
-// test/ios.test.ts drives the surface against a stand-in.
+// of an iOS app can, on macOS with Xcode, an iOS Simulator runtime, and Appium and its
+// runner app provisioned, and skip elsewhere with the reason, as CI's Linux runners do.
+// There, test/ios.test.ts drives the surface against a stand-in.
 //
 // The first test does what a caller does with an app already running: it builds the
 // sample, creates and boots a device of its own, installs and launches the app, and hands
