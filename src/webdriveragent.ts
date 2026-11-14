@@ -17,7 +17,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { appiumHome, PROVISION_COMMAND } from './appium.ts';
+import { appiumHome, moveIntoPlace, PROVISION_COMMAND } from './appium.ts';
 import { runTool, toolEnv } from './simulator.ts';
 
 /** The bundle identifier the runner app is built with. */
@@ -70,7 +70,8 @@ export async function runnerApp(): Promise<string> {
  * Build the runner app for this WebDriverAgent version and this Xcode, unless it is built.
  * It is built into a directory of its own beside the cache's builds and moved into place
  * once it is whole, so a build that fails or is stopped leaves no runner app behind, and
- * only its products are kept. Resolves with the runner app.
+ * only its products are kept. Of two builds that run at once, the first to finish is kept.
+ * Resolves with the runner app.
  */
 export async function provisionRunnerApp(log: (m: string) => void = (m) => console.log(m)): Promise<string> {
   const { dir, version, xcode } = await buildDir();
@@ -103,9 +104,8 @@ export async function provisionRunnerApp(log: (m: string) => void = (m) => conso
     if (!existsSync(path.join(work, 'derived', RUNNER_PRODUCT))) throw new Error('webdriveragent: xcodebuild succeeded but left no runner app');
     mkdirSync(path.join(work, 'kept', 'Build'), { recursive: true });
     renameSync(path.join(work, 'derived', 'Build', 'Products'), path.join(work, 'kept', 'Build', 'Products'));
-    rmSync(dir, { recursive: true, force: true });
-    renameSync(path.join(work, 'kept'), dir);
-    log(`webdriveragent: built ${app}`);
+    const moved = moveIntoPlace(path.join(work, 'kept'), dir, (d) => existsSync(path.join(d, RUNNER_PRODUCT)));
+    log(moved ? `webdriveragent: built ${app}` : `webdriveragent: the runner app for WebDriverAgent ${version} and Xcode ${xcode} is built: ${app}`);
     return app;
   } finally {
     rmSync(work, { recursive: true, force: true });

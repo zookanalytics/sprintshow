@@ -47,9 +47,11 @@ project in that home. So one command sets a host up for iOS app demos, as
 `provision:browser` sets one up for a page. npm installs them as it installs any project's
 dependencies, under its own policy for install scripts, as it did when they were the
 package's dependencies, into a directory of its own that is moved into place once whole.
-The packages below the two pinned ones are the versions npm resolves when it installs
-them, as they are for any project that installs the package, and a host keeps the tree it
-installed. A run that finds no home fails with the command.
+Of two installs that run at once, the first to finish makes the home, and the other leaves
+it in place, because a run may be reading Appium from it. The runner app's build is kept
+the same way. The packages below the two pinned ones are the versions npm resolves when it
+installs them, as they are for any project that installs the package, and a host keeps the
+tree it installed. A run that finds no home fails with the command.
 
 Two other ways were weighed:
 

@@ -6,13 +6,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { AppiumSession, WebDriverError, appiumHome, freePorts, provisionAppium, readMjpeg } from '../src/appium.ts';
+import { AppiumSession, WebDriverError, appiumHome, freePorts, moveIntoPlace, provisionAppium, readMjpeg } from '../src/appium.ts';
 import { standInAppium } from './appium-stand-in.ts';
 
 const PNG = Buffer.from('a stand-in screenshot');
@@ -172,6 +172,44 @@ test('an install npm fails leaves no home, and a run still names the command', a
     assert.throws(() => appiumHome(), NOT_INSTALLED);
   });
   assert.equal(calls.length, 1);
+});
+
+test('of two provisions that run at once, the first to finish makes the home, and the other leaves it as it is', async () => {
+  const calls = await withStandInNpm(false, async (home) => {
+    const logs: string[][] = [[], []];
+    const homes = await Promise.all(logs.map((log) => provisionAppium((m) => log.push(m))));
+    const installed = path.join(home, 'Library', 'Caches', 'sprintshow', 'appium', '3.9.0-xcuitest-12.22.8');
+    assert.deepEqual(homes, [installed, installed]);
+    assert.deepEqual(logs.map((log) => log.at(-1)).sort(), [`appium: Appium 3.9.0 and its XCUITest driver 12.22.8 are installed: ${installed}`, `appium: installed ${installed}`]);
+    assert.deepEqual(readdirSync(path.dirname(installed)), [path.basename(installed)], 'nothing of either install is left beside the home');
+  });
+  assert.equal(calls.length, 2, 'npm ran for each');
+});
+
+test('a directory moves into place unless one that is whole is there already, and one that is not whole is replaced', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'sprintshow-place-'));
+  try {
+    const whole = (d: string): boolean => existsSync(path.join(d, 'whole'));
+    const made = (name: string): string => {
+      mkdirSync(path.join(dir, name));
+      writeFileSync(path.join(dir, name, 'whole'), name);
+      return path.join(dir, name);
+    };
+    const home = path.join(dir, 'home');
+    assert.equal(moveIntoPlace(made('first'), home, whole), true);
+    const second = made('second');
+    assert.equal(moveIntoPlace(second, home, whole), false);
+    assert.equal(readFileSync(path.join(home, 'whole'), 'utf8'), 'first', 'the whole one in place is kept');
+    assert.ok(existsSync(second), 'the one not moved is left to its caller');
+    rmSync(path.join(home, 'whole'));
+    writeFileSync(path.join(home, 'part'), '');
+    assert.equal(moveIntoPlace(second, home, whole), true);
+    assert.deepEqual(readdirSync(home), ['whole'], 'the one in place that was not whole is replaced');
+    assert.equal(readFileSync(path.join(home, 'whole'), 'utf8'), 'second');
+    assert.deepEqual(readdirSync(dir), ['home']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('free ports are as many as asked for, each a different one, and none is held once they resolve', async () => {

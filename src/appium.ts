@@ -105,10 +105,32 @@ export function appiumHome(): string {
 }
 
 /**
+ * Move the directory `work` to `dir`, and return whether it moved. A `dir` in place that is
+ * `whole`, as another run that finished first left it, is kept, because a run may be
+ * reading from it, and `work` is left to its caller. One that is not whole is replaced.
+ */
+export function moveIntoPlace(work: string, dir: string, whole: (dir: string) => boolean): boolean {
+  try {
+    renameSync(work, dir);
+    return true;
+  } catch (e) {
+    // A rename onto a directory that holds anything fails, so of two runs that finish
+    // together, the first to move its directory into place keeps it.
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOTEMPTY' && code !== 'EEXIST') throw e;
+  }
+  if (whole(dir)) return false;
+  rmSync(dir, { recursive: true, force: true });
+  renameSync(work, dir);
+  return true;
+}
+
+/**
  * Install Appium and its XCUITest driver into Appium's home, unless they are installed,
  * and resolve with the home. npm installs them as it installs any project's dependencies,
  * into a directory of its own beside the home, which is moved into place once whole, so
- * an install that fails or is stopped leaves no home behind.
+ * an install that fails or is stopped leaves no home behind. Of two installs that run at
+ * once, the first to finish makes the home, and the other leaves it as it is.
  */
 export async function provisionAppium(log: (m: string) => void = (m) => console.log(m)): Promise<string> {
   const home = homeDir();
@@ -128,9 +150,7 @@ export async function provisionAppium(log: (m: string) => void = (m) => console.
     });
     if (status !== 0) throw new Error(`appium: npm exited ${status} installing ${pinned()}`);
     if (!holdsAppium(work)) throw new Error(`appium: npm succeeded but left no ${pinned()}`);
-    rmSync(home, { recursive: true, force: true });
-    renameSync(work, home);
-    log(`appium: installed ${home}`);
+    log(moveIntoPlace(work, home, holdsAppium) ? `appium: installed ${home}` : `appium: ${pinned()} are installed: ${home}`);
     return home;
   } finally {
     rmSync(work, { recursive: true, force: true });
