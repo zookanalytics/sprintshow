@@ -434,12 +434,33 @@ describe("a walkthrough's screenshot ends the stretch it can show at a frame the
       const lines: string[] = [];
       const shots = stepScreenshots(STEP, path.join(dir, 'shots'), quiet);
       const shown = await screenshotStep(page, bare, shots, recording, STEP.steps[0], (m) => lines.push(m));
+      assert.ok(shown, "a still the page gives has a stretch of the recording");
       await check(shown, await page.evaluate(() => (window as unknown as { __markers: number }).__markers), lines, page);
     } finally {
       await page.close();
       cleanup();
     }
   }
+
+  test('a surface that takes its own stills saves the step\'s, which changes nothing in the page, so the recording has nothing to cut', async () => {
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage({ viewport: VIEWPORT });
+    try {
+      await page.setContent('<body style="margin:0;background:#fff"><main id="app">app</main></body>');
+      const html = await page.content();
+      let settled = 0;
+      const own = { settle: async () => void settled++, still: async (file: string) => writeFileSync(file, 'the device screenshot'), close: async () => {} };
+      const shots = stepScreenshots(STEP, path.join(dir, 'shots'), quiet);
+      const recording: RecordingFrames = { start: () => 0, firstFrom: () => assert.fail('the recording is not asked for a frame') };
+      assert.equal(await screenshotStep(page, own, shots, recording, STEP.steps[0], quiet), null);
+      assert.equal(settled, 1, 'the surface settled before its still');
+      assert.deepEqual(shots.saved.map((f) => readFileSync(f, 'utf8')), ['the device screenshot']);
+      assert.equal(await page.content(), html, 'the page is as it was');
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
 
   test('it draws a frame anew until one drawn after the still reaches the recording, and ends there', async () => {
     let asks = 0;
@@ -485,6 +506,7 @@ describe("a walkthrough's screenshot ends the stretch it can show at a frame the
       assert.ok(refused, 'the page refuses an image from a data: URL');
       const lines: string[] = [];
       const shown = await screenshotStep(page, bare, stepScreenshots(STEP, path.join(dir, 'shots'), quiet), recording, STEP.steps[0], (m) => lines.push(m));
+      assert.ok(shown);
       assert.deepEqual(lines, [], 'it says nothing of a stretch that ends at a frame of the recording');
       assert.equal(recording.firstFrom(shown.to), shown.to, 'the stretch ends at a frame the recording has');
     } finally {
@@ -507,6 +529,7 @@ describe('a still and its marker on a page of their own', { skip }, () => {
       const recording: RecordingFrames = { start: () => 0, firstFrom: (wall) => wall + 1 };
       const bare = { settle: async () => {}, close: async () => {} };
       const shown = await screenshotStep(page, bare, stepScreenshots(STEP, path.join(dir, 'shots'), quiet), recording, STEP.steps[0], quiet);
+      assert.ok(shown);
       assert.ok(shown.from < shown.to, 'the stretch ends at a frame the recording has');
     } finally {
       await page.close();
@@ -590,6 +613,7 @@ describe('a still and its marker on a page of their own', { skip }, () => {
       const recording: RecordingFrames = { start: () => 0, firstFrom: (wall) => wall + 1 };
       const bare = { settle: async () => {}, close: async () => {} };
       const shown = await screenshotStep(page, bare, stepScreenshots(STEP, path.join(dir, 'shots'), quiet), recording, STEP.steps[0], quiet);
+      assert.ok(shown);
       const ended = await page.evaluate(() => (window as unknown as { __ended?: number }).__ended);
       assert.ok(ended !== undefined, 'the ripple ran to its end');
       // The cut reaches 200 ms before the still, the frame before the cut starts up to 40 ms

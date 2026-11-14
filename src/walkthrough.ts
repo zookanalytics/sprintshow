@@ -14,16 +14,17 @@
 // every size whole in one frame.
 //
 // An iOS app is connected to before the recording starts (connectSurface), because a
-// recording films from the page's first frame and connecting takes seconds. Its screen is
-// settled once each step is done, so the capture fails, instead of filming on, once the
-// frames of the screen stop reaching the page.
+// recording films from the page's first frame and connecting takes seconds. The surface is
+// settled once each step is done, so the video films where the step ends, and the capture
+// fails, instead of filming on, once the frames of an iOS app's screen stop reaching the
+// page.
 //
 // Given a screenshot directory, it saves a PNG of the state each step leaves
 // (screenshot.ts) in the page it films. That page alone holds the app's state, since
 // another page would have to drive the app again, so a still that leaves out the engine's
-// chrome is a frame the filmed page draws, and the recording can show it. An iOS app's
-// still is the device's own screenshot, which changes nothing in the page, so the video
-// cuts nothing for it. The video cuts
+// chrome is a frame the filmed page draws, and the recording can show it. A surface that
+// takes its own stills, such as an iOS app, whose still is the device's own screenshot,
+// changes nothing in the page, so the video cuts nothing for it. The video cuts
 // the frames of the stretch in which each still is taken, reaching a little before the
 // still and a little past the first frame of the recording that shows the walkthrough
 // again (stillCuts). A still waits for the animations running in the page to end, the
@@ -37,7 +38,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from 'playwright';
 
-import { parseDemoScript, outputSlug, surfaceOf, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { parseDemoScript, outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
 import { requireFfmpeg, run, probeDuration, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
 import { installPointer, runStep, connectSurface, chromiumLaunchArgs, contextOptions, videoFrame, type Surface, type SurfaceConnection } from './browser.ts';
 import { showCaption, markFrame, removeMarker, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
@@ -206,17 +207,19 @@ async function walkStep(page: Page, base: string, step: DemoStep, total: number,
 }
 
 /**
- * Save the screenshot of the step just walked, and return the stretch of the recording
- * that taking it can show. Once the still is taken, a frame that shows nothing new is
- * drawn (markFrame), and every frame drawn after the one the browser first shows it in
- * shows the walkthrough again. A recording places a frame at the time it was drawn, which
- * comes before the time it was shown, and it can miss a frame, holding the still's page
- * for as long as the page draws no other. So such frames are drawn until one drawn after
- * the first reaches the recording.
+ * Save the screenshot of the step just walked, once the surface has settled, and return
+ * the stretch of the recording that taking it can show, or null for a surface that takes
+ * its own stills (Surface.still), which changes nothing in the page. Once the still is
+ * taken, a frame that shows nothing new is drawn (markFrame), and every frame drawn after
+ * the one the browser first shows it in shows the walkthrough again. A recording places a
+ * frame at the time it was drawn, which comes before the time it was shown, and it can
+ * miss a frame, holding the still's page for as long as the page draws no other. So such
+ * frames are drawn until one drawn after the first reaches the recording.
  */
-export async function screenshotStep(page: Page, surface: Surface, shots: StepScreenshots, recording: RecordingFrames, step: DemoStep, log: (m: string) => void): Promise<Still> {
+export async function screenshotStep(page: Page, surface: Surface, shots: StepScreenshots, recording: RecordingFrames, step: DemoStep, log: (m: string) => void): Promise<Still | null> {
   await surface.settle();
   const from = await shots.take(page, surface, step, QUIET_MS);
+  if (surface.still) return null;
   const shown = (await markFrame(page)) ?? Date.now();
   try {
     for (let tries = 0; tries < RESHOW_TRIES; tries++) {
@@ -306,14 +309,14 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
       const { proved, shownAt } = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
       segments.push({ narration: step.narration, wall: shownAt, card: false });
       if (!proved) failures++;
-      if (surfaceOf(demo) === 'ios') {
-        // The page shows an iOS app's screen from the frames its device streams. Settling
-        // films the step's end before the next step starts, and fails the capture once the
-        // frames have stopped, instead of filming a screen the app has moved past.
+      // The surface settles before the next step starts, so the video films where the step
+      // ends, and a capture fails here, instead of filming on, once the frames of an iOS
+      // app's screen stop reaching the page. Taking a still settles it first.
+      if (shots) {
+        const still = await screenshotStep(page, surface, shots, recording, step, log);
+        if (still) stills.push(still);
+      } else {
         await surface.settle();
-        if (shots) await shots.take(page, surface, step);
-      } else if (shots) {
-        stills.push(await screenshotStep(page, surface, shots, recording, step, log));
       }
     }
 

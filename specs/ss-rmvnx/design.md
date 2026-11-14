@@ -156,11 +156,10 @@ reached the engine after it.
 page could not draw a frame. A capture then fails, rather than filming or saving a screen
 the app has moved past while its proofs, which read the app through Appium, still hold.
 WebDriverAgent sends a frame at every tick, and backs off at most 10 s after a screenshot
-it fails to take, so a healthy stream comes well within the wait. Proof mode settles the
-surface after each step, and the walkthrough settles an iOS app after each step, with or
-without screenshots. Reconnecting to the stream once it ends was weighed. It would still
-need the failure for a stream that does not come back, so a run fails at the first loss
-instead, and can be run again.
+it fails to take, so a healthy stream comes well within the wait. Proof mode and the
+walkthrough settle the surface after each step, with or without screenshots. Reconnecting
+to the stream once it ends was weighed. It would still need the failure for a stream that
+does not come back, so a run fails at the first loss instead, and can be run again.
 
 A walkthrough connects to the app before it starts recording. A recording films a page
 from its first frame, blank or not: a probe that waited 5 s before painting a page made a
