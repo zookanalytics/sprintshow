@@ -89,6 +89,14 @@ export const IOS_VERBS: readonly IosVerb[] = ['wait', 'waitFor', 'waitForText', 
 
 /** One key a `press` presses: a key name as Playwright's keyboard names it, or text to type. */
 export type PressKey = { key: string } | { text: string };
+/** The keys a `press` in an iOS app script presses, besides text to type: those an iOS app types a character for. */
+export const IOS_KEYS = ['Enter', 'Tab', 'Backspace', 'Space'] as const;
+export type IosKey = (typeof IOS_KEYS)[number];
+
+/** The keys among `keys` that a `press` in an iOS app cannot press, by name, in order. */
+export function keysIosLacks(keys: readonly PressKey[]): string[] {
+  return keys.flatMap((k) => ('key' in k && !(IOS_KEYS as readonly string[]).includes(k.key) ? [k.key] : []));
+}
 
 export interface DemoAction {
   verb: ActionVerb;

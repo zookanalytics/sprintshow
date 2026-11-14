@@ -33,7 +33,7 @@
 import { writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 
-import { compareCount, matchText, type Assertion, type DemoAction } from './demo-script.ts';
+import { compareCount, keysIosLacks, matchText, IOS_KEYS, type Assertion, type DemoAction, type IosKey } from './demo-script.ts';
 import { AppiumSession, freePort, readMjpeg, startAppium, type AppiumServer, type FrameStream } from './appium.ts';
 import { checkApp, dressDevice, parseSimulatorUrl, simctl, userApps, SIMULATOR_URL_FORM, type SimulatorApp } from './simulator.ts';
 import { runnerApp, RUNNER_APP_ID, RUNNER_BUNDLE_NAME } from './webdriveragent.ts';
@@ -367,8 +367,8 @@ async function texts(session: AppiumSession, el: string): Promise<string[]> {
   return out;
 }
 
-/** The keys a `press` presses in an iOS app, each with the character it types into the field that has the keyboard's focus. */
-const IOS_KEYS: Record<string, string> = { Enter: '\n', Tab: '\t', Backspace: '\b', Space: ' ' };
+/** The character each key a `press` presses in an iOS app types into the field that has the keyboard's focus. */
+const KEY_TEXT: Record<IosKey, string> = { Enter: '\n', Tab: '\t', Backspace: '\b', Space: ' ' };
 
 /** How an iOS app's actions are paced and shown. */
 export interface IosPace {
@@ -436,10 +436,11 @@ export async function runIosAction(page: Page, act: DemoAction, pace: IosPace): 
     }
     case 'press': {
       const keys = act.keys ?? [];
+      // A press with a key the app has none of presses none of its keys.
+      const lacked = keysIosLacks(keys);
+      if (lacked.length) throw new Error(`an iOS app takes ${IOS_KEYS.join(', ')} or a "quoted string", not ${lacked.join(', ')}`);
       for (const [i, k] of keys.entries()) {
-        const text = 'text' in k ? k.text : IOS_KEYS[k.key];
-        if (text === undefined) throw new Error(`an iOS app takes ${Object.keys(IOS_KEYS).join(', ')} or a "quoted string", not ${'key' in k ? k.key : ''}`);
-        await session.keys(text);
+        await session.keys('text' in k ? k.text : KEY_TEXT[k.key as IosKey]);
         const pause = i + 1 < keys.length ? pace.keyPause : pace.pause;
         if (pause > 0) await page.waitForTimeout(pause);
       }

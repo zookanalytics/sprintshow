@@ -125,7 +125,7 @@ false for a field that held the keyboard and took the typing.
 |---|---|
 | `click` | A tap on the element (W3C element click). |
 | `type` | A tap on the field, a clear, and the text typed (element value). |
-| `press` | Keys typed into the field with the keyboard's focus: Enter as a Return, Tab, Backspace and Space as their characters, and a quoted string as typed. Other keys have no iOS keyboard counterpart and are refused. |
+| `press` | Keys typed into the field with the keyboard's focus: Enter as a Return, Tab, Backspace and Space as their characters, and a quoted string as typed. Other keys have no iOS keyboard counterpart, so a press with one presses none of its keys, and the linter reports it. |
 | `scroll` | `mobile: scrollToElement`. |
 | `waitFor`, `waitForText` | Polling the element's display state, its label and its value. |
 

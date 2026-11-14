@@ -379,7 +379,7 @@ name, an action takes the first.
 |---|---|
 | `click <sel>` | Taps the element. |
 | `type <sel> ~ <text>` | Taps the field, clears it, and types the text. |
-| `press <keys>` | Types each key into the field that has the keyboard's focus: `Enter` (Return), `Tab`, `Backspace`, `Space`, or a `"quoted string"`. |
+| `press <keys>` | Types each key into the field that has the keyboard's focus: `Enter` (Return), `Tab`, `Backspace`, `Space`, or a `"quoted string"`. A press with any other key presses none of its keys, and the linter reports it. |
 | `scroll <sel>` | Scrolls until the element shows. |
 | `waitFor <sel>` | Waits until the element shows. |
 | `waitForText <sel> ~ <text>` | Waits until the element's label or value holds the text. |

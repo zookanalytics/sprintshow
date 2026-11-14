@@ -12,7 +12,9 @@
 // only that surface's directives and assertions. One written for another surface is
 // dropped as prose, so the linter names the surface it belongs to. A directive whose verb
 // is its own surface's is dropped only when its arguments do not parse, and the linter
-// says so.
+// says so. A `press` reads its keys the same way on every surface, so a press in an iOS
+// app script can name a key the app has none of, which a capture skips, and the linter
+// warns of it.
 //
 // A device a page script names is checked against the device names in the environment,
 // which the CLI reads from Playwright's registry, the one a capture looks it up in.
@@ -21,7 +23,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { devices } from 'playwright';
 
-import { parseDemoScript, deviceName, unknownDevice, ACTION_VERBS, ASSERTION_KINDS, TERMINAL_VERBS, TERMINAL_ASSERTION_KINDS, SURFACE_VOCABULARY, VIEWPORT_SIZE_FORM, outputSlug, surfaceOf, type Demo, type SurfaceKind } from './demo-script.ts';
+import { parseDemoScript, deviceName, keysIosLacks, unknownDevice, ACTION_VERBS, ASSERTION_KINDS, IOS_KEYS, TERMINAL_VERBS, TERMINAL_ASSERTION_KINDS, SURFACE_VOCABULARY, VIEWPORT_SIZE_FORM, outputSlug, surfaceOf, type Demo, type SurfaceKind } from './demo-script.ts';
 
 /** Step-count window from the demo-authoring contract: under 5 is thin, over 12 spans too much. */
 const MIN_STEPS = 5;
@@ -217,6 +219,17 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
           ? `\`${code}\` has malformed arguments: ${ARGUMENTS[own] ?? 'they do not parse'} — it is IGNORED at capture time.`
           : `\`${code}\` ${other ? `is ${OF_SURFACE[other]} directive in ${SCRIPT_KIND[surface]}` : 'is not a known directive'} — it is IGNORED at capture time (verbs: ${verbs.join(', ')}).`,
       );
+    }
+
+    // An iOS app types a character for only some keys, so a capture skips a press that has
+    // another, and the steps after it run without it.
+    if (surface === 'ios') {
+      for (const act of step.actions) {
+        const lacked = keysIosLacks(act.keys ?? []);
+        if (lacked.length) {
+          add('warn', step.index, `\`${act.raw}\` presses ${lacked.join(', ')}, which an iOS app has no key for — the capture SKIPS the whole press. An iOS app takes ${IOS_KEYS.join(', ')} or a "quoted string".`);
+        }
+      }
     }
 
     // A row or column past the terminal's edge is one no screen has.

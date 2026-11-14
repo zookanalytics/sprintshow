@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseDemoScript, parseAction, parseAssertion, parseMatcher, parseKeys, parseTerminalSpec, parseDeviceSpec, parseViewportSize, deviceName, unknownDevice, surfaceOf, slugify, outputSlug, matchText, DEFAULT_TERMINAL } from '../src/demo-script.ts';
+import { parseDemoScript, parseAction, parseAssertion, parseMatcher, parseKeys, parseTerminalSpec, parseDeviceSpec, parseViewportSize, deviceName, unknownDevice, surfaceOf, slugify, outputSlug, keysIosLacks, matchText, DEFAULT_TERMINAL } from '../src/demo-script.ts';
 
 const SCRIPT = `# Demo: Task Board
 
@@ -312,6 +312,11 @@ test('terminal: press splits keys from quoted text, and refuses an open or empty
   assert.deepEqual(parseKeys('ArrowDown ArrowDown Enter'), [{ key: 'ArrowDown' }, { key: 'ArrowDown' }, { key: 'Enter' }]);
   assert.deepEqual(parseKeys('":wq" Enter " "'), [{ text: ':wq' }, { key: 'Enter' }, { text: ' ' }]);
   for (const bad of ['', '"open', '""', '"a"b', 'a"b']) assert.equal(parseKeys(bad), null, bad);
+});
+
+test("the keys a press in an iOS app lacks are those it types no character for, in order, and never text", () => {
+  assert.deepEqual(keysIosLacks(parseKeys('Enter Tab Backspace Space "Escape"') ?? []), []);
+  assert.deepEqual(keysIosLacks(parseKeys('"a" Escape Enter ArrowDown enter constructor') ?? []), ['Escape', 'ArrowDown', 'enter', 'constructor']);
 });
 
 test("a text matcher holds when its regex finds a match in the text, or when the text holds its substring", () => {

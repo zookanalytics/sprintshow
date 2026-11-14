@@ -123,18 +123,18 @@ test('a step\'s actions reach the app as taps, typing and keys, its proof reads 
   }
 });
 
-test('a proof that the app does not bear fails, and a key an iOS app has none of is logged and sends nothing', { skip }, async () => {
+test('a proof that the app does not bear fails, and a press with a key an iOS app has none of is logged and sends none of its keys', { skip }, async () => {
   const { appium, conn } = await board();
   const page = await browser!.newPage({ viewport: VIEWPORT });
   try {
     const surface = await showIosApp(page, conn, { title: 'x', log: quiet });
-    const step = parseDemoScript(`# Demo: x\n\n**Platform:** iOS\n\n## Steps\n\n1. **Escape is not a key of the app**\n   \`press Escape\`\n   _Prove:_ a task — \`count task >= 1\`\n`).steps[0];
+    const step = parseDemoScript(`# Demo: x\n\n**Platform:** iOS\n\n## Steps\n\n1. **Escape is not a key of the app**\n   \`press "a" Enter Escape\`\n   _Prove:_ a task — \`count task >= 1\`\n`).steps[0];
     const lines: string[] = [];
     const at = appium.commands.length;
     const started = Date.now();
     const proof = await runStep(page, '', step, 1, false, (m) => lines.push(m));
     assert.equal(proof.proved, false);
-    assert.match(lines.join('\n'), /action `press Escape` did not settle: an iOS app takes Enter, Tab, Backspace, Space or a "quoted string", not Escape/);
+    assert.match(lines.join('\n'), /action `press "a" Enter Escape` did not settle: an iOS app takes Enter, Tab, Backspace, Space or a "quoted string", not Escape/);
     assert.match(proof.reason, /_Prove:_ did not hold: `count task >= 1`/);
     assert.ok(!appium.commands.slice(at).some((c) => c.startsWith('POST /keys')));
     assert.ok(Date.now() - started >= 9000, 'the proof was polled for its time');

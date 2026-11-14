@@ -389,3 +389,13 @@ test('an iOS app script whose steps perform no action is warned that it shows th
   assert.ok(findings.some((f) => f.step === null && /no step performs an action — the capture shows the app as it was given/.test(f.message)));
   assert.ok(!findings.some((f) => /prose only/.test(f.message)));
 });
+
+test("a press in an iOS app script is warned of each key the app has none of, which a capture skips the press for, and a page script's is not", () => {
+  const steps = (platform: string) => `# Demo: X\n\n${platform}\n\n## Steps\n\n1. **Keys**\n   \`press Enter Tab Backspace Space "hello"\`\n   _Prove:_ the board — \`visible board\`\n\n2. **More keys**\n   \`press "a" Escape Shift+Tab\`\n   _Prove:_ the board — \`visible board\`\n`;
+  const ios = messagesFor(steps('**Platform:** iOS')).filter((f) => /presses/.test(f.message));
+  assert.deepEqual(
+    ios.map((f) => [f.severity, f.step, f.message]),
+    [['warn', 2, '`press "a" Escape Shift+Tab` presses Escape, Shift+Tab, which an iOS app has no key for — the capture SKIPS the whole press. An iOS app takes Enter, Tab, Backspace, Space or a "quoted string".']],
+  );
+  assert.deepEqual(messagesFor(steps('**Start:** `/`')).filter((f) => /presses/.test(f.message)), []);
+});
