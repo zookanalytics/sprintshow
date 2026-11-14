@@ -390,7 +390,12 @@ const HEADER_END = Buffer.from('\r\n\r\n');
  */
 export function readMjpeg(url: string, onFrame: (jpeg: Buffer) => void, onEnd: (error?: Error) => void): FrameStream {
   let closed = false;
-  let pending: Buffer = Buffer.alloc(0);
+  // What has arrived of the parts not yet handed over, kept as it arrived, and its length.
+  let chunks: Buffer[] = [];
+  let size = 0;
+  // How much of it the part being read needs before a frame can be cut from it: its header
+  // and the length its header names, or nothing while its header has not all arrived.
+  let need = 0;
   const end = (error?: Error): void => {
     if (closed) return;
     closed = true;
@@ -403,7 +408,12 @@ export function readMjpeg(url: string, onFrame: (jpeg: Buffer) => void, onEnd: (
       return;
     }
     res.on('data', (chunk: Buffer) => {
-      pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+      chunks.push(chunk);
+      size += chunk.length;
+      // A JPEG arrives in many chunks, which are joined once it has all arrived, not as each comes.
+      if (size < need) return;
+      let pending = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, size);
+      need = 0;
       // Each part is a header block, ending in a blank line, and a JPEG of the length it
       // names. A block that names none, such as the blank lines between parts, is skipped.
       for (;;) {
@@ -415,11 +425,16 @@ export function readMjpeg(url: string, onFrame: (jpeg: Buffer) => void, onEnd: (
           continue;
         }
         const start = head + HEADER_END.length;
-        if (pending.length < start + length) break;
+        if (pending.length < start + length) {
+          need = start + length;
+          break;
+        }
         const jpeg = Buffer.from(pending.subarray(start, start + length));
         pending = pending.subarray(start + length);
         if (!closed) onFrame(jpeg);
       }
+      chunks = pending.length ? [pending] : [];
+      size = pending.length;
     });
     res.on('end', () => end());
     res.on('error', (e) => end(e));
