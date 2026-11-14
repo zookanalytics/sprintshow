@@ -151,7 +151,7 @@ async function withStandInNpm(fail: boolean, body: (home: string) => Promise<voi
 
 const NOT_INSTALLED = /^Error: appium: Appium 3\.9\.0 and its XCUITest driver 12\.22\.8 are not installed; install them once with `npx sprintshow provision appium`, or with `npm run provision:appium` in a checkout of sprintshow$/;
 
-test('provision installs the pinned Appium and XCUITest driver into Appium\'s home with npm, once, with no install script and no key', async () => {
+test('provision installs the pinned Appium and XCUITest driver into Appium\'s home with npm, once, and with no key', async () => {
   const calls = await withStandInNpm(false, async (home) => {
     assert.throws(() => appiumHome(), NOT_INSTALLED);
     const logs: string[] = [];
@@ -162,7 +162,7 @@ test('provision installs the pinned Appium and XCUITest driver into Appium\'s ho
     assert.equal(await provisionAppium((m) => logs.push(m)), installed);
     assert.equal(logs.at(-1), `appium: Appium 3.9.0 and its XCUITest driver 12.22.8 are installed: ${installed}`);
   });
-  assert.deepEqual(calls, ['install --ignore-scripts --no-audit --no-fund | {"private":true,"dependencies":{"appium":"3.9.0","appium-xcuitest-driver":"12.22.8"}} | no OpenAI key no bypass key'], 'npm ran once');
+  assert.deepEqual(calls, ['install --no-audit --no-fund | {"private":true,"dependencies":{"appium":"3.9.0","appium-xcuitest-driver":"12.22.8"}} | no OpenAI key no bypass key'], 'npm ran once');
 });
 
 test('an install npm fails leaves no home, and a run still names the command', async () => {

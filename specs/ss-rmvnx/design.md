@@ -44,14 +44,12 @@ moderate `npm audit` advisories, to every install, iOS or not. The operator aske
 `~/Library/Caches/sprintshow/appium/<appium version>-xcuitest-<driver version>`, which is
 Appium's home for every run, and then builds the runner app from the WebDriverAgent
 project in that home. So one command sets a host up for iOS app demos, as
-`provision:browser` sets one up for a page. npm installs into a directory of its own,
-which is moved into place once whole. It runs no install script there, as npm 12 runs none
-it is not allowed to: appium's own does nothing in a project that depends on appium, the
-simulator bindings of `@appium/coresim` ship a prebuilt addon for Apple silicon, and
-`appium-ios-tuntap` serves real devices. The packages below the two pinned ones are the
-versions npm resolves when it installs them, as they are for any project that installs the
-package, and a host keeps the tree it installed. A run that finds no home fails with the
-command.
+`provision:browser` sets one up for a page. npm installs them as it installs any project's
+dependencies, under its own policy for install scripts, as it did when they were the
+package's dependencies, into a directory of its own that is moved into place once whole.
+The packages below the two pinned ones are the versions npm resolves when it installs
+them, as they are for any project that installs the package, and a host keeps the tree it
+installed. A run that finds no home fails with the command.
 
 Two other ways were weighed:
 

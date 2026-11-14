@@ -94,10 +94,9 @@ export function appiumHome(): string {
 
 /**
  * Install Appium and its XCUITest driver into Appium's home, unless they are installed,
- * and resolve with the home. npm installs them into a directory of its own beside the
- * home, which is moved into place once whole, so an install that fails or is stopped
- * leaves no home behind. npm runs no package's install script, since nothing the engine
- * needs comes from one.
+ * and resolve with the home. npm installs them as it installs any project's dependencies,
+ * into a directory of its own beside the home, which is moved into place once whole, so
+ * an install that fails or is stopped leaves no home behind.
  */
 export async function provisionAppium(log: (m: string) => void = (m) => console.log(m)): Promise<string> {
   const home = homeDir();
@@ -111,7 +110,7 @@ export async function provisionAppium(log: (m: string) => void = (m) => console.
     log(`appium: installing ${pinned()} with npm…`);
     writeFileSync(path.join(work, 'package.json'), `${JSON.stringify({ private: true, dependencies: APPIUM_PACKAGES }, null, 2)}\n`);
     const status = await new Promise<number>((resolve, reject) => {
-      const child = spawn('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: work, env: toolEnv(), stdio: ['ignore', 'inherit', 'inherit'] });
+      const child = spawn('npm', ['install', '--no-audit', '--no-fund'], { cwd: work, env: toolEnv(), stdio: ['ignore', 'inherit', 'inherit'] });
       child.on('error', (e: NodeJS.ErrnoException) => reject(e.code === 'ENOENT' ? new Error('appium: npm, which installs Appium, is not on PATH') : e));
       child.on('exit', (code, signal) => resolve(signal ? 128 : (code ?? 1)));
     });
