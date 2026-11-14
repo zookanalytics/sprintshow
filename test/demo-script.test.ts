@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseDemoScript, parseAction, parseAssertion, parseMatcher, parseKeys, parseTerminalSpec, parseDeviceSpec, parseViewportSize, deviceName, unknownDevice, surfaceOf, slugify, outputSlug, DEFAULT_TERMINAL } from '../src/demo-script.ts';
+import { parseDemoScript, parseAction, parseAssertion, parseMatcher, parseKeys, parseTerminalSpec, parseDeviceSpec, parseViewportSize, deviceName, unknownDevice, surfaceOf, slugify, outputSlug, matchText, DEFAULT_TERMINAL } from '../src/demo-script.ts';
 
 const SCRIPT = `# Demo: Task Board
 
@@ -312,6 +312,14 @@ test('terminal: press splits keys from quoted text, and refuses an open or empty
   assert.deepEqual(parseKeys('ArrowDown ArrowDown Enter'), [{ key: 'ArrowDown' }, { key: 'ArrowDown' }, { key: 'Enter' }]);
   assert.deepEqual(parseKeys('":wq" Enter " "'), [{ text: ':wq' }, { key: 'Enter' }, { text: ' ' }]);
   for (const bad of ['', '"open', '""', '"a"b', 'a"b']) assert.equal(parseKeys(bad), null, bad);
+});
+
+test("a text matcher holds when its regex finds a match in the text, or when the text holds its substring", () => {
+  assert.equal(matchText('2 tasks · 0 done', parseMatcher('/^2 tasks/')), true);
+  assert.equal(matchText('12 tasks · 0 done', parseMatcher('/^2 tasks/')), false);
+  assert.equal(matchText('2 tasks · 0 done', parseMatcher('"0 done"')), true);
+  assert.equal(matchText('2 tasks · 0 done', parseMatcher('1 done')), false);
+  assert.equal(matchText('anything', undefined), true, 'no matcher holds, as an empty substring does');
 });
 
 // ── A page script's device ──

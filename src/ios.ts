@@ -33,7 +33,7 @@
 import { writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 
-import { compareCount, type Assertion, type DemoAction, type Matcher } from './demo-script.ts';
+import { compareCount, matchText, type Assertion, type DemoAction } from './demo-script.ts';
 import { AppiumSession, freePort, readMjpeg, startAppium, type AppiumServer, type FrameStream } from './appium.ts';
 import { checkApp, dressDevice, parseSimulatorUrl, simctl, userApps, SIMULATOR_URL_FORM, type SimulatorApp } from './simulator.ts';
 import { runnerApp, RUNNER_APP_ID, RUNNER_BUNDLE_NAME } from './webdriveragent.ts';
@@ -367,10 +367,6 @@ async function texts(session: AppiumSession, el: string): Promise<string[]> {
   return out;
 }
 
-function matches(text: string, m: Matcher | undefined): boolean {
-  return m?.type === 'regex' ? new RegExp(m.value).test(text) : text.includes(m?.value ?? '');
-}
-
 /** The keys a `press` presses in an iOS app, each with the character it types into the field that has the keyboard's focus. */
 const IOS_KEYS: Record<string, string> = { Enter: '\n', Tab: '\t', Backspace: '\b', Space: ' ' };
 
@@ -475,7 +471,7 @@ export async function checkIosAssertion(page: Page, a: Assertion): Promise<boole
       return compareCount((await session.findAll(selector)).length, a.op ?? '', a.n ?? 0);
     case 'text': {
       const el = await session.find(selector);
-      return el !== null && (await texts(session, el)).some((t) => matches(t, a.matcher));
+      return el !== null && (await texts(session, el)).some((t) => matchText(t, a.matcher));
     }
     default:
       return false;

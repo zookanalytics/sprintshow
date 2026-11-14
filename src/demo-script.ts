@@ -140,6 +140,11 @@ export interface Matcher {
   value: string;
 }
 
+/** Whether `text` matches `m`, as a `text` assertion reads it: the regex finds a match in it, or it holds the substring. */
+export function matchText(text: string, m: Matcher | undefined): boolean {
+  return m?.type === 'regex' ? new RegExp(m.value).test(text) : text.includes(m?.value ?? '');
+}
+
 export interface Assertion {
   kind: AssertionKind;
   /** Present for visible/hidden/focused/count/text. */

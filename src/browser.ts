@@ -17,7 +17,7 @@
 // An iOS app's page draws the pointer as a touch, which glides to where a step taps.
 
 import { devices, type BrowserContextOptions, type Page } from 'playwright';
-import { compareCount, deviceName, surfaceOf, unknownDevice, type Assertion, type Demo, type DemoAction, type DemoStep, type Matcher, type ViewportSize } from './demo-script.ts';
+import { compareCount, deviceName, matchText, surfaceOf, unknownDevice, type Assertion, type Demo, type DemoAction, type DemoStep, type Matcher, type ViewportSize } from './demo-script.ts';
 import { pressKeys } from './keyboard.ts';
 import { openTerminal, hasTerminalSession, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
 import { connectIosApp, showIosApp, hasIosApp, runIosAction, checkIosAssertion } from './ios.ts';
@@ -259,10 +259,8 @@ export async function checkAssertion(page: Page, a: Assertion): Promise<boolean>
         const c = await page.locator(a.selector as string).count();
         return compareCount(c, a.op as string, a.n as number);
       }
-      case 'text': {
-        const t = (await page.locator(a.selector as string).first().textContent()) ?? '';
-        return a.matcher?.type === 'regex' ? new RegExp(a.matcher.value).test(t) : t.includes(a.matcher?.value ?? '');
-      }
+      case 'text':
+        return matchText((await page.locator(a.selector as string).first().textContent()) ?? '', a.matcher);
       case 'eval':
         return Boolean(await page.evaluate(a.expr as string));
       case 'screen':
