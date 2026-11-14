@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { AppiumSession, WebDriverError, appiumHome, provisionAppium, readMjpeg } from '../src/appium.ts';
+import { AppiumSession, WebDriverError, appiumHome, freePorts, provisionAppium, readMjpeg } from '../src/appium.ts';
 import { standInAppium } from './appium-stand-in.ts';
 
 const PNG = Buffer.from('a stand-in screenshot');
@@ -172,4 +172,17 @@ test('an install npm fails leaves no home, and a run still names the command', a
     assert.throws(() => appiumHome(), NOT_INSTALLED);
   });
   assert.equal(calls.length, 1);
+});
+
+test('free ports are as many as asked for, each a different one, and none is held once they resolve', async () => {
+  const ports = await freePorts(8);
+  assert.equal(new Set(ports).size, 8, String(ports));
+  for (const port of ports) {
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, '127.0.0.1', resolve);
+    });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

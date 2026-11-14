@@ -26,7 +26,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { createServer } from 'node:net';
+import { createServer, type AddressInfo, type Server } from 'node:net';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -52,16 +52,28 @@ const SERVER_STOP_MS = 10_000;
 /** How many of the last lines Appium printed are kept. */
 const LOG_LINES = 60;
 
-/** A free port on the loopback interface, as the system assigns one. */
-export function freePort(): Promise<number> {
+/** Listen on a port of the loopback interface that the system assigns, and resolve with the server. */
+function listenFree(): Promise<Server> {
   return new Promise((resolve, reject) => {
     const server = createServer();
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number };
-      server.close(() => resolve(port));
-    });
+    server.listen(0, '127.0.0.1', () => resolve(server));
   });
+}
+
+/**
+ * `count` free ports on the loopback interface, as the system assigns them, each a
+ * different one: every port is held until all are known. None is held once they resolve,
+ * so another process can take one before its user listens on it.
+ */
+export async function freePorts(count: number): Promise<number[]> {
+  const held = await Promise.allSettled(Array.from({ length: count }, () => listenFree()));
+  const servers = held.flatMap((h) => (h.status === 'fulfilled' ? [h.value] : []));
+  const ports = servers.map((server) => (server.address() as AddressInfo).port);
+  await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+  const failed = held.find((h) => h.status === 'rejected');
+  if (failed) throw (failed as PromiseRejectedResult).reason;
+  return ports;
 }
 
 /** Where Appium's home for the pinned versions is, whether or not it is provisioned. */
@@ -151,7 +163,7 @@ function exited(child: ChildProcess, ms: number): Promise<boolean> {
 export async function startAppium(log: (m: string) => void): Promise<AppiumServer> {
   const home = appiumHome();
   const main = path.join(home, 'node_modules', 'appium', 'index.js');
-  const port = await freePort();
+  const [port] = await freePorts(1);
   const url = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, [main, 'server', '--address', '127.0.0.1', '--port', String(port), '--log-no-colors'], {
     cwd: home,

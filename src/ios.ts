@@ -34,7 +34,7 @@ import { writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 
 import { compareCount, keysIosLacks, matchText, IOS_KEYS, type Assertion, type DemoAction, type IosKey } from './demo-script.ts';
-import { AppiumSession, freePort, readMjpeg, startAppium, type AppiumServer, type FrameStream } from './appium.ts';
+import { AppiumSession, freePorts, readMjpeg, startAppium, type AppiumServer, type FrameStream } from './appium.ts';
 import { checkApp, dressDevice, parseSimulatorUrl, simctl, userApps, SIMULATOR_URL_FORM, type SimulatorApp } from './simulator.ts';
 import { runnerApp, RUNNER_APP_ID, RUNNER_BUNDLE_NAME } from './webdriveragent.ts';
 import type { Surface } from './browser.ts';
@@ -127,6 +127,11 @@ export async function connectIosApp(baseUrl: string | undefined, log: (m: string
     undo.push({ what: 'remove the runner app', run: () => removeRunner(app.udid) });
     const server = await startAppium(log);
     undo.push({ what: 'stop Appium', run: server.stop });
+    // WebDriverAgent's two ports differ from each other, and from Appium's, which Appium
+    // holds by now. Nothing holds them from here until WebDriverAgent listens on them, so
+    // another process can still take one first: the XCUITest driver checks no port on a
+    // simulator.
+    const [wdaPort, framesPort] = await freePorts(2);
     const capabilities = {
       platformName: 'iOS',
       'appium:automationName': 'XCUITest',
@@ -140,8 +145,8 @@ export async function connectIosApp(baseUrl: string | undefined, log: (m: string
       // The engine's runner app, installed from its build and launched without xcodebuild.
       'appium:usePreinstalledWDA': true,
       'appium:prebuiltWDAPath': runner,
-      'appium:wdaLocalPort': await freePort(),
-      'appium:mjpegServerPort': await freePort(),
+      'appium:wdaLocalPort': wdaPort,
+      'appium:mjpegServerPort': framesPort,
       'appium:wdaLaunchTimeout': SESSION_START_MS,
       'appium:wdaConnectionTimeout': SESSION_START_MS,
       'appium:newCommandTimeout': IDLE_SESSION_S,
@@ -163,7 +168,7 @@ export async function connectIosApp(baseUrl: string | undefined, log: (m: string
       device,
       session,
       screen: { width, height },
-      frames: `http://127.0.0.1:${capabilities['appium:mjpegServerPort']}/`,
+      frames: `http://127.0.0.1:${framesPort}/`,
       close: () => undoAll(undo, log),
     };
   } catch (e) {
