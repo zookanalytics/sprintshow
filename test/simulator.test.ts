@@ -65,7 +65,9 @@ test('a tool the engine starts for an iOS app gets the engine environment less t
   assert.deepEqual(env, { PATH: '/usr/bin', HOME: '/home/a', DEVELOPER_DIR: '/Applications/Xcode.app' });
 });
 
-test("the status bar's overrides are the lines simctl lists under its heading's rule", () => {
+test("the status bar's overrides are the lines simctl lists under its heading's rule, and there are none without a rule", () => {
   assert.deepEqual(statusBarOverrides('Current Status Bar Overrides:\n=============================\n'), []);
+  assert.deepEqual(statusBarOverrides('Current Status Bar Overrides:\n'), []);
+  assert.deepEqual(statusBarOverrides(''), []);
   assert.deepEqual(statusBarOverrides('Current Status Bar Overrides:\n=============================\nTime: 9:41 \nWiFi Mode: 3, WiFi Bars: 3\n'), ['Time: 9:41', 'WiFi Mode: 3, WiFi Bars: 3']);
 });

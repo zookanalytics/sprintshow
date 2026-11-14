@@ -148,10 +148,11 @@ export async function userApps(udid: string): Promise<{ bundleId: string; name: 
 /** The status bar of a product shot: 9:41, full Wi-Fi and cellular signal, and a charged battery. */
 const PRODUCT_STATUS_BAR = ['--time', '9:41', '--dataNetwork', 'wifi', '--wifiMode', 'active', '--wifiBars', '3', '--cellularMode', 'active', '--cellularBars', '4', '--batteryState', 'charged', '--batteryLevel', '100'];
 
-/** The overrides `simctl status_bar list` reports: the lines under its heading's rule. */
+/** The overrides `simctl status_bar list` reports: the lines under its heading's rule, and none when it prints no rule. */
 export function statusBarOverrides(listed: string): string[] {
   const lines = listed.split('\n');
   const rule = lines.findIndex((l) => /^=+\s*$/.test(l));
+  if (rule === -1) return [];
   return lines.slice(rule + 1).map((l) => l.trim()).filter(Boolean);
 }
 
