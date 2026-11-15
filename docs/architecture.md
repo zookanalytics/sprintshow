@@ -112,13 +112,15 @@ What a user runs, and the domains each draws on:
 | `sprintshow screenshot` | One PNG of the state the last step leaves, with nothing of the engine's drawn on it. | Demo script, App origin and Page, Terminal session or iOS app, Step proof, Capture |
 | `sprintshow assemble` | An MP4 from the frames and manifest of an agent's own capture. | Video |
 | `sprintshow lint` | A script's findings, before a capture. | Demo script, Lint findings |
+| `sprintshow surface` | The surface a script drives, as JSON, for a caller that decides what to start and pass before a capture. | Demo script |
 | The library | Each command's driver and the parts under it, for a caller that prepares its own page or drives its own steps. | Every domain but Samples |
 
 ## Cross-cutting rules
 
 - **One reading of a script.** Every part that reads a demo script reads it through the
   parser in Demo script, so the linter, each capture and a library caller see the same
-  steps.
+  steps. A caller of the command-line interface learns what a script drives from
+  `sprintshow surface`, not from the script's lines.
 - **One step runner.** Every capture, a library caller's own driver included, runs its
   steps through Step proof, so a proof means the same thing in a video and in a
   screenshot.
