@@ -87,11 +87,23 @@ test('run and screenshot both refuse a --port that is not a whole number, before
   }
 });
 
-test('provision refuses anything but appium, and any option, before it installs', async () => {
-  for (const args of [[], ['ffmpeg'], ['webdriveragent'], ['appium', 'ffmpeg'], ['appium', '--headed']]) {
+test('provision refuses anything but appium or ffmpeg, and any option, before it installs', async () => {
+  for (const args of [[], ['webdriveragent'], ['appium', 'ffmpeg'], ['appium', '--headed'], ['ffmpeg', '--headed']]) {
     const res = await runCli(['provision', ...args]);
     assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
-    assert.match(res.stderr, /^provision: name what to install \(appium\), and no option/, args.join(' '));
-    assert.doesNotMatch(res.stdout, /(appium|webdriveragent): /, 'nothing was installed, built or looked up');
+    assert.match(res.stderr, /^provision: name what to install \(appium, ffmpeg\), and no option/, args.join(' '));
+    assert.doesNotMatch(res.stdout, /(appium|webdriveragent|ffmpeg): /, 'nothing was installed, built, fetched or looked up');
+  }
+});
+
+test('provision ffmpeg finds the binary the engine uses in place, and fetches nothing', async () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    const bin = stubFfmpeg(dir);
+    const res = await runCli(['provision', 'ffmpeg'], { env: { ...process.env, FFMPEG_BIN: bin } });
+    assert.equal(res.code, 0, `${res.stdout}${res.stderr}`);
+    assert.equal(res.stdout, `ffmpeg: a binary is in place: ${bin}\n`);
+  } finally {
+    cleanup();
   }
 });

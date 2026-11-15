@@ -31,6 +31,9 @@ jobs:
       - run: npm ci
       # The browser-backed tests skip on a host with no Chromium, so CI provisions one.
       - run: npm run provision:browser -- --with-deps
+      # The video tests skip on a host with no ffmpeg, and npm 12 and later leave
+      # ffmpeg-static's binary out of an install, so CI provisions it too.
+      - run: npm run provision:ffmpeg
       - run: npm run typecheck
       - run: npm run lint:demo
       - run: npm test

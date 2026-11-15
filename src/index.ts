@@ -26,11 +26,14 @@ export { lintDemo, lintCli, looksLikeDirective, looksLikeAssertion, outputPathFo
 export { ensureServer, ensureIosApp, DEFAULT_PORT, type ServeOptions, type ServerHandle } from './server.ts';
 export { parseSimulatorUrl, simulatorUrl, SIMULATOR_URL_FORM, type SimulatorApp } from './simulator.ts';
 
-// What `sprintshow provision appium` installs for an iOS app script: Appium and its
+// What `sprintshow provision` installs. `appium`, for an iOS app script: Appium and its
 // XCUITest driver (provisionAppium), and then the runner app the driver installs on the
-// device, built from the driver's WebDriverAgent (provisionRunnerApp).
+// device, built from the driver's WebDriverAgent (provisionRunnerApp). `ffmpeg`, for a
+// video: ffmpeg-static's binary, which npm 12 and later leave out of an install
+// (provisionFfmpeg).
 export { provisionAppium } from './appium.ts';
 export { provisionRunnerApp } from './webdriveragent.ts';
+export { provisionFfmpeg } from './ffmpeg.ts';
 
 // Browser primitives for the seed-test bootstrap and custom drivers. A custom driver that
 // runs its steps through `runStep` checks each proof as the built-in captures do, and one

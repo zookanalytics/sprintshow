@@ -10,6 +10,7 @@ import { assembleVideo, type AssembleResult } from './assemble.ts';
 import { lintCli } from './lint.ts';
 import { outputSlug } from './demo-script.ts';
 import { provisionAppium } from './appium.ts';
+import { provisionFfmpeg } from './ffmpeg.ts';
 import { provisionRunnerApp } from './webdriveragent.ts';
 import type { ServeOptions } from './server.ts';
 
@@ -26,6 +27,8 @@ Usage:
   sprintshow provision appium                  Install Appium and its XCUITest driver, and
                                                build the runner app the driver installs on
                                                an iOS app's device
+  sprintshow provision ffmpeg                  Fetch ffmpeg-static's ffmpeg binary, which
+                                               npm 12 and later leave out of an install
 
 run options:
   --mode <walkthrough|proof>  walkthrough (default): one continuous recorded take.
@@ -248,18 +251,27 @@ async function assembleCommand(rest: string[]): Promise<number> {
   return 0;
 }
 
-/** What `provision` can install. */
-const PROVISIONED = ['appium'];
+/** What `provision` can install, and the library calls that install each. */
+const PROVISIONED = new Map<string, () => Promise<unknown>>([
+  [
+    'appium',
+    async () => {
+      await provisionAppium();
+      await provisionRunnerApp();
+    },
+  ],
+  ['ffmpeg', () => provisionFfmpeg()],
+]);
 
 async function provisionCommand(rest: string[]): Promise<number> {
   const { pos, flags } = collect(rest);
-  if (pos.length !== 1 || !PROVISIONED.includes(pos[0]) || Object.keys(flags).length) {
-    console.error(`provision: name what to install (${PROVISIONED.join(', ')}), and no option${rest.length ? ` (got "${rest.join(' ')}")` : ''}\n`);
+  const install = pos.length === 1 && !Object.keys(flags).length ? PROVISIONED.get(pos[0]) : undefined;
+  if (!install) {
+    console.error(`provision: name what to install (${[...PROVISIONED.keys()].join(', ')}), and no option${rest.length ? ` (got "${rest.join(' ')}")` : ''}\n`);
     console.log(HELP);
     return 1;
   }
-  await provisionAppium();
-  await provisionRunnerApp();
+  await install();
   return 0;
 }
 
