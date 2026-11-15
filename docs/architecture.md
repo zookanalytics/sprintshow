@@ -164,12 +164,9 @@ What a user runs, and the domains each draws on:
   lines.
 - A script drives one surface, set by its header: an app's page (`**Start:**`), a
   terminal (`**Terminal:**`) or an iOS app (`**Platform:** iOS`). It reads only that
-  surface's actions and assertions. An iOS app script's are a page script's, less those
-  a device has no meaning for.
+  surface's actions and assertions.
 - Every kind of app is named through the same options: `--base-url` for one already
-  running, and `--serve` for the command that brings one up. An iOS app is named by its
-  simulator URL, `ios-simulator://<device UDID>/<bundle id>`, and its start command says
-  the app is up by printing that URL.
+  running, and `--serve` for the command that brings one up.
 - Playwright drives Chromium for every capture, and a device a script names is one from
   Playwright's registry.
 - A run takes an iOS app as it stands and never relaunches it, so the arguments it was
