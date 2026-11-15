@@ -186,6 +186,22 @@ exactly as the driver will and reports what the driver would silently ignore:
 sprintshow lint demo.md          # --strict makes warnings non-zero
 ```
 
+### Ask which surface a script drives
+
+A page script needs an app to drive, and a terminal script takes no server option, so a
+caller that starts the app or picks the options asks first. `sprintshow surface` reads the
+script with the parser every capture uses, and prints what it drives as one JSON object,
+the only thing on its stdout:
+
+```bash
+sprintshow surface demos/terminal.md    # prints {"surface":"terminal"}
+```
+
+`"surface"` is `"page"` for a script that drives an app in a browser page, and
+`"terminal"` for one that declares `**Terminal:**`. Every surface the engine drives is a
+value of this one field. The command exits 0 when the script parses, and 1 when the file
+is missing or does not parse, with the reason on stderr and nothing on stdout.
+
 ## Capture a screenshot
 
 `sprintshow screenshot` drives a script's steps and checks each step's proof as proof mode

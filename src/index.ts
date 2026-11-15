@@ -1,8 +1,8 @@
 // Public library API for @zookanalytics/sprintshow.
 //
-// The CLI (`sprintshow run|screenshot|assemble|lint`) is one consumer of this surface; the
-// same functions are importable for the seed-test bootstrap (hand `captureProof` or
-// `captureScreenshot` a ready page) and for embedding the engine in another tool.
+// The CLI (`sprintshow run|screenshot|assemble|lint|surface`) is one consumer of this
+// API; the same functions are importable for the seed-test bootstrap (hand `captureProof`
+// or `captureScreenshot` a ready page) and for embedding the engine in another tool.
 
 // The demo-script grammar: parser, types, and slug helpers.
 export * from './demo-script.ts';

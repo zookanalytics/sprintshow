@@ -1,7 +1,7 @@
 // Tests for what the two capture commands share in the CLI (src/cli.ts): `run` and
 // `screenshot` read their server flags through one mapping, and both exit 0 when the
 // output is saved and every step's proof held, 3 when it is saved but a proof failed, and
-// 1 when nothing is saved.
+// 1 when nothing is saved. Also, what `surface` prints and how it exits.
 //
 // The tests that save an output need a headless Chromium and skip without one (see
 // browser-fixture.ts). `run` captures in proof mode over a stand-in ffmpeg, so no host
@@ -84,5 +84,61 @@ test('run and screenshot both refuse a --port that is not a whole number, before
     assert.equal(existsSync(path.join(dir, 'out.png')), false);
   } finally {
     cleanup();
+  }
+});
+
+/** A one-step script whose lines between its title and `## Steps` are `head`. */
+function scriptWith(head: string): string {
+  return `# Demo: Surface\n\n${head}\n\n## Steps\n\n1. **A step**\n   \`wait 10\`\n`;
+}
+
+describe('surface prints the surface a script drives, and nothing else, on stdout', { concurrency: true }, () => {
+  const cases = [
+    ['a page script', '**Start:** `/`', 'page'],
+    ['a terminal script with no size', '**Terminal:**', 'terminal'],
+    ['a terminal script with a size', '**Terminal:** 80x24', 'terminal'],
+    ['a script with **Terminal:** below a ## heading', '**Start:** `/`\n\n## About\n\n**Terminal:** 80x24', 'page'],
+  ] as const;
+  for (const [name, head, surface] of cases) {
+    test(`${name} drives a ${surface}`, async () => {
+      const { dir, cleanup } = scratchDir();
+      try {
+        writeFiles(dir, { 'demo.md': scriptWith(head) });
+        const res = await runCli(['surface', 'demo.md'], { cwd: dir });
+        assert.equal(res.code, 0, res.stderr);
+        assert.equal(res.stdout, `${JSON.stringify({ surface })}\n`);
+        assert.equal(res.stderr, '');
+      } finally {
+        cleanup();
+      }
+    });
+  }
+});
+
+test('surface exits 1, with the reason on stderr and nothing on stdout, for a script that is missing or does not parse', async () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    writeFiles(dir, { 'no-steps.md': '# Demo: No steps\n\n**Start:** `/`\n' });
+    const cases = [
+      ['missing.md', /demo script not found: .*missing\.md/],
+      ['no-steps.md', /no steps found under "## Steps"/],
+    ] as const;
+    for (const [file, reason] of cases) {
+      const res = await runCli(['surface', file], { cwd: dir });
+      assert.equal(res.code, 1, `${file}: ${res.stdout}${res.stderr}`);
+      assert.match(res.stderr, reason);
+      assert.equal(res.stdout, '', file);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('surface refuses anything but one script path', async () => {
+  for (const args of [[], ['a.md', 'b.md'], [SAMPLE, '--json']]) {
+    const res = await runCli(['surface', ...args]);
+    assert.equal(res.code, 1, args.join(' '));
+    assert.match(res.stderr, /^surface: name one demo script, and no option/, args.join(' '));
+    assert.equal(res.stdout, '', args.join(' '));
   }
 });
