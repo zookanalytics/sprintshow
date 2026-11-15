@@ -15,7 +15,9 @@
 // A terminal script's PNG is the terminal window, not the viewport. The terminal page
 // paints nothing around the window, and the default white background is always left
 // out, so the window's rounded corners are transparent. With `fullPage`, the window holds
-// the whole session instead of the screen.
+// the whole session instead of the screen. An iOS app script's PNG is the device's own
+// screenshot, its whole screen at the device's scale, which the surface takes (ios.ts),
+// so no option chooses its area or its scale.
 //
 // Chromium draws a capture in tiles and holds only so many of them, so a full-page
 // capture holds no more than it draws whole (captureHeightLimit). A page keeps its top,
@@ -26,20 +28,20 @@
 // A run's screenshots are a PNG of the state each step leaves (stepScreenshots), in a
 // directory that holds nothing else once the run is done: a new or empty one, into which
 // the run writes nothing else, and which a run that ends saving nothing leaves as it found
-// it. Each is the area a screenshot takes by default: a page script's viewport, or a
-// terminal script's window. A video's driver takes them in the page it films, where the
-// engine draws its caption, cards, pointer and terminal backdrop, so a still is taken
-// with a style that leaves those out. A still first waits for the animations running in
-// the page to end, the engine's, such as a click's ripple, as well as the app's, so it
-// shows the state they settle in. A walkthrough cuts the stretch in which a still is
-// taken from its video (walkthrough.ts).
+// it. Each is the area a screenshot takes by default: a page script's viewport, a
+// terminal script's window, or an iOS app's screen. A video's driver takes a page's or a
+// terminal's in the page it films, where the engine draws its caption, cards, pointer and
+// terminal backdrop, so a still is taken with a style that leaves those out. A still
+// first waits for the animations running in the page to end, the engine's, such as a
+// click's ripple, as well as the app's, so it shows the state they settle in. A
+// walkthrough cuts the stretch in which a still is taken from its video (walkthrough.ts).
 
 import { existsSync, mkdirSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { parseDemoScript, slugify, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
-import { runStep, openSurface, contextOptions, ACTION_TIMEOUT, POINTER_CHROME } from './browser.ts';
+import { parseDemoScript, slugify, surfaceOf, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { runStep, openSurface, contextOptions, ACTION_TIMEOUT, POINTER_CHROME, type Surface } from './browser.ts';
 import { expandToSession, TERMINAL_WINDOW, TERMINAL_STILL_CSS } from './terminal.ts';
 import { OVERLAY_CHROME } from './overlay.ts';
 
@@ -120,7 +122,7 @@ export interface CaptureScreenshotOptions {
    * proof is checked against the layout a video shows.
    */
   page: Page;
-  /** Origin a page script's start path is joined onto. A terminal script needs none. */
+  /** Origin a page script's start path is joined onto, or an iOS app script's simulator URL. A terminal script needs none. */
   baseUrl?: string;
   /** The directory a terminal script's shell starts in (default: the working directory). */
   cwd?: string;
@@ -156,6 +158,9 @@ export const AREA_CONFLICT = 'screenshot: capture the full page or one element, 
 /** The message for a selector given with a terminal script, whose page is the engine's. */
 export const TERMINAL_SELECTOR = 'screenshot: a terminal script captures its terminal window; --selector picks an element of a page script';
 
+/** The message for an option that chooses a capture's area, scale or background, given with an iOS app script. */
+export const IOS_AREA = "screenshot: an iOS app script captures the device's whole screen at the device's scale; --full-page, --selector, --scale and --transparent are for a page or terminal script";
+
 /**
  * Drive `demo` against `page`, checking each step's proof, then save the state the last
  * step leaves as a PNG at `outputPath`. Throws, saving nothing, when the script names a
@@ -169,12 +174,13 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
   const log = opts.log ?? ((m: string) => console.log(m));
   const demo = typeof opts.demo === 'string' ? parseDemoScript(opts.demo) : opts.demo;
   if (demo.terminal && opts.selector) throw new Error(TERMINAL_SELECTOR);
+  if (surfaceOf(demo) === 'ios' && (opts.fullPage || opts.selector || opts.transparent)) throw new Error(IOS_AREA);
   const start = contextOptions(demo).viewport as ViewportSize;
-  return driveSteps({ page: opts.page, baseUrl: opts.baseUrl, cwd: opts.cwd, demo, log }, start, null, (failures) => saveArea(opts, demo, failures, log));
+  return driveSteps({ page: opts.page, baseUrl: opts.baseUrl, cwd: opts.cwd, demo, log }, start, null, (failures, surface) => saveArea(opts, demo, surface, failures, log));
 }
 
-/** Save the area `opts` asks for as the PNG at its `outputPath`, once `demo`'s steps have run, `failures` of them failing their proof. */
-async function saveArea(opts: CaptureScreenshotOptions, demo: Demo, failures: number, log: (m: string) => void): Promise<ScreenshotResult> {
+/** Save the area `opts` asks for as the PNG at its `outputPath`, once `demo`'s steps have run on `surface`, `failures` of them failing their proof. */
+async function saveArea(opts: CaptureScreenshotOptions, demo: Demo, surface: Surface, failures: number, log: (m: string) => void): Promise<ScreenshotResult> {
   const { page, selector } = opts;
   // A step whose proof failed is the likeliest reason the page lacks what the capture
   // needs, so a capture that fails says how many did. Each one's ✗ line is in the log.
@@ -192,7 +198,10 @@ async function saveArea(opts: CaptureScreenshotOptions, demo: Demo, failures: nu
   const tooLarge = (what: string, { width, scale }: Extent): string => `scale ${scale} is too large for one capture of ${what} ${Math.round(width)} CSS pixels wide`;
 
   const shot = { path: opts.outputPath, type: 'png' as const, omitBackground: Boolean(opts.transparent), timeout: ACTION_TIMEOUT };
-  if (demo.terminal) {
+  if (surface.still) {
+    log(`screenshot: capturing the device's screen → ${path.basename(opts.outputPath)}`);
+    await attempt("could not capture the device's screen", () => (surface.still as (file: string) => Promise<void>)(opts.outputPath));
+  } else if (demo.terminal) {
     let area = 'the terminal window';
     let note = '';
     let timeout = ACTION_TIMEOUT;
@@ -246,12 +255,12 @@ interface DriveOptions {
 /**
  * Drive `demo`'s steps in `page` for a screenshot, at the viewport `start` the script
  * starts at and on a surface the engine draws nothing on, checking each step's proof.
- * Given `each`, it hands it each step once the step's proof is checked and the surface
- * shows everything it was sent. Once every step has run and the surface has settled, it
- * resolves with what `end` makes of the number of steps whose proof failed, and then
- * closes the surface.
+ * Given `each`, it hands it each step and the surface once the step's proof is checked
+ * and the surface shows everything it was sent. Once every step has run and the surface
+ * has settled, it resolves with what `end` makes of the number of steps whose proof
+ * failed, and then closes the surface.
  */
-async function driveSteps<T>(opts: DriveOptions, start: ViewportSize, each: ((step: DemoStep) => Promise<unknown>) | null, end: (failures: number) => Promise<T>): Promise<T> {
+async function driveSteps<T>(opts: DriveOptions, start: ViewportSize, each: ((step: DemoStep, surface: Surface) => Promise<unknown>) | null, end: (failures: number, surface: Surface) => Promise<T>): Promise<T> {
   const { page, demo, baseUrl, log } = opts;
   await page.setViewportSize(start).catch(() => {});
   const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, backdrop: false, log });
@@ -262,11 +271,11 @@ async function driveSteps<T>(opts: DriveOptions, start: ViewportSize, each: ((st
       if (!proved) failures++;
       if (each) {
         await surface.settle();
-        await each(step);
+        await each(step, surface);
       }
     }
     await surface.settle();
-    return await end(failures);
+    return await end(failures, surface);
   } finally {
     await surface.close();
   }
@@ -385,9 +394,15 @@ export function checkScreenshotDir(dir: string, writes: string[] = []): void {
  * engine's too, which the still leaves out but a video can show on either side of it.
  * Given `quietMs`, it then waits for the browser to draw the state they end in, and for
  * `quietMs` more. Resolves with the wall-clock time in ms at which it began the capture:
- * until then, the page shows nothing the capture changes.
+ * until then, the page shows nothing the capture changes. A surface that takes its own
+ * stills, an iOS app, saves the still itself, and the page is left as it is.
  */
-async function saveStill(page: Page, demo: Demo, file: string, quietMs = 0): Promise<number> {
+async function saveStill(page: Page, surface: Surface, demo: Demo, file: string, quietMs = 0): Promise<number> {
+  if (surface.still) {
+    const began = Date.now();
+    await surface.still(file);
+    return began;
+  }
   await page
     .evaluate(
       async ({ ms, drawn }) => {
@@ -410,12 +425,13 @@ async function saveStill(page: Page, demo: Demo, file: string, quietMs = 0): Pro
 /** What saves a capture's screenshots, and the ones it has saved. */
 export interface StepScreenshots {
   /**
-   * Save what `page` shows now as the screenshot of `step`, once the animations running in
-   * the page have ended and, given `quietMs`, once the browser has drawn their end and
-   * `quietMs` more has passed. Resolves with the wall-clock time in ms at which it began the
-   * capture: until then, the page shows nothing the capture changes.
+   * Save what `surface` shows now in `page` as the screenshot of `step`, once the
+   * animations running in the page have ended and, given `quietMs`, once the browser has
+   * drawn their end and `quietMs` more has passed. Resolves with the wall-clock time in ms
+   * at which it began the capture: until then, the page shows nothing the capture changes.
+   * A surface that takes its own stills saves it, and changes nothing in the page.
    */
-  take(page: Page, step: DemoStep, quietMs?: number): Promise<number>;
+  take(page: Page, surface: Surface, step: DemoStep, quietMs?: number): Promise<number>;
   /** The screenshots saved, in step order. */
   readonly saved: string[];
   /** Remove every screenshot saved, and the directory for them if the claim made it, for a capture that ends saving nothing. */
@@ -441,11 +457,11 @@ export function stepScreenshots(demo: Demo, dir: string, log: (m: string) => voi
   const saved: string[] = [];
   return {
     saved,
-    async take(page, step, quietMs) {
+    async take(page, surface, step, quietMs) {
       const file = path.join(dir, stepFileName(step, demo.steps.length));
       let began: number;
       try {
-        began = await saveStill(page, demo, file, quietMs);
+        began = await saveStill(page, surface, demo, file, quietMs);
       } catch (e) {
         throw new Error(`screenshot: could not capture step ${step.index}: ${(e as Error).message.split('\n')[0]}`);
       }
@@ -470,7 +486,7 @@ export function stepScreenshots(demo: Demo, dir: string, log: (m: string) => voi
 export interface CaptureScreenshotsOptions {
   /** A ready page, as captureScreenshot takes one. Its viewport is set to the one the script starts at. */
   page: Page;
-  /** Origin a page script's start path is joined onto. A terminal script needs none. */
+  /** Origin a page script's start path is joined onto, or an iOS app script's simulator URL. A terminal script needs none. */
   baseUrl?: string;
   /** The directory a terminal script's shell starts in (default: the working directory). */
   cwd?: string;
@@ -502,7 +518,7 @@ export async function captureScreenshots(opts: CaptureScreenshotsOptions): Promi
   const shots = stepScreenshots(demo, opts.screenshotDir, log);
   const { page } = opts;
   try {
-    return await driveSteps({ page, baseUrl: opts.baseUrl, cwd: opts.cwd, demo, log }, start, (step) => shots.take(page, step), async (failures) => ({ screenshots: [...shots.saved], failures }));
+    return await driveSteps({ page, baseUrl: opts.baseUrl, cwd: opts.cwd, demo, log }, start, (step, surface) => shots.take(page, surface, step), async (failures) => ({ screenshots: [...shots.saved], failures }));
   } catch (e) {
     shots.discard();
     throw e;

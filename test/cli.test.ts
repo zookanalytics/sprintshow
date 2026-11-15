@@ -1,7 +1,8 @@
 // Tests for what the two capture commands share in the CLI (src/cli.ts): `run` and
 // `screenshot` read their server flags through one mapping, and both exit 0 when the
 // output is saved and every step's proof held, 3 when it is saved but a proof failed, and
-// 1 when nothing is saved. Also, what `surface` prints and how it exits.
+// 1 when nothing is saved. Also, what `surface` prints and how it exits, and what
+// `provision` takes.
 //
 // The tests that save an output need a headless Chromium and skip without one (see
 // browser-fixture.ts). `run` captures in proof mode over a stand-in ffmpeg, so no host
@@ -140,5 +141,14 @@ test('surface refuses anything but one script path', async () => {
     assert.equal(res.code, 1, args.join(' '));
     assert.match(res.stderr, /^surface: name one demo script, and no option/, args.join(' '));
     assert.equal(res.stdout, '', args.join(' '));
+  }
+});
+
+test('provision refuses anything but appium, and any option, before it installs', async () => {
+  for (const args of [[], ['ffmpeg'], ['webdriveragent'], ['appium', 'ffmpeg'], ['appium', '--headed']]) {
+    const res = await runCli(['provision', ...args]);
+    assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
+    assert.match(res.stderr, /^provision: name what to install \(appium\), and no option/, args.join(' '));
+    assert.doesNotMatch(res.stdout, /(appium|webdriveragent): /, 'nothing was installed, built or looked up');
   }
 });

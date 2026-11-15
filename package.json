@@ -1,7 +1,7 @@
 {
   "name": "@zookanalytics/sprintshow",
   "version": "0.1.0",
-  "description": "Auto-generate a quick, unpolished demo video of what an AI agent just did — the agent equivalent of a sprint demo. A demo-script DSL + linter, on-screen captions, TTS voiceover and ffmpeg assembly, over a Playwright browser drive or a terminal session.",
+  "description": "Auto-generate a quick, unpolished demo video of what an AI agent just did — the agent equivalent of a sprint demo. A demo-script DSL + linter, on-screen captions, TTS voiceover and ffmpeg assembly, over a Playwright browser drive, a terminal session, or an iOS app on a simulator through Appium.",
   "keywords": [
     "demo",
     "demo-video",
@@ -16,7 +16,10 @@
     "sprint-demo",
     "terminal",
     "tui",
-    "xterm"
+    "xterm",
+    "ios",
+    "appium",
+    "simulator"
   ],
   "license": "AGPL-3.0-only",
   "author": "Zook Analytics",
@@ -55,9 +58,10 @@
     "build": "tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/cli.js', 0o755)\"",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test \"test/**/*.test.ts\"",
-    "lint:demo": "node src/cli.ts lint demos/sample.md && node src/cli.ts lint demos/terminal.md && node src/cli.ts lint demos/keyboard.md",
+    "lint:demo": "node src/cli.ts lint demos/sample.md && node src/cli.ts lint demos/terminal.md && node src/cli.ts lint demos/keyboard.md && node src/cli.ts lint demos/ios.md",
     "provision:ffmpeg": "node node_modules/ffmpeg-static/install.js",
     "provision:browser": "playwright install chromium-headless-shell",
+    "provision:appium": "node src/cli.ts provision appium",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
