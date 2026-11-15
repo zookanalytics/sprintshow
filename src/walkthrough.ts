@@ -13,10 +13,18 @@
 // video is filmed in videoFrame's frame, so a script that resizes its viewport keeps
 // every size whole in one frame.
 //
+// An iOS app is connected to before the recording starts (connectSurface), because a
+// recording films from the page's first frame and connecting takes seconds. The surface is
+// settled once each step is done, so the video films where the step ends, and the capture
+// fails, instead of filming on, once the frames of an iOS app's screen stop reaching the
+// page.
+//
 // Given a screenshot directory, it saves a PNG of the state each step leaves
 // (screenshot.ts) in the page it films. That page alone holds the app's state, since
 // another page would have to drive the app again, so a still that leaves out the engine's
-// chrome is a frame the filmed page draws, and the recording can show it. The video cuts
+// chrome is a frame the filmed page draws, and the recording can show it. A surface that
+// takes its own stills, such as an iOS app, whose still is the device's own screenshot,
+// changes nothing in the page, so the video cuts nothing for it. The video cuts
 // the frames of the stretch in which each still is taken, reaching a little before the
 // still and a little past the first frame of the recording that shows the walkthrough
 // again (stillCuts). A still waits for the animations running in the page to end, the
@@ -28,11 +36,11 @@
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { chromium, type Browser, type BrowserContextOptions, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from 'playwright';
 
 import { parseDemoScript, outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
 import { requireFfmpeg, run, probeDuration, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
-import { installPointer, runStep, openSurface, chromiumLaunchArgs, contextOptions, videoFrame, type Surface } from './browser.ts';
+import { installPointer, runStep, connectSurface, chromiumLaunchArgs, contextOptions, videoFrame, type Surface, type SurfaceConnection } from './browser.ts';
 import { showCaption, markFrame, removeMarker, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
 import { stepScreenshots, type StepScreenshots } from './screenshot.ts';
 import { capturesRoot, type CaptureResult } from './capture.ts';
@@ -45,7 +53,7 @@ const TAIL_MS = 1600; // a beat at the end when there is no scrutiny card
 export interface CaptureWalkthroughOptions {
   /** Reuse a browser (left open). Omit to launch and close one. */
   browser?: Browser;
-  /** Origin a page script's start path is joined onto. A terminal script needs none. */
+  /** Origin a page script's start path is joined onto, or an iOS app script's simulator URL. A terminal script needs none. */
   baseUrl?: string;
   /** The directory a terminal script's shell starts in (default: the working directory). */
   cwd?: string;
@@ -199,17 +207,19 @@ async function walkStep(page: Page, base: string, step: DemoStep, total: number,
 }
 
 /**
- * Save the screenshot of the step just walked, and return the stretch of the recording
- * that taking it can show. Once the still is taken, a frame that shows nothing new is
- * drawn (markFrame), and every frame drawn after the one the browser first shows it in
- * shows the walkthrough again. A recording places a frame at the time it was drawn, which
- * comes before the time it was shown, and it can miss a frame, holding the still's page
- * for as long as the page draws no other. So such frames are drawn until one drawn after
- * the first reaches the recording.
+ * Save the screenshot of the step just walked, once the surface has settled, and return
+ * the stretch of the recording that taking it can show, or null for a surface that takes
+ * its own stills (Surface.still), which changes nothing in the page. Once the still is
+ * taken, a frame that shows nothing new is drawn (markFrame), and every frame drawn after
+ * the one the browser first shows it in shows the walkthrough again. A recording places a
+ * frame at the time it was drawn, which comes before the time it was shown, and it can
+ * miss a frame, holding the still's page for as long as the page draws no other. So such
+ * frames are drawn until one drawn after the first reaches the recording.
  */
-export async function screenshotStep(page: Page, surface: Surface, shots: StepScreenshots, recording: RecordingFrames, step: DemoStep, log: (m: string) => void): Promise<Still> {
+export async function screenshotStep(page: Page, surface: Surface, shots: StepScreenshots, recording: RecordingFrames, step: DemoStep, log: (m: string) => void): Promise<Still | null> {
   await surface.settle();
-  const from = await shots.take(page, step, QUIET_MS);
+  const from = await shots.take(page, surface, step, QUIET_MS);
+  if (surface.still) return null;
   const shown = (await markFrame(page)) ?? Date.now();
   try {
     for (let tries = 0; tries < RESHOW_TRIES; tries++) {
@@ -261,11 +271,24 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
 
   const launched = !opts.browser;
   const browser = opts.browser ?? (await chromium.launch({ headless: !opts.headed, args: chromiumLaunchArgs() }));
-  const context = await browser.newContext({ ...device, recordVideo: { dir: capturesDir, size: frameSize } });
-  const page = await context.newPage();
-  const recording = await watchRecording(page);
-  const openedAt = Date.now();
-  await installPointer(page);
+  let connection: SurfaceConnection | null = null;
+  let context: BrowserContext | null = null;
+  let page: Page;
+  let recording: RecordingFrames;
+  let openedAt: number;
+  try {
+    connection = await connectSurface(demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, log });
+    context = await browser.newContext({ ...device, recordVideo: { dir: capturesDir, size: frameSize } });
+    page = await context.newPage();
+    recording = await watchRecording(page);
+    openedAt = Date.now();
+    await installPointer(page);
+  } catch (e) {
+    await context?.close().catch(() => {});
+    await connection?.close();
+    if (launched) await browser.close();
+    throw e;
+  }
 
   // Each segment, with a wall-clock time: for a step, when the browser first showed its
   // caption; for the cover and the closing card, when the page added the card; for a tail
@@ -278,7 +301,7 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
   let surface: Surface | null = null;
 
   try {
-    surface = await openSurface(page, demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, backdrop: true, log });
+    surface = await connection.show(page, true);
     const cover = await showCardOverlay(page, coverInnerHtml(BRAND, demo.title, demo.description, `${demo.steps.length} steps`), COVER_MS);
     segments.push({ narration: demo.title, wall: cover, card: true });
 
@@ -286,7 +309,15 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
       const { proved, shownAt } = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
       segments.push({ narration: step.narration, wall: shownAt, card: false });
       if (!proved) failures++;
-      if (shots) stills.push(await screenshotStep(page, surface, shots, recording, step, log));
+      // The surface settles before the next step starts, so the video films where the step
+      // ends, and a capture fails here, instead of filming on, once the frames of an iOS
+      // app's screen stop reaching the page. Taking a still settles it first.
+      if (shots) {
+        const still = await screenshotStep(page, surface, shots, recording, step, log);
+        if (still) stills.push(still);
+      } else {
+        await surface.settle();
+      }
     }
 
     if (demo.scrutiny.length) {
@@ -304,9 +335,14 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
       flushedAt = Date.now();
       webmPath = video ? await video.path() : null;
     } finally {
-      // The surface ends once the recording is flushed, so a program slow to end is not filmed.
-      await surface?.close();
-      if (launched) await browser.close();
+      // The surface ends once the recording is flushed, so a program slow to end, or a
+      // device put back as it was given, is not filmed.
+      try {
+        await surface?.close();
+      } finally {
+        await connection?.close();
+        if (launched) await browser.close();
+      }
     }
   }
 

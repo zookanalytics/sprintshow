@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// The `sprintshow` command: run / screenshot / assemble / lint. Thin — it parses flags and
-// calls the library, which is where the behaviour lives.
+// The `sprintshow` command: run / screenshot / assemble / lint / provision. Thin — it parses
+// flags and calls the library, which is where the behaviour lives.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -9,6 +9,8 @@ import { runDemo, runScreenshot, type CaptureMode, type RunResult } from './run.
 import { assembleVideo, type AssembleResult } from './assemble.ts';
 import { lintCli } from './lint.ts';
 import { outputSlug } from './demo-script.ts';
+import { provisionAppium } from './appium.ts';
+import { provisionRunnerApp } from './webdriveragent.ts';
 import type { ServeOptions } from './server.ts';
 
 const HELP = `sprintshow — auto-generate a quick, unpolished demo video of what your app (or agent) just did.
@@ -21,12 +23,19 @@ Usage:
                                                last step leaves as one PNG
   sprintshow assemble <captures-dir> [options]  Frames + manifest.json → narrated mp4
   sprintshow lint <demo.md> [--strict]         Check a demo script before capturing
+  sprintshow provision appium                  Install Appium and its XCUITest driver, and
+                                               build the runner app the driver installs on
+                                               an iOS app's device
 
 run options:
   --mode <walkthrough|proof>  walkthrough (default): one continuous recorded take.
                               proof: one captioned frame per step, each proof-checked.
-  --base-url <url>            Drive against a server already running.
+  --base-url <url>            Drive against a server already running, or, for an iOS
+                              app script, an app already running on a booted simulator:
+                              ios-simulator://<device UDID>/<bundle id>.
   --serve "<command>"         Spawn a dev-server command, wait for it, then tear it down.
+                              For an iOS app script, the command brings the app up on a
+                              simulator and prints its ios-simulator:// URL when it is up.
   --serve-dir <dir>           Serve a static directory with the built-in file server.
   --port <n>                  Port for --serve (default 5173) or --serve-dir (default: a
                               free port the system assigns).
@@ -65,6 +74,16 @@ terminal scripts:
   Its shell starts in --cwd. Its steps run commands and press keys, and its proofs read
   the screen, a row, the cursor or the last command's exit status. screenshot saves
   the terminal window, its rounded corners transparent.
+
+iOS app scripts:
+  A script that declares **Platform:** iOS drives an iOS app on a simulator through
+  Appium, named by --base-url or brought up by --serve, and takes no --serve-dir or
+  --port. Its steps tap, type, scroll and press keys, naming an element by its
+  accessibility identifier, or by its label when it has none, and its proofs read the
+  app's elements. Each step's PNG, and screenshot's, is the device's own screenshot.
+  Appium, its XCUITest driver and its runner app are installed once, with
+  \`sprintshow provision appium\`. A run sets a light appearance and a fixed status bar,
+  and puts the device back as it was given.
 
 run and screenshot exit codes:
   0                           The outputs are saved and every step's proof held.
@@ -229,6 +248,21 @@ async function assembleCommand(rest: string[]): Promise<number> {
   return 0;
 }
 
+/** What `provision` can install. */
+const PROVISIONED = ['appium'];
+
+async function provisionCommand(rest: string[]): Promise<number> {
+  const { pos, flags } = collect(rest);
+  if (pos.length !== 1 || !PROVISIONED.includes(pos[0]) || Object.keys(flags).length) {
+    console.error(`provision: name what to install (${PROVISIONED.join(', ')}), and no option${rest.length ? ` (got "${rest.join(' ')}")` : ''}\n`);
+    console.log(HELP);
+    return 1;
+  }
+  await provisionAppium();
+  await provisionRunnerApp();
+  return 0;
+}
+
 function version(): string {
   try {
     return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? '0.0.0';
@@ -258,6 +292,8 @@ async function main(): Promise<number> {
       const { pos, flags } = collect(rest);
       return lintCli(pos[0], Boolean(flags.strict));
     }
+    case 'provision':
+      return provisionCommand(rest);
     default:
       console.error(`unknown command: ${cmd}\n`);
       console.log(HELP);

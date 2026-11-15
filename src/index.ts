@@ -1,8 +1,9 @@
 // Public library API for @zookanalytics/sprintshow.
 //
-// The CLI (`sprintshow run|screenshot|assemble|lint`) is one consumer of this surface; the
-// same functions are importable for the seed-test bootstrap (hand `captureProof` or
-// `captureScreenshot` a ready page) and for embedding the engine in another tool.
+// The CLI (`sprintshow run|screenshot|assemble|lint|provision`) is one consumer of this
+// surface; the same functions are importable for the seed-test bootstrap (hand
+// `captureProof` or `captureScreenshot` a ready page) and for embedding the engine in
+// another tool.
 
 // The demo-script grammar: parser, types, and slug helpers.
 export * from './demo-script.ts';
@@ -21,14 +22,21 @@ export { runDemo, runScreenshot, type RunDemoOptions, type RunResult, type RunSc
 // The linter core + CLI.
 export { lintDemo, lintCli, looksLikeDirective, looksLikeAssertion, outputPathFor, type Finding, type Severity, type LintEnv } from './lint.ts';
 
-// The server seam.
-export { ensureServer, DEFAULT_PORT, type ServeOptions, type ServerHandle } from './server.ts';
+// The server seam, and the app an iOS app script drives.
+export { ensureServer, ensureIosApp, DEFAULT_PORT, type ServeOptions, type ServerHandle } from './server.ts';
+export { parseSimulatorUrl, simulatorUrl, SIMULATOR_URL_FORM, type SimulatorApp } from './simulator.ts';
+
+// What `sprintshow provision appium` installs for an iOS app script: Appium and its
+// XCUITest driver (provisionAppium), and then the runner app the driver installs on the
+// device, built from the driver's WebDriverAgent (provisionRunnerApp).
+export { provisionAppium } from './appium.ts';
+export { provisionRunnerApp } from './webdriveragent.ts';
 
 // Browser primitives for the seed-test bootstrap and custom drivers. A custom driver that
 // runs its steps through `runStep` checks each proof as the built-in captures do, and one
-// that brings its script up with `openSurface` drives a terminal script as they do. A
-// page made with `contextOptions` is the device the script names, as theirs is.
-export { installPointer, glideAndClick, glideAndType, glideTo, runAction, runStep, checkAssertion, awaitAssertion, chromiumLaunchArgs, openSurface, contextOptions, videoFrame, VIEWPORT, type StepProof, type Surface, type OpenSurfaceOptions } from './browser.ts';
+// that brings its script up with `openSurface` drives a terminal or iOS app script as they
+// do. A page made with `contextOptions` is the device the script names, as theirs is.
+export { installPointer, glideAndClick, glideAndType, glideTo, runAction, runStep, checkAssertion, awaitAssertion, chromiumLaunchArgs, connectSurface, openSurface, contextOptions, videoFrame, VIEWPORT, type StepProof, type Surface, type SurfaceConnection, type OpenSurfaceOptions } from './browser.ts';
 
 // ffmpeg plumbing, for callers assembling audio themselves.
 export { ffmpegBin, probeDuration, buildNarration, mixMusicBed, type NarrationSegment, type NarrationTrack } from './ffmpeg.ts';

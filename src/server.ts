@@ -11,20 +11,38 @@
 //
 // The start URL in the demo script is always just a path (+ query); the origin comes
 // from whichever of these is in effect.
+//
+// An iOS app script's app comes the same two ways, through the same options
+// (ensureIosApp). `--base-url` takes the simulator URL of an app already running on a
+// booted device, ios-simulator://<device UDID>/<bundle id> (simulator.ts). `--serve` takes
+// the repo's command that brings the app up on a simulator: the engine starts it, waits
+// until it prints the app's simulator URL on its standard output, which says the app is up
+// and where, and stops it once the run ends, as it does a dev server. A port has no
+// meaning for an app on a simulator, and an app is not served from a directory, so
+// `--port` and `--serve-dir` are refused. The command runs with the engine's environment
+// less the keys the engine holds, as every tool the engine starts for an iOS app does.
+// Stopping it stops its whole process group, which runs on after the command itself
+// while anything it started does, and can take as long as deleting a device does. The
+// engine waits until every process in the group has exited, and kills what is left of it
+// after a minute.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
+import type { Readable } from 'node:stream';
+
+import { findSimulatorUrl, isSimulatorUrl, parseSimulatorUrl, simulatorUrl, toolEnv, SIMULATOR_URL_FORM } from './simulator.ts';
 
 /** The port a `serve` command is polled on when no port is named. */
 export const DEFAULT_PORT = 5173;
 
 export interface ServeOptions {
-  /** Reuse a running server at this origin; nothing is spawned or torn down. */
+  /** Reuse a running server at this origin, or an iOS app at this simulator URL; nothing is spawned or torn down. */
   baseUrl?: string | null;
-  /** Shell command to spawn as the dev server (e.g. `npm run dev`). */
+  /** Shell command to spawn as the dev server (e.g. `npm run dev`), or that brings an iOS app up on a simulator and prints its URL. */
   serve?: string | null;
   /** Directory to serve with the built-in static file server. */
   serveDir?: string | null;
@@ -134,6 +152,10 @@ export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
     throw new Error(`server: the port must be a whole number from 1 to 65535 (got ${opts.port})`);
   }
 
+  if (opts.baseUrl && isSimulatorUrl(opts.baseUrl)) {
+    throw new Error(`server: ${opts.baseUrl} names an iOS app on a simulator, which a script that declares **Platform:** iOS drives; this script drives a page, at a web app's origin`);
+  }
+
   if (opts.baseUrl) {
     const baseUrl = opts.baseUrl.replace(/\/$/, '');
     log(`server: using ${baseUrl}`);
@@ -179,6 +201,130 @@ export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
   }
 
   throw new Error('no server: pass --base-url <url>, --serve "<command>", or --serve-dir <dir>');
+}
+
+/** How long an iOS app's `--serve` command has to print its app's simulator URL. Building the app and booting a device can take minutes. */
+export const IOS_READY_TIMEOUT_MS = 600_000;
+/** How long the processes of an iOS app's `--serve` command have to exit once told to stop, which can mean deleting its device, before they are killed. */
+export const IOS_STOP_TIMEOUT_MS = 60_000;
+/** How many of the last lines a `--serve` command printed are kept, for the message of one that fails. */
+const OUTPUT_LINES = 5;
+
+/**
+ * Bring up the iOS app an iOS app script drives, and return a handle whose base URL is the
+ * app's simulator URL: the app `baseUrl` names, already running, or the app a `serve`
+ * command brings up and names by printing its simulator URL on a line of its standard
+ * output. Throws when neither is given, when the URL is not a simulator URL, when the
+ * command exits or runs out of time before it prints one, or when `serveDir` or `port`
+ * is given. `readyTimeout` is how long the command has to print the URL
+ * (IOS_READY_TIMEOUT_MS by default), and `stopTimeout` how long its processes have to
+ * exit once told to stop before they are killed (IOS_STOP_TIMEOUT_MS by default).
+ */
+export async function ensureIosApp(opts: ServeOptions & { readyTimeout?: number; stopTimeout?: number }): Promise<ServerHandle> {
+  const log = opts.log ?? ((m: string) => console.log(m));
+  if (opts.serveDir) throw new Error(`server: an iOS app is not served from a directory; pass --base-url ${SIMULATOR_URL_FORM}, or --serve "<command>" that brings the app up and prints that URL`);
+  if (opts.port !== undefined) throw new Error("server: an iOS app script takes no --port; its --serve command prints the app's simulator URL once the app is up");
+  if (opts.baseUrl) {
+    const app = parseSimulatorUrl(opts.baseUrl);
+    if (!app) throw new Error(`server: an iOS app script takes its app's simulator URL, ${SIMULATOR_URL_FORM}, as --base-url (got "${opts.baseUrl}")`);
+    log(`app: using ${simulatorUrl(app)}`);
+    return { baseUrl: simulatorUrl(app), stop: async () => {} };
+  }
+  if (opts.serve) return serveIosApp(opts.serve, opts.cwd ?? process.cwd(), opts.readyTimeout ?? IOS_READY_TIMEOUT_MS, opts.stopTimeout ?? IOS_STOP_TIMEOUT_MS, log);
+  throw new Error(`no app: pass --base-url ${SIMULATOR_URL_FORM}, or --serve "<command>" that brings the app up and prints that URL`);
+}
+
+/** Start `command`, and resolve once it prints a simulator URL, with a handle that stops it and what it started. */
+async function serveIosApp(command: string, cwd: string, readyTimeout: number, stopTimeout: number, log: (m: string) => void): Promise<ServerHandle> {
+  log(`app: starting \`${command}\`…`);
+  // Detached, so its whole process group can be stopped: the command starts children.
+  const child = spawn(command, { cwd, env: toolEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true, shell: true });
+  child.unref();
+  const output: string[] = [];
+  const keep = (line: string): void => {
+    if (!line.trim()) return;
+    output.push(line.trim());
+    output.splice(0, Math.max(0, output.length - OUTPUT_LINES));
+  };
+  let found: string | null = null;
+  // Each stream is read a whole line at a time, and its last line once the stream ends,
+  // newline or none. A stream is read to its end, so a command that keeps printing never
+  // blocks on a full pipe.
+  const read = (stream: Readable | null, scan: boolean): void => {
+    if (!stream) return;
+    createInterface({ input: stream, crlfDelay: Infinity }).on('line', (line) => {
+      keep(line);
+      if (scan && !found) {
+        const app = findSimulatorUrl(line);
+        if (app) found = simulatorUrl(app);
+      }
+    });
+  };
+  read(child.stdout, true);
+  read(child.stderr, false);
+  let exit: string | null = null;
+  // The command's last lines, its URL among them, can reach the engine after its exit, so
+  // it has ended once its output is read to the end ('close'), not once it exits.
+  child.once('close', (code, signal) => {
+    exit = signal ? `was ended by ${signal}` : `exited ${code}`;
+  });
+  child.once('error', (e) => {
+    exit = `could not start: ${e.message}`;
+  });
+
+  const stop = async (): Promise<void> => {
+    if (!(await stopGroup(child, stopTimeout))) log(`app: what \`${command}\` started did not all exit within ${stopTimeout / 1000}s of SIGTERM, so what was left was killed`);
+  };
+  const said = (): string => (output.length ? `; its last output: ${output.join(' / ')}` : '');
+  const deadline = Date.now() + readyTimeout;
+  while (!found) {
+    if (exit) {
+      // What the command started can run on after it, its output sent elsewhere.
+      await stop();
+      throw new Error(`server: \`${command}\` ${exit} before it printed its app's simulator URL, ${SIMULATOR_URL_FORM}${said()}`);
+    }
+    if (Date.now() > deadline) {
+      await stop();
+      throw new Error(`server: \`${command}\` printed no simulator URL, ${SIMULATOR_URL_FORM}, within ${readyTimeout / 1000}s${said()}`);
+    }
+    await sleep(100);
+  }
+  log(`app: ready at ${found}`);
+  return { baseUrl: found, stop };
+}
+
+/**
+ * Whether process group `pgid` still has a process in it. A group whose processes the
+ * engine may not signal still has them.
+ */
+function groupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * Stop `child`'s process group with SIGTERM, and resolve once every process in it has
+ * exited, or with SIGKILL to what is left of it `ms` later. Resolves whether SIGTERM ended
+ * it. The group outlives `child` while anything `child` started runs, so it is the group
+ * that is waited for.
+ */
+async function stopGroup(child: ChildProcess, ms: number): Promise<boolean> {
+  const pgid = child.pid;
+  if (!pgid) return true;
+  stopChild(child);
+  const deadline = Date.now() + ms;
+  while (groupAlive(pgid) && Date.now() < deadline) await sleep(100);
+  if (!groupAlive(pgid)) return true;
+  try {
+    process.kill(-pgid, 'SIGKILL');
+  } catch {
+    /* it has ended */
+  }
+  return false;
 }
 
 function stopChild(child: ChildProcess): void {

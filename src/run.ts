@@ -3,7 +3,9 @@
 // opens its own recorded context. The proof and screenshot drivers take a plain page,
 // which this layer launches a browser for and makes as the script's device
 // (contextOptions). A terminal script takes no server: its steps run in the engine's own
-// terminal, whose shell starts in `cwd`.
+// terminal, whose shell starts in `cwd`. An iOS app script takes its app through the same
+// options a page script takes its server through (ensureIosApp), and its drivers connect
+// to the app and show its screen in their page.
 //
 // A run returns a video, screenshots or both, as its caller chooses: the video's driver
 // saves each step's screenshot as it drives the steps, and a run with no video drives
@@ -13,11 +15,11 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { chromium, type BrowserContextOptions, type Page } from 'playwright';
 
-import { parseDemoScript, outputSlug, type Demo } from './demo-script.ts';
-import { ensureServer, type ServeOptions, type ServerHandle } from './server.ts';
+import { parseDemoScript, outputSlug, surfaceOf, type Demo } from './demo-script.ts';
+import { ensureServer, ensureIosApp, type ServeOptions, type ServerHandle } from './server.ts';
 import { captureProof, capturesRoot, type CaptureResult } from './capture.ts';
 import { captureWalkthrough } from './walkthrough.ts';
-import { captureScreenshot, captureScreenshots, checkScreenshotDir, AREA_CONFLICT, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
+import { captureScreenshot, captureScreenshots, checkScreenshotDir, AREA_CONFLICT, IOS_AREA, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
 import { chromiumLaunchArgs, contextOptions } from './browser.ts';
 import { shellDir } from './terminal.ts';
 
@@ -83,12 +85,14 @@ function slugName(title: string): string {
 }
 
 /**
- * What a script's steps run against: a page script's server, brought up from the server
- * options, or none for a terminal script, which runs in the engine's own terminal. A
- * server option given with a terminal script is refused rather than ignored, and the
- * directory its shell starts in is checked before a browser is spent.
+ * What a script's steps run against: a page script's server or an iOS app script's app,
+ * brought up from the server options, or none for a terminal script, which runs in the
+ * engine's own terminal. A server option given with a terminal script is refused rather
+ * than ignored, and the directory its shell starts in is checked before a browser is
+ * spent.
  */
 async function serverFor(demo: Demo, opts: ServeOptions): Promise<ServerHandle> {
+  if (surfaceOf(demo) === 'ios') return ensureIosApp(opts);
   if (!demo.terminal) return ensureServer(opts);
   if (opts.baseUrl || opts.serve || opts.serveDir || opts.port !== undefined) {
     throw new Error("terminal: a terminal script runs in the engine's own terminal and takes no server; drop --base-url, --serve, --serve-dir and --port");
@@ -196,6 +200,7 @@ export async function runScreenshot(opts: RunScreenshotOptions): Promise<Screens
   if (opts.fullPage && opts.selector) throw new Error(AREA_CONFLICT);
   const { demo } = loadDemo(opts.script);
   if (demo.terminal && opts.selector) throw new Error(TERMINAL_SELECTOR);
+  if (surfaceOf(demo) === 'ios' && (opts.fullPage || opts.selector || opts.transparent || scale !== undefined)) throw new Error(IOS_AREA);
   const device = contextOptions(demo);
   log(`demo: "${demo.title}" — ${demo.steps.length} steps · screenshot`);
 

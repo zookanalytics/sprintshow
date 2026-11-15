@@ -17,6 +17,7 @@
 //   **Start:** `<url path + query>`        (a page script)
 //   **Device:** <device name> or <width>x<height>   (a page script; optional, 1280x900 by default)
 //   **Terminal:** <cols>x<rows>            (a terminal script; the size is optional)
+//   **Platform:** iOS                      (an iOS app script)
 //   **Auth:** yes|no           (optional; accepted and ignored — see below)
 //   <free prose>               (becomes the cover subtitle / description)
 //   ## Steps
@@ -28,15 +29,19 @@
 //   ## Scrutiny                (optional)
 //   - <thing a viewer should check critically>
 //
-// ── Two surfaces ──
+// ── Three surfaces ──
 //
 // A page script drives an app in a browser page, and its `**Start:**` path is joined
 // onto the app's origin. A script that declares `**Terminal:**` drives a bash session in
-// the engine's own terminal instead, and needs no `**Start:**`. Each surface has its own
-// actions and assertions, and the parser reads only the declared surface's. `wait` and
-// `press` are actions of both, and `press` reads its keys the same way on each. A
-// directive or an assertion of the other surface stays prose, as any unrecognised code
-// span does, and the linter reports it.
+// the engine's own terminal instead, and needs no `**Start:**`. A script that declares
+// `**Platform:** iOS` drives an iOS app on a simulator, the app its caller names, so it
+// needs no `**Start:**` either. Each surface has its own actions and assertions, and the
+// parser reads only the declared surface's. `wait` and `press` are actions of all three,
+// and `press` reads its keys the same way on each. An iOS app script reads a page
+// script's actions and assertions with a page script's grammar, less those that have no
+// meaning on a device: `goto`, `resize`, `focused` and `eval`. A directive or an
+// assertion of another surface stays prose, as any unrecognised code span does, and the
+// linter reports it.
 //
 // ── A page script's device ──
 //
@@ -64,21 +69,34 @@
 // Page assertions:      visible <sel> · hidden <sel> · focused <sel> · count <sel> <op> <n> · text <sel> ~ <matcher> · eval <js>
 // Terminal actions:     run <command line> · press <key or "text"> … · waitForScreen <matcher> · wait <ms>
 // Terminal assertions:  screen ~ <matcher> · row <n> ~ <matcher> · cursor <row> <col> · exit <op> <n>
+// iOS app actions:      wait <ms> · waitFor <selector> · waitForText <selector> ~ <substr> · click <selector> · type <selector> ~ <text> · scroll <selector> · press <key or "text"> …
+// iOS app assertions:   visible <sel> · hidden <sel> · count <sel> <op> <n> · text <sel> ~ <matcher>
 //   <op> ∈ >= > == <= <   ·   <matcher> = /regex/ or "substring" or bare substring
 
-/** What a script drives: an app in a browser page, or a shell in the engine's terminal. */
-export type SurfaceKind = 'page' | 'terminal';
+/** What a script drives: an app in a browser page, a shell in the engine's terminal, or an iOS app on a simulator. */
+export type SurfaceKind = 'page' | 'terminal' | 'ios';
 
 export type PageVerb = 'goto' | 'wait' | 'waitFor' | 'waitForText' | 'click' | 'type' | 'scroll' | 'press' | 'resize';
 export type TerminalVerb = 'run' | 'press' | 'waitForScreen' | 'wait';
+export type IosVerb = Exclude<PageVerb, 'goto' | 'resize'>;
 export type ActionVerb = PageVerb | TerminalVerb;
 /** A page script's actions. */
 export const ACTION_VERBS: readonly PageVerb[] = ['goto', 'wait', 'waitFor', 'waitForText', 'click', 'type', 'scroll', 'press', 'resize'];
 /** A terminal script's actions. */
 export const TERMINAL_VERBS: readonly TerminalVerb[] = ['run', 'press', 'waitForScreen', 'wait'];
+/** An iOS app script's actions: a page script's, less those that have no meaning on a device. */
+export const IOS_VERBS: readonly IosVerb[] = ['wait', 'waitFor', 'waitForText', 'click', 'type', 'scroll', 'press'];
 
 /** One key a `press` presses: a key name as Playwright's keyboard names it, or text to type. */
 export type PressKey = { key: string } | { text: string };
+/** The keys a `press` in an iOS app script presses, besides text to type: those an iOS app types a character for. */
+export const IOS_KEYS = ['Enter', 'Tab', 'Backspace', 'Space'] as const;
+export type IosKey = (typeof IOS_KEYS)[number];
+
+/** The keys among `keys` that a `press` in an iOS app cannot press, by name, in order. */
+export function keysIosLacks(keys: readonly PressKey[]): string[] {
+  return keys.flatMap((k) => ('key' in k && !(IOS_KEYS as readonly string[]).includes(k.key) ? [k.key] : []));
+}
 
 export interface DemoAction {
   verb: ActionVerb;
@@ -102,17 +120,37 @@ export interface DemoAction {
 
 export type PageAssertionKind = 'visible' | 'hidden' | 'focused' | 'count' | 'text' | 'eval';
 export type TerminalAssertionKind = 'screen' | 'row' | 'cursor' | 'exit';
+export type IosAssertionKind = Exclude<PageAssertionKind, 'focused' | 'eval'>;
 export type AssertionKind = PageAssertionKind | TerminalAssertionKind;
 /** A page script's assertions. */
 export const ASSERTION_KINDS: readonly PageAssertionKind[] = ['visible', 'hidden', 'focused', 'count', 'text', 'eval'];
 /** A terminal script's assertions. */
 export const TERMINAL_ASSERTION_KINDS: readonly TerminalAssertionKind[] = ['screen', 'row', 'cursor', 'exit'];
+/** An iOS app script's assertions: a page script's, less those that have no meaning on a device. */
+export const IOS_ASSERTION_KINDS: readonly IosAssertionKind[] = ['visible', 'hidden', 'count', 'text'];
 export type CountOp = '>=' | '>' | '==' | '<=' | '<';
 export const COUNT_OPS: readonly CountOp[] = ['>=', '>', '==', '<=', '<'];
+
+/** Whether `actual` compares with `n` as `op` says, as a `count` assertion reads it. */
+export function compareCount(actual: number, op: string, n: number): boolean {
+  switch (op) {
+    case '>=': return actual >= n;
+    case '>': return actual > n;
+    case '==': return actual === n;
+    case '<=': return actual <= n;
+    case '<': return actual < n;
+    default: return false;
+  }
+}
 
 export interface Matcher {
   type: 'regex' | 'substr';
   value: string;
+}
+
+/** Whether `text` matches `m`, as a `text` assertion reads it: the regex finds a match in it, or it holds the substring. */
+export function matchText(text: string, m: Matcher | undefined): boolean {
+  return m?.type === 'regex' ? new RegExp(m.value).test(text) : text.includes(m?.value ?? '');
 }
 
 export interface Assertion {
@@ -193,7 +231,7 @@ export interface DemoStep {
 
 export interface Demo {
   title: string;
-  /** Start URL path (+ query). The driver joins it onto the base origin. A terminal script needs none, and it is '' there unless the script names one. */
+  /** Start URL path (+ query). The driver joins it onto the base origin. A terminal or iOS app script needs none, and it is '' there unless the script names one. */
   start: string;
   /** Free prose between the header and `## Steps` — the cover subtitle. */
   description: string;
@@ -202,14 +240,27 @@ export interface Demo {
   scrutiny: string[];
   /** Set when the script declares `**Terminal:**`: its steps drive a shell in a terminal of this size, not a page. */
   terminal?: TerminalSpec;
-  /** Set when the script declares `**Device:**`: the device a page script's captures emulate. A terminal script's captures ignore it. */
+  /** Set when the script declares `**Device:**`: the device a page script's captures emulate. A terminal or iOS app script's captures ignore it. */
   device?: DeviceSpec;
+  /** Set when the script declares `**Platform:** iOS`: its steps drive an iOS app on a simulator, not a page. */
+  platform?: Platform;
 }
+
+/** A platform a `**Platform:**` line may name. */
+export type Platform = 'iOS';
+export const PLATFORMS: readonly Platform[] = ['iOS'];
 
 /** The surface a parsed script drives. */
 export function surfaceOf(demo: Demo): SurfaceKind {
-  return demo.terminal ? 'terminal' : 'page';
+  return demo.terminal ? 'terminal' : demo.platform === 'iOS' ? 'ios' : 'page';
 }
+
+/** Each surface's actions and assertions. */
+export const SURFACE_VOCABULARY: Record<SurfaceKind, { verbs: readonly ActionVerb[]; assertions: readonly AssertionKind[] }> = {
+  page: { verbs: ACTION_VERBS, assertions: ASSERTION_KINDS },
+  terminal: { verbs: TERMINAL_VERBS, assertions: TERMINAL_ASSERTION_KINDS },
+  ios: { verbs: IOS_VERBS, assertions: IOS_ASSERTION_KINDS },
+};
 
 /** Pull every inline-code span `` `...` `` out of a line, in order. */
 export function inlineCodes(line: string): string[] {
@@ -234,15 +285,15 @@ function proseOf(line: string): string {
  * Parse one action directive of `surface`: on a page, `goto /x`, `waitFor #y`,
  * `waitForText #z ~ hi`, `wait 500`, `click #b`, `type #i ~ hello`, `press Shift+Tab`,
  * `resize 1280x800`; in a terminal, `run ls -la`, `press ArrowDown "text" Enter`,
- * `waitForScreen /ready/`, `wait 500`. Returns null for anything else, another surface's
- * verbs included.
+ * `waitForScreen /ready/`, `wait 500`; in an iOS app, a page's, less `goto` and `resize`,
+ * such as `click add` or `type new-task ~ hello`. Returns null for anything else, another
+ * surface's verbs included.
  */
 export function parseAction(code: string, surface: SurfaceKind = 'page'): DemoAction | null {
   const raw = code.trim();
   const sp = raw.indexOf(' ');
   const verb = (sp === -1 ? raw : raw.slice(0, sp)) as string;
-  const verbs: readonly ActionVerb[] = surface === 'terminal' ? TERMINAL_VERBS : ACTION_VERBS;
-  if (!verbs.includes(verb as ActionVerb)) return null;
+  if (!SURFACE_VOCABULARY[surface].verbs.includes(verb as ActionVerb)) return null;
   const rest = sp === -1 ? '' : raw.slice(sp + 1).trim();
   if (verb === 'wait') {
     const ms = Number(rest);
@@ -299,7 +350,8 @@ export function parseKeys(spec: string): PressKey[] | null {
 
 /**
  * Parse the assertion code span from a `_Prove:_` / `_Fail if:_` line of a `surface`
- * script. Returns null if unrecognised, another surface's assertions included.
+ * script. Returns null if unrecognised, another surface's assertions included. An iOS app
+ * script's assertions read as a page script's do.
  */
 export function parseAssertion(code: string, surface: SurfaceKind = 'page'): Assertion | null {
   const raw = code.trim();
@@ -307,6 +359,7 @@ export function parseAssertion(code: string, surface: SurfaceKind = 'page'): Ass
   const kind = (sp === -1 ? raw : raw.slice(0, sp)) as string;
   const rest = sp === -1 ? '' : raw.slice(sp + 1).trim();
   if (surface === 'terminal') return parseTerminalAssertion(kind, rest, raw);
+  if (!SURFACE_VOCABULARY[surface].assertions.includes(kind as AssertionKind)) return null;
 
   switch (kind) {
     case 'visible':
@@ -394,6 +447,17 @@ export function parseViewportSize(value: string): ViewportSize | null {
 }
 
 /**
+ * Read a `**Platform:**` line's value: a platform PLATFORMS holds, in any letter case.
+ * Throws on anything else.
+ */
+export function parsePlatform(value: string): Platform {
+  const v = value.replace(/`/g, '').trim();
+  const platform = PLATFORMS.find((p) => p.toLowerCase() === v.toLowerCase());
+  if (!platform) throw new Error(`demo script: **Platform:** takes ${PLATFORMS.join(' or ')}, for an app on its simulator (got "${v}")`);
+  return platform;
+}
+
+/**
  * Read a `**Device:**` line's value: a viewport size when it starts with a digit, else a
  * device's name, kept as written. Throws on an empty value, and on a size that
  * parseViewportSize refuses.
@@ -469,6 +533,7 @@ const H1 = /^#\s+(?:Demo:\s*)?(.+)$/i;
 const START = /^\*\*Start:\*\*\s*(.+)$/i;
 const TERMINAL = /^\*\*Terminal:\*\*\s*(.*)$/i;
 const DEVICE = /^\*\*Device:\*\*\s*(.*)$/i;
+const PLATFORM = /^\*\*Platform:\*\*\s*(.*)$/i;
 /** Generic-dialect header line; accepted so it never lands in the cover subtitle. */
 const AUTH = /^\*\*Auth:\*\*/i;
 /** A `##` section heading (`###` and deeper stay prose). */
@@ -495,8 +560,9 @@ function bulletText(s: string): string {
  * step description prose; a `_Prove:_` without a recognised assertion is kept as a
  * prose-only (manual) contract. Throws only when the document has no title, no steps,
  * or no `**Start:**` in a page script — the things the driver cannot run without — or
- * when `**Terminal:**` names a size a terminal is not drawn at, or `**Device:**` names
- * neither a device nor a viewport size.
+ * when `**Terminal:**` names a size a terminal is not drawn at, `**Device:**` names
+ * neither a device nor a viewport size, `**Platform:**` names no platform, or a script
+ * declares both `**Terminal:**` and `**Platform:**`.
  */
 export function parseDemoScript(md: string): Demo {
   const lines = md.split(/\r?\n/);
@@ -504,6 +570,7 @@ export function parseDemoScript(md: string): Demo {
   let start = '';
   let terminal: TerminalSpec | undefined;
   let device: DeviceSpec | undefined;
+  let platform: Platform | undefined;
   const descParts: string[] = [];
   const steps: DemoStep[] = [];
   const scrutiny: string[] = [];
@@ -555,6 +622,11 @@ export function parseDemoScript(md: string): Demo {
         device = parseDeviceSpec(dv[1]);
         continue;
       }
+      const pf = line.match(PLATFORM);
+      if (pf) {
+        platform = parsePlatform(pf[1]);
+        continue;
+      }
       if (AUTH.test(line)) continue; // generic-dialect field; auth is arranged by the caller
       // Prose between the header and ## Steps → the description (skip the title line).
       if (line && !H1.test(line)) descParts.push(line);
@@ -584,7 +656,7 @@ export function parseDemoScript(md: string): Demo {
     if (!cur || !line) continue;
 
     // Every head line comes before `## Steps`, so the surface is settled by now.
-    const surface: SurfaceKind = terminal ? 'terminal' : 'page';
+    const surface: SurfaceKind = terminal ? 'terminal' : platform === 'iOS' ? 'ios' : 'page';
     const pv = line.match(PROVE);
     if (pv) {
       cur.prove = parseContract(pv[1], surface);
@@ -616,10 +688,20 @@ export function parseDemoScript(md: string): Demo {
   }
 
   if (!title) throw new Error('demo script: missing "# Demo: <title>" heading');
-  if (!start && !terminal) throw new Error('demo script: missing "**Start:** <url>" (or "**Terminal:**" for a terminal script)');
+  if (terminal && platform) throw new Error('demo script: a script drives one surface; declare **Terminal:** for a terminal or **Platform:** for an app on its simulator, not both');
+  if (!start && !terminal && !platform) throw new Error('demo script: missing "**Start:** <url>" (or "**Terminal:**" for a terminal script, or "**Platform:** iOS" for an iOS app)');
   if (steps.length === 0) throw new Error('demo script: no steps found under "## Steps"');
 
-  return { title, start, description: descParts.join(' ').replace(/\s+/g, ' ').trim(), steps, scrutiny, ...(terminal ? { terminal } : {}), ...(device ? { device } : {}) };
+  return {
+    title,
+    start,
+    description: descParts.join(' ').replace(/\s+/g, ' ').trim(),
+    steps,
+    scrutiny,
+    ...(terminal ? { terminal } : {}),
+    ...(device ? { device } : {}),
+    ...(platform ? { platform } : {}),
+  };
 }
 
 /**
