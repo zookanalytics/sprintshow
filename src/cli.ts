@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// The `sprintshow` command: run / screenshot / assemble / lint / provision. Thin — it parses
-// flags and calls the library, which is where the behaviour lives.
+// The `sprintshow` command: run / screenshot / assemble / lint / surface / provision. Thin —
+// it parses flags and calls the library, which is where the behaviour lives.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { runDemo, runScreenshot, type CaptureMode, type RunResult } from './run.ts';
 import { assembleVideo, type AssembleResult } from './assemble.ts';
 import { lintCli } from './lint.ts';
-import { outputSlug } from './demo-script.ts';
+import { outputSlug, parseDemoScript, surfaceOf } from './demo-script.ts';
 import { provisionAppium } from './appium.ts';
 import { provisionRunnerApp } from './webdriveragent.ts';
 import type { ServeOptions } from './server.ts';
@@ -23,6 +23,8 @@ Usage:
                                                last step leaves as one PNG
   sprintshow assemble <captures-dir> [options]  Frames + manifest.json → narrated mp4
   sprintshow lint <demo.md> [--strict]         Check a demo script before capturing
+  sprintshow surface <demo.md>                 Print the surface a demo script drives,
+                                               page or terminal, as JSON
   sprintshow provision appium                  Install Appium and its XCUITest driver, and
                                                build the runner app the driver installs on
                                                an iOS app's device
@@ -94,6 +96,13 @@ assemble options:
   -o, --output <file.mp4>     Output path (default demos/<dir-name>.mp4).
   --music <file>              Mix a background-music bed under the narration.
   --no-narrate                Force a silent video.
+
+surface output:
+  One JSON object, the only thing on stdout: {"surface":"page"} for a script that
+  drives an app in a browser page, or {"surface":"terminal"} for one that declares
+  **Terminal:**. Every surface the engine drives is a value of this one field. It exits
+  0 when the script parses, and 1 when the file is missing or does not parse, with the
+  reason on stderr and nothing on stdout.
 
 Narration is optional: set OPENAI_API_KEY to voice the steps (tts-1/nova; override with
 DEMO_TTS_MODEL / DEMO_TTS_VOICE). Without it the mp4 is silent and captioned.
@@ -248,6 +257,23 @@ async function assembleCommand(rest: string[]): Promise<number> {
   return 0;
 }
 
+/**
+ * Print `{"surface": <surfaceOf>}` for one demo script, so a caller learns what the script
+ * drives from the parser and never from the script's lines. Callers parse stdout, so it
+ * carries that object alone, and a refusal leaves it empty and exits 1.
+ */
+function surfaceCommand(rest: string[]): number {
+  if (rest.length !== 1 || rest[0].startsWith('-')) {
+    console.error(`surface: name one demo script, and no option${rest.length ? ` (got "${rest.join(' ')}")` : ''}`);
+    return 1;
+  }
+  const scriptPath = path.resolve(rest[0]);
+  if (!existsSync(scriptPath)) throw new Error(`demo script not found: ${scriptPath}`);
+  const demo = parseDemoScript(readFileSync(scriptPath, 'utf8'));
+  console.log(JSON.stringify({ surface: surfaceOf(demo) }));
+  return 0;
+}
+
 /** What `provision` can install. */
 const PROVISIONED = ['appium'];
 
@@ -292,6 +318,8 @@ async function main(): Promise<number> {
       const { pos, flags } = collect(rest);
       return lintCli(pos[0], Boolean(flags.strict));
     }
+    case 'surface':
+      return surfaceCommand(rest);
     case 'provision':
       return provisionCommand(rest);
     default:
