@@ -33,15 +33,22 @@ export function ffmpegBin(): string | null {
   return existsSync(p) ? p : null;
 }
 
-/** The binary, or a diagnosis of why there isn't one. For the paths that cannot degrade. */
+/**
+ * The binary, or a diagnosis of why there isn't one. For the paths that cannot degrade.
+ *
+ * The diagnosis names the fetch by the package's published name, which npx takes. npx runs
+ * the package of that name where one is installed, and fetches it by that name where none
+ * is. A bare `sprintshow` reaches this package only through an installed bin, and
+ * otherwise fetches whatever package npm holds under that name.
+ */
 export function requireFfmpeg(): string {
   const bin = ffmpegBin();
   if (!bin) {
     throw new Error(
       'no ffmpeg binary available. `ffmpeg-static` ships it via an install script, which ' +
         'npm ≥12 blocks for packages outside `allowScripts` — fetch it once with ' +
-        '`npx sprintshow provision ffmpeg`, or with `npm run provision:ffmpeg` in a checkout ' +
-        'of sprintshow, or set FFMPEG_BIN to a system ffmpeg.',
+        '`npx @zookanalytics/sprintshow provision ffmpeg`, or with `npm run provision:ffmpeg` ' +
+        'in a checkout of sprintshow, or set FFMPEG_BIN to a system ffmpeg.',
     );
   }
   return bin;

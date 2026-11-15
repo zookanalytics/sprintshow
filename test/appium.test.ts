@@ -152,7 +152,17 @@ async function withStandInNpm(fail: boolean, body: (home: string) => Promise<voi
   }
 }
 
-const NOT_INSTALLED = /^Error: appium: Appium 3\.9\.0 and its XCUITest driver 12\.22\.8 are not installed; install them once with `npx sprintshow provision appium`, or with `npm run provision:appium` in a checkout of sprintshow$/;
+/**
+ * The install the engine names, by the package's published name, which npx takes. npx
+ * runs the package of that name where one is installed, and fetches it by that name where
+ * none is, as for a user who runs sprintshow through npx with no install.
+ */
+const INSTALL = `npx ${JSON.parse(readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8')).name} provision appium`;
+
+const NOT_INSTALLED = {
+  name: 'Error',
+  message: `appium: Appium 3.9.0 and its XCUITest driver 12.22.8 are not installed; install them once with \`${INSTALL}\`, or with \`npm run provision:appium\` in a checkout of sprintshow`,
+};
 
 test('provision installs the pinned Appium and XCUITest driver into Appium\'s home with npm, once, and with no key', async () => {
   const calls = await withStandInNpm(false, async (home) => {

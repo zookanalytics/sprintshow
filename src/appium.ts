@@ -41,10 +41,13 @@ export const APPIUM_PACKAGES: Readonly<Record<'appium' | 'appium-xcuitest-driver
 
 /**
  * The command that installs Appium and its XCUITest driver and builds the driver's runner
- * app, as a project that installed sprintshow runs it. A checkout of sprintshow does not
- * reach its own command through npx, and runs it with `npm run provision:appium`.
+ * app, by the package's published name, which npx takes. npx runs the package of that name
+ * where one is installed, and fetches it by that name where none is. A bare `sprintshow`
+ * reaches this package only through an installed bin, and otherwise fetches whatever
+ * package npm holds under that name. A checkout of sprintshow does not reach its own
+ * command through npx, and runs it with `npm run provision:appium`.
  */
-export const PROVISION_COMMAND = 'npx sprintshow provision appium';
+export const PROVISION_COMMAND = 'npx @zookanalytics/sprintshow provision appium';
 
 /** How long Appium has to answer once started. */
 const SERVER_START_MS = 60_000;

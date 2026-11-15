@@ -21,7 +21,21 @@ const FFMPEG_STATIC = path.dirname(createRequire(import.meta.url).resolve('ffmpe
 
 type FfmpegModule = typeof import('../src/ffmpeg.ts');
 
-const NO_BINARY = /^Error: no ffmpeg binary available\. .* fetch it once with `npx sprintshow provision ffmpeg`, or with `npm run provision:ffmpeg` in a checkout of sprintshow, or set FFMPEG_BIN to a system ffmpeg\.$/;
+/**
+ * The fetch the engine names, by the package's published name, which npx takes. npx runs
+ * the package of that name where one is installed, and fetches it by that name where none
+ * is, as for a user who runs sprintshow through npx with no install.
+ */
+const FETCH = `npx ${JSON.parse(readFileSync(path.join(REPO, 'package.json'), 'utf8')).name} provision ffmpeg`;
+
+/** Whether `err` is the engine's diagnosis of a missing binary, naming FETCH. */
+function noBinary(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.startsWith('no ffmpeg binary available. ') &&
+    err.message.endsWith(` fetch it once with \`${FETCH}\`, or with \`npm run provision:ffmpeg\` in a checkout of sprintshow, or set FFMPEG_BIN to a system ffmpeg.`)
+  );
+}
 
 /**
  * Run `body` with the ffmpeg module of a project that installed sprintshow, from the
@@ -64,7 +78,7 @@ async function inInstalledProject(fail: boolean, body: (ffmpeg: FfmpegModule, pr
 test("provision fetches the binary with ffmpeg-static's own install script, found where npm hoists it in a project that installed sprintshow, once", async () => {
   const runs = await inInstalledProject(false, async (ffmpeg, project) => {
     const bin = path.join(project, 'node_modules', 'ffmpeg-static', 'ffmpeg');
-    assert.throws(() => ffmpeg.requireFfmpeg(), NO_BINARY);
+    assert.throws(() => ffmpeg.requireFfmpeg(), noBinary);
     const logs: string[] = [];
     assert.equal(await ffmpeg.provisionFfmpeg((m) => logs.push(m)), bin);
     assert.equal(ffmpeg.requireFfmpeg(), bin);
@@ -77,7 +91,7 @@ test("provision fetches the binary with ffmpeg-static's own install script, foun
 test('a fetch the install script fails leaves no binary, and the engine still names the command that fetches it', async () => {
   const runs = await inInstalledProject(true, async (ffmpeg) => {
     await assert.rejects(ffmpeg.provisionFfmpeg(() => {}), /^Error: ffmpeg: ffmpeg-static's install script exited 1$/);
-    assert.throws(() => ffmpeg.requireFfmpeg(), NO_BINARY);
+    assert.throws(() => ffmpeg.requireFfmpeg(), noBinary);
   });
   assert.deepEqual(runs, ['ran']);
 });
