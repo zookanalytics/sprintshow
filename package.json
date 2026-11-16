@@ -62,7 +62,7 @@
     "provision:ffmpeg": "node src/cli.ts provision ffmpeg",
     "provision:browser": "playwright install chromium-headless-shell",
     "provision:appium": "node src/cli.ts provision appium",
-    "prepublishOnly": "npm run build"
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@lydell/node-pty": "^1.1.0",
