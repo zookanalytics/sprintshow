@@ -136,7 +136,7 @@ export async function runDemo(opts: RunDemoOptions): Promise<RunResult> {
   try {
     if (opts.noVideo) {
       const shots = await withHeadlessPage(device, (page) =>
-        captureScreenshots({ page, baseUrl: server.baseUrl, cwd: opts.cwd, demo, screenshotDir: opts.screenshotDir as string, log }),
+        captureScreenshots({ page, baseUrl: server.baseUrl, cwd: opts.cwd, port: opts.port, demo, screenshotDir: opts.screenshotDir as string, log }),
       );
       return { outputPath: null, narrated: false, music: false, failures: shots.failures, capturesDir: null, screenshots: shots.screenshots };
     }
@@ -145,6 +145,7 @@ export async function runDemo(opts: RunDemoOptions): Promise<RunResult> {
       return await captureWalkthrough({
         baseUrl: server.baseUrl,
         cwd: opts.cwd,
+        port: opts.port,
         demo,
         outputPath,
         noNarrate: opts.noNarrate,
@@ -161,6 +162,7 @@ export async function runDemo(opts: RunDemoOptions): Promise<RunResult> {
         page,
         baseUrl: server.baseUrl,
         cwd: opts.cwd,
+        port: opts.port,
         demo,
         outputPath,
         noNarrate: opts.noNarrate,
@@ -211,6 +213,7 @@ export async function runScreenshot(opts: RunScreenshotOptions): Promise<Screens
         page,
         baseUrl: server.baseUrl,
         cwd: opts.cwd,
+        port: opts.port,
         demo,
         outputPath: opts.outputPath,
         fullPage: opts.fullPage,

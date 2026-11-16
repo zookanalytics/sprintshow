@@ -2,8 +2,8 @@
 // client against a server that answers as Appium does (appium-stand-in.ts), the MJPEG
 // reader against a server that streams parts as WebDriverAgent does, split across writes
 // at every place a part can be split, the install of Appium's home against an npm that
-// writes the packages it is asked for, and the server's output against a stand-in Appium
-// in that home. test/ios-live.test.ts runs the real Appium.
+// writes the packages it is asked for, and the server's port and output against a
+// stand-in Appium in that home. test/ios-live.test.ts runs the real Appium.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +13,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { AppiumSession, WebDriverError, appiumHome, freePorts, moveIntoPlace, provisionAppium, readMjpeg, startAppium } from '../src/appium.ts';
+import { AppiumSession, WebDriverError, appiumHome, freePorts, moveIntoPlace, portAnswers, provisionAppium, readMjpeg, startAppium } from '../src/appium.ts';
 import { standInAppium } from './appium-stand-in.ts';
 
 const PNG = Buffer.from('a stand-in screenshot');
@@ -226,6 +226,54 @@ test('free ports are as many as asked for, each a different one, and none is hel
     });
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test('a port answers while a server listens on it, on the loopback interface or on every interface, and not once it is free', async () => {
+  // Node listens on every interface when it is given no address, over IPv6 where the host has it.
+  for (const host of ['127.0.0.1', '0.0.0.0', undefined]) {
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen({ port: 0, host }, resolve);
+    });
+    const { port, address } = server.address() as AddressInfo;
+    try {
+      assert.equal(await portAnswers(port), true, `a server on ${address} answers`);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    assert.equal(await portAnswers(port), false, `port ${port} is free once the server on ${address} has closed`);
+  }
+});
+
+/** A stand-in Appium for `home`: a server that answers on the port it is given, whatever it is asked. */
+function standInServer(home: string): void {
+  writeFileSync(
+    path.join(home, 'node_modules', 'appium', 'index.js'),
+    "const port = Number(process.argv[process.argv.indexOf('--port') + 1]);\n" +
+      "require('node:http').createServer((req, res) => res.end('{\"value\":{\"ready\":true}}')).listen(port, '127.0.0.1');\n",
+  );
+}
+
+test('Appium listens on the port it is named, or on a free one the system assigns', async () => {
+  await withStandInNpm(false, async () => {
+    standInServer(await provisionAppium(() => {}));
+    const [port] = await freePorts(1);
+    const named = await startAppium(() => {}, port);
+    try {
+      assert.equal(named.url, `http://127.0.0.1:${port}`);
+      assert.ok((await fetch(`${named.url}/status`)).ok, 'it answers on the port it was named');
+    } finally {
+      await named.stop();
+    }
+    const free = await startAppium(() => {});
+    try {
+      assert.match(free.url, /^http:\/\/127\.0\.0\.1:\d+$/);
+      assert.ok((await fetch(`${free.url}/status`)).ok, 'it answers on the port the system assigned');
+    } finally {
+      await free.stop();
+    }
+  });
 });
 
 test("Appium's output is kept a whole line at a time, however its writes split the lines", async () => {

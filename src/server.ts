@@ -17,10 +17,12 @@
 // booted device, ios-simulator://<device UDID>/<bundle id> (simulator.ts). `--serve` takes
 // the repo's command that brings the app up on a simulator: the engine starts it, waits
 // until it prints the app's simulator URL on its standard output, which says the app is up
-// and where, and stops it once the run ends, as it does a dev server. A port has no
-// meaning for an app on a simulator, and an app is not served from a directory, so
-// `--port` and `--serve-dir` are refused. The command runs with the engine's environment
-// less the keys the engine holds, as every tool the engine starts for an iOS app does.
+// and where, and stops it once the run ends, as it does a dev server. An app is not served
+// from a directory, so `--serve-dir` is refused. `--port` names a port for each server the
+// run starts to drive the app, Appium's, WebDriverAgent's and its stream of the screen's
+// frames (iosPorts), and they are checked before the app is brought up, which a command can
+// take minutes to do. The command runs with the engine's environment less the keys the
+// engine holds, as every tool the engine starts for an iOS app does.
 // Stopping it stops its whole process group, which runs on after the command itself
 // while anything it started does, and can take as long as deleting a device does. The
 // engine waits until every process in the group has exited, and kills what is left of it
@@ -34,6 +36,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
 
+import { iosPorts } from './ios.ts';
 import { findSimulatorUrl, isSimulatorUrl, parseSimulatorUrl, simulatorUrl, toolEnv, SIMULATOR_URL_FORM } from './simulator.ts';
 
 /** The port a `serve` command is polled on when no port is named. */
@@ -47,11 +50,15 @@ export interface ServeOptions {
   /** Directory to serve with the built-in static file server. */
   serveDir?: string | null;
   /**
-   * Port for `serve` / `serveDir`, a whole number from 1 to 65535. A `serve` command binds
-   * the port it chooses, so it is polled on DEFAULT_PORT unless this names another.
-   * `serveDir` listens on a free port the system assigns unless this names one.
+   * The loopback port of each server the run starts, a whole number from 1 to 65535. A
+   * page script's run starts one, for `serve` or `serveDir`: a `serve` command binds the
+   * port it chooses, so it is polled on DEFAULT_PORT unless this names another, and
+   * `serveDir` listens on a free port the system assigns unless this names one. An iOS app
+   * script's run starts Appium's server, WebDriverAgent's and its stream of the screen's
+   * frames, and this names a port for each, in that order, or none, so each listens on a
+   * free port the system assigns (iosPorts).
    */
-  port?: number;
+  port?: number | readonly number[];
   /**
    * Working directory for the `serve` command (default: process cwd). The capture
    * commands also start a terminal script's shell here.
@@ -139,18 +146,26 @@ function staticServer(root: string): Server {
   });
 }
 
+/** The one port a page script's server takes from `port`, or undefined when it names none. Throws when it names more than one, or one no server can listen on. */
+function pagePort(port: ServeOptions['port']): number | undefined {
+  if (port === undefined) return undefined;
+  const ports = typeof port === 'number' ? [port] : [...port];
+  if (ports.length !== 1) throw new Error(`server: a page script's server listens on one port, so --port names one (got ${ports.join(',')})`);
+  const [named] = ports;
+  if (!(Number.isInteger(named) && named >= 1 && named <= 65535)) throw new Error(`server: the port must be a whole number from 1 to 65535 (got ${named})`);
+  return named;
+}
+
 /**
  * Bring up the server the demo runs against and return a handle. Throws when none of
  * base-url / serve / serve-dir is given, since the driver has nowhere to point, and
- * when the port named is not one a server can listen on.
+ * when the port named is not one a server can listen on, or is more than one.
  */
 export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
   const log = opts.log ?? ((m: string) => console.log(m));
   // Checked before anything is served or spawned. Past this point a bad port reaches
   // listen(), or a `serve` command is spawned and its readiness URL polled for 30s.
-  if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 1 && opts.port <= 65535)) {
-    throw new Error(`server: the port must be a whole number from 1 to 65535 (got ${opts.port})`);
-  }
+  const port = pagePort(opts.port);
 
   if (opts.baseUrl && isSimulatorUrl(opts.baseUrl)) {
     throw new Error(`server: ${opts.baseUrl} names an iOS app on a simulator, which a script that declares **Platform:** iOS drives; this script drives a page, at a web app's origin`);
@@ -169,7 +184,7 @@ export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
     await new Promise<void>((resolve, reject) => {
       const fail = (e: Error): void => reject(new Error(`server: cannot serve ${opts.serveDir}: ${e.message}`));
       server.once('error', fail);
-      server.listen(opts.port ?? 0, () => {
+      server.listen(port ?? 0, () => {
         server.off('error', fail);
         resolve();
       });
@@ -180,14 +195,14 @@ export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
   }
 
   if (opts.serve) {
-    const port = opts.port ?? DEFAULT_PORT;
-    const baseUrl = `http://localhost:${port}`;
+    const polled = port ?? DEFAULT_PORT;
+    const baseUrl = `http://localhost:${polled}`;
     const ready = baseUrl + (opts.readyPath ?? '/');
     if (await serverUp(ready)) {
-      log(`server: reusing what is already serving on :${port}`);
+      log(`server: reusing what is already serving on :${polled}`);
       return { baseUrl, stop: async () => {} };
     }
-    log(`server: starting \`${opts.serve}\` on :${port}…`);
+    log(`server: starting \`${opts.serve}\` on :${polled}…`);
     // Detached so the whole process group can be torn down (a dev server spawns children).
     const child = spawn(opts.serve, { cwd: opts.cwd ?? process.cwd(), stdio: 'ignore', detached: true, shell: true });
     child.unref();
@@ -196,7 +211,7 @@ export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
       stopChild(child);
       throw new Error(`server: \`${opts.serve}\` did not answer on ${ready} within 30s`);
     }
-    log(`server: ready on :${port}`);
+    log(`server: ready on :${polled}`);
     return { baseUrl, stop: async () => stopChild(child) };
   }
 
@@ -215,15 +230,16 @@ const OUTPUT_LINES = 5;
  * app's simulator URL: the app `baseUrl` names, already running, or the app a `serve`
  * command brings up and names by printing its simulator URL on a line of its standard
  * output. Throws when neither is given, when the URL is not a simulator URL, when the
- * command exits or runs out of time before it prints one, or when `serveDir` or `port`
- * is given. `readyTimeout` is how long the command has to print the URL
- * (IOS_READY_TIMEOUT_MS by default), and `stopTimeout` how long its processes have to
- * exit once told to stop before they are killed (IOS_STOP_TIMEOUT_MS by default).
+ * command exits or runs out of time before it prints one, when `serveDir` is given, or
+ * when `port` names other than a port for each server the run starts (iosPorts).
+ * `readyTimeout` is how long the command has to print the URL (IOS_READY_TIMEOUT_MS by
+ * default), and `stopTimeout` how long its processes have to exit once told to stop
+ * before they are killed (IOS_STOP_TIMEOUT_MS by default).
  */
 export async function ensureIosApp(opts: ServeOptions & { readyTimeout?: number; stopTimeout?: number }): Promise<ServerHandle> {
   const log = opts.log ?? ((m: string) => console.log(m));
   if (opts.serveDir) throw new Error(`server: an iOS app is not served from a directory; pass --base-url ${SIMULATOR_URL_FORM}, or --serve "<command>" that brings the app up and prints that URL`);
-  if (opts.port !== undefined) throw new Error("server: an iOS app script takes no --port; its --serve command prints the app's simulator URL once the app is up");
+  iosPorts(opts.port);
   if (opts.baseUrl) {
     const app = parseSimulatorUrl(opts.baseUrl);
     if (!app) throw new Error(`server: an iOS app script takes its app's simulator URL, ${SIMULATOR_URL_FORM}, as --base-url (got "${opts.baseUrl}")`);

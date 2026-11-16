@@ -356,6 +356,13 @@ export interface OpenSurfaceOptions {
   baseUrl?: string;
   /** The directory a terminal script's shell starts in (default: the working directory). */
   cwd?: string;
+  /**
+   * For an iOS app script, the loopback ports of the servers the driver starts to drive the
+   * app, Appium's, WebDriverAgent's and its stream of the screen's frames, one for each in
+   * that order (iosPorts). Each listens on a free port the system assigns unless this
+   * names them. A page or terminal script's driver starts no server, and reads none.
+   */
+  port?: number | readonly number[];
   /** Frame a terminal or an iOS app on a backdrop above the caption band, as the videos show it. A still leaves it off. */
   backdrop?: boolean;
   log?: (m: string) => void;
@@ -371,7 +378,7 @@ export interface OpenSurfaceOptions {
 export async function connectSurface(demo: Demo, opts: Omit<OpenSurfaceOptions, 'backdrop'>): Promise<SurfaceConnection> {
   const log = opts.log ?? ((m: string) => console.log(m));
   if (surfaceOf(demo) === 'ios') {
-    const conn = await connectIosApp(opts.baseUrl, log);
+    const conn = await connectIosApp(opts.baseUrl, log, opts.port);
     const show = async (page: Page): Promise<Surface> => {
       const surface = await showIosApp(page, conn, { title: demo.title, log });
       // The device page is written in place, which runs no init script, so a page that

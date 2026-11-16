@@ -10,18 +10,23 @@
 // run's light appearance and its putting the device back both show. The second hands
 // sprintshow the sample's start command as --serve, which brings the app up on a device of
 // its own and deletes the device once sprintshow stops it. The third connects to the app
-// as a run does, and reads the addresses the runner app's servers listen on.
+// as a run does, and reads the addresses the runner app's servers listen on. The fourth
+// relaunches the app and hands sprintshow its ports with --port, inside a sandbox that
+// denies every other loopback port, as a caller that lets a run reach only the ports it
+// chose does.
 //
-// Each run must save its MP4 and a PNG of each step, at the device's own size, and leave
-// the device as it was given: the app installed and running in the same process, no
-// runner app, and its appearance and status bar as before.
+// Each run must save its MP4 and a PNG of each step, at the device's own size. The first
+// two must leave the device as it was given: the app installed and running in the same
+// process, no runner app, and its appearance and status bar as before.
 
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:net';
 import path from 'node:path';
 
+import { freePorts } from '../src/appium.ts';
 import { parseDemoScript } from '../src/demo-script.ts';
 import { connectIosApp } from '../src/ios.ts';
 import { stepFileName } from '../src/screenshot.ts';
@@ -72,6 +77,30 @@ async function liveSkip(): Promise<string | false> {
 }
 
 const skip = await liveSkip();
+
+/** A sandbox-exec profile that lets a process reach no loopback port but `ports`. */
+function loopbackOnly(ports: number[]): string {
+  return ['(version 1)', '(allow default)', '(deny network-outbound (remote ip "localhost:*"))', ...ports.map((p) => `(allow network-outbound (remote ip "localhost:${p}"))`)].join('\n');
+}
+
+/** Why this host cannot run a command inside a sandbox-exec profile, or false when it can. */
+function sandboxSkip(): string | false {
+  try {
+    execFileSync('sandbox-exec', ['-p', loopbackOnly([]), 'true'], { stdio: 'ignore' });
+    return false;
+  } catch {
+    return 'needs sandbox-exec, which macOS ships';
+  }
+}
+
+/** The exit status of a node process, run as the last arguments of the command `prefix` names, that connects to loopback port `port`: 0 once it connects, 1 when it cannot. */
+function reaches(prefix: string[], port: number): Promise<number | null> {
+  const knock = `require('node:net').connect(${port}, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))`;
+  return new Promise((resolve, reject) => {
+    const [command, ...rest] = [...prefix, process.execPath, '-e', knock];
+    spawn(command, rest, { stdio: 'ignore' }).on('error', reject).on('close', resolve);
+  });
+}
 
 /** The process the app runs in on device `udid`, or null when it is not running. */
 function appProcess(udid: string): number | null {
@@ -177,5 +206,29 @@ describe('an iOS app on a simulator, through Appium', { skip }, () => {
     } finally {
       await conn.close();
     }
+  });
+
+  test('--port: a run given its ports films the app in a sandbox that denies every other loopback port', { skip: sandboxSkip() }, async () => {
+    // A launch of its own, with no task on the board: the --base-url run added some.
+    simctl('terminate', udid, BUNDLE_ID);
+    simctl('launch', udid, BUNDLE_ID);
+    const ports = await freePorts(3);
+    const sandbox = ['sandbox-exec', '-p', loopbackOnly(ports)];
+    // The sandbox denies a loopback port it does not open: a server that answers outside it does not answer inside it.
+    const outside = createServer();
+    await new Promise<void>((resolve) => outside.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = outside.address() as AddressInfo;
+      assert.deepEqual([await reaches([], port), await reaches(sandbox, port)], [0, 1], `port ${port} answers outside the sandbox, and not inside it`);
+    } finally {
+      await new Promise<void>((resolve) => outside.close(() => resolve()));
+    }
+
+    const out = path.join(dir, 'port');
+    const run = await runCli(['run', DEMO, '--base-url', simulatorUrl({ udid, bundleId: BUNDLE_ID }), '--port', ports.join(','), '--no-narrate', '--screenshots', path.join(out, 'shots'), '-o', path.join(out, 'ios.mp4')], { cwd: dir, env: { ...process.env, OPENAI_API_KEY: '' }, prefix: sandbox });
+    assert.equal(run.code, 0, run.stdout + run.stderr);
+    assert.match(run.stdout, new RegExp(`appium: server on http://127\\.0\\.0\\.1:${ports[0]}\n`), 'Appium listens on the first port');
+    assert.equal((run.stdout.match(/✓ proof held/g) ?? []).length, STEPS.length, run.stdout);
+    await checkOutputs(path.join(out, 'ios.mp4'), path.join(out, 'shots'));
   });
 });

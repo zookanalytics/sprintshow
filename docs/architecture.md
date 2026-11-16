@@ -168,7 +168,8 @@ What a user runs, and the domains each draws on:
   terminal (`**Terminal:**`) or an iOS app (`**Platform:** iOS`). It reads only that
   surface's actions and assertions.
 - Every kind of app is named through the same options: `--base-url` for one already
-  running, and `--serve` for the command that brings one up.
+  running, and `--serve` for the command that brings one up. `--port` names the loopback
+  port of each server a run starts, whatever the kind of app.
 - Playwright drives Chromium for every capture, and a device a script names is one from
   Playwright's registry.
 - A run takes an iOS app as it stands and never relaunches it, so the arguments it was

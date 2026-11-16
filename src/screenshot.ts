@@ -126,6 +126,13 @@ export interface CaptureScreenshotOptions {
   baseUrl?: string;
   /** The directory a terminal script's shell starts in (default: the working directory). */
   cwd?: string;
+  /**
+   * For an iOS app script, the loopback ports of the servers the driver starts to drive the
+   * app, Appium's, WebDriverAgent's and its stream of the screen's frames, one for each in
+   * that order (iosPorts). Each listens on a free port the system assigns unless this
+   * names them. A page or terminal script's driver starts no server, and reads none.
+   */
+  port?: number | readonly number[];
   /** The parsed demo, or a markdown string to parse. */
   demo: Demo | string;
   /** The PNG path. */
@@ -176,7 +183,7 @@ export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise
   if (demo.terminal && opts.selector) throw new Error(TERMINAL_SELECTOR);
   if (surfaceOf(demo) === 'ios' && (opts.fullPage || opts.selector || opts.transparent)) throw new Error(IOS_AREA);
   const start = contextOptions(demo).viewport as ViewportSize;
-  return driveSteps({ page: opts.page, baseUrl: opts.baseUrl, cwd: opts.cwd, demo, log }, start, null, (failures, surface) => saveArea(opts, demo, surface, failures, log));
+  return driveSteps({ page: opts.page, baseUrl: opts.baseUrl, cwd: opts.cwd, port: opts.port, demo, log }, start, null, (failures, surface) => saveArea(opts, demo, surface, failures, log));
 }
 
 /** Save the area `opts` asks for as the PNG at its `outputPath`, once `demo`'s steps have run on `surface`, `failures` of them failing their proof. */
@@ -248,6 +255,7 @@ interface DriveOptions {
   page: Page;
   baseUrl?: string;
   cwd?: string;
+  port?: number | readonly number[];
   demo: Demo;
   log: (m: string) => void;
 }
@@ -263,7 +271,7 @@ interface DriveOptions {
 async function driveSteps<T>(opts: DriveOptions, start: ViewportSize, each: ((step: DemoStep, surface: Surface) => Promise<unknown>) | null, end: (failures: number, surface: Surface) => Promise<T>): Promise<T> {
   const { page, demo, baseUrl, log } = opts;
   await page.setViewportSize(start).catch(() => {});
-  const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, backdrop: false, log });
+  const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, port: opts.port, backdrop: false, log });
   try {
     let failures = 0;
     for (const step of demo.steps) {
@@ -490,6 +498,13 @@ export interface CaptureScreenshotsOptions {
   baseUrl?: string;
   /** The directory a terminal script's shell starts in (default: the working directory). */
   cwd?: string;
+  /**
+   * For an iOS app script, the loopback ports of the servers the driver starts to drive the
+   * app, Appium's, WebDriverAgent's and its stream of the screen's frames, one for each in
+   * that order (iosPorts). Each listens on a free port the system assigns unless this
+   * names them. A page or terminal script's driver starts no server, and reads none.
+   */
+  port?: number | readonly number[];
   /** The parsed demo, or a markdown string to parse. */
   demo: Demo | string;
   /** The directory each step's screenshot goes into: a new or empty one. */
@@ -518,7 +533,7 @@ export async function captureScreenshots(opts: CaptureScreenshotsOptions): Promi
   const shots = stepScreenshots(demo, opts.screenshotDir, log);
   const { page } = opts;
   try {
-    return await driveSteps({ page, baseUrl: opts.baseUrl, cwd: opts.cwd, demo, log }, start, (step, surface) => shots.take(page, surface, step), async (failures) => ({ screenshots: [...shots.saved], failures }));
+    return await driveSteps({ page, baseUrl: opts.baseUrl, cwd: opts.cwd, port: opts.port, demo, log }, start, (step, surface) => shots.take(page, surface, step), async (failures) => ({ screenshots: [...shots.saved], failures }));
   } catch (e) {
     shots.discard();
     throw e;

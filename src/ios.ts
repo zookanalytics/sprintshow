@@ -9,9 +9,14 @@
 // (simulator.ts), starts Appium, and starts a session, which installs the engine's runner
 // app (webdriveragent.ts) on the device and launches it. Appium and the runner app listen
 // on the loopback interface only, so no other host can watch the screen or drive the
-// device. Then the engine brings the app to the front as the app stands: an app that runs
-// keeps its process, its screen and its state, and one that does not is launched, with no
-// arguments. The session never ends the app.
+// device. Their servers, Appium's, WebDriverAgent's and its stream of the screen's frames,
+// listen on free ports the system assigns, or on the ports the caller names, one for each
+// (iosPorts), so a caller that lets a run reach only the loopback ports it chose can name
+// them. The engine refuses a named port that something already answers on, because Appium
+// or the engine would reach that server in place of the run's own. Then the engine brings
+// the app to the front as the app stands: an app that runs keeps its process, its screen
+// and its state, and one that does not is launched, with no arguments. The session never
+// ends the app.
 //
 // Like the terminal, the surface is a page the engine writes into the capture's browser
 // page (showIosApp): the device's screen, drawn from the frames WebDriverAgent streams of
@@ -36,7 +41,7 @@ import { writeFileSync } from 'node:fs';
 import type { Page } from 'playwright';
 
 import { compareCount, keysIosLacks, matchText, IOS_KEYS, type Assertion, type DemoAction, type IosKey } from './demo-script.ts';
-import { AppiumSession, freePorts, readMjpeg, startAppium, type AppiumServer, type FrameStream } from './appium.ts';
+import { AppiumSession, freePorts, portAnswers, readMjpeg, startAppium, type AppiumServer, type FrameStream } from './appium.ts';
 import { checkApp, dressDevice, parseSimulatorUrl, simctl, userApps, SIMULATOR_URL_FORM, type SimulatorApp } from './simulator.ts';
 import { runnerApp, RUNNER_APP_ID, RUNNER_BUNDLE_NAME } from './webdriveragent.ts';
 import type { Surface } from './browser.ts';
@@ -60,6 +65,61 @@ const FRAME_WAIT_MS = 30_000;
 const STAGE = { margin: 24, band: 72 };
 /** How often an action polls for its element, and a wait for its condition. */
 const POLL_MS = 200;
+
+/** The loopback ports of the servers an iOS app run starts. */
+export interface IosPorts {
+  /** Appium's server. */
+  appium: number;
+  /** WebDriverAgent's server, which takes Appium's commands on the device. */
+  agent: number;
+  /** WebDriverAgent's stream of the screen's frames. */
+  frames: number;
+}
+
+/** Each server of an iOS app run, in the order a caller names their ports. */
+const SERVERS: readonly [keyof IosPorts, string][] = [
+  ['appium', "Appium's server"],
+  ['agent', "WebDriverAgent's server"],
+  ['frames', "WebDriverAgent's stream of the screen's frames"],
+];
+
+/**
+ * The ports `port` names for the servers an iOS app run starts, Appium's,
+ * WebDriverAgent's and its stream of the screen's frames, in that order, or null when it
+ * names none, so each listens on a free port the system assigns. Throws when it names
+ * other than a port for each, a port that is not a whole number from 1 to 65535, or a
+ * port twice.
+ */
+export function iosPorts(port: number | readonly number[] | undefined): IosPorts | null {
+  if (port === undefined) return null;
+  const ports = typeof port === 'number' ? [port] : [...port];
+  if (ports.length !== SERVERS.length) {
+    const servers = SERVERS.map(([, what]) => what);
+    throw new Error(`ios: --port names a port for each server an iOS app run starts, ${servers.slice(0, -1).join(', ')} and ${servers.at(-1)}, in that order, or none (got ${ports.join(',')})`);
+  }
+  for (const p of ports) {
+    if (!(Number.isInteger(p) && p >= 1 && p <= 65535)) throw new Error(`ios: the port must be a whole number from 1 to 65535 (got ${p})`);
+  }
+  const twice = ports.find((p, i) => ports.indexOf(p) !== i);
+  if (twice !== undefined) throw new Error(`ios: --port names port ${twice} twice, and each server an iOS app run starts listens on a port of its own`);
+  const named = {} as IosPorts;
+  SERVERS.forEach(([key], i) => (named[key] = ports[i]));
+  return named;
+}
+
+/** Throw when something answers on one of `ports`, or one cannot be reached to tell. */
+async function checkUnanswered(ports: IosPorts): Promise<void> {
+  for (const [key, what] of SERVERS) {
+    const port = ports[key];
+    let answers: boolean;
+    try {
+      answers = await portAnswers(port);
+    } catch (e) {
+      throw new Error(`ios: port ${port}, which --port names for ${what}, cannot be reached: ${(e as Error).message}`);
+    }
+    if (answers) throw new Error(`ios: something already answers on port ${port}, which --port names for ${what}; name a port nothing listens on`);
+  }
+}
 
 /** An iOS app the engine is connected to. */
 export interface IosConnection {
@@ -108,13 +168,18 @@ function appiumWhy(server: AppiumServer): string {
 /**
  * Connect to the iOS app `baseUrl` names, ready to show in a page: check its device, dress
  * the device, start Appium and a session, and bring the app to the front as it stands.
- * Throws, having put back whatever it did, when the URL names no app, the runner app is
- * not built, the device is not booted, lacks the app or holds another runner app, or
- * Appium does not start a session.
+ * Appium's server, WebDriverAgent's and its stream of the screen's frames listen on the
+ * ports `port` names, one for each in that order (iosPorts), or on free ones. Throws,
+ * having put back whatever it did, when the URL names no app, `port` names other than a
+ * port for each server or one that something answers on, the runner app is not built,
+ * the device is not booted, lacks the app or holds another runner app, or Appium does not
+ * start a session.
  */
-export async function connectIosApp(baseUrl: string | undefined, log: (m: string) => void): Promise<IosConnection> {
+export async function connectIosApp(baseUrl: string | undefined, log: (m: string) => void, port?: number | readonly number[]): Promise<IosConnection> {
   const app = baseUrl ? parseSimulatorUrl(baseUrl) : null;
   if (!app) throw new Error(`an iOS app script drives the app its simulator URL names, ${SIMULATOR_URL_FORM}${baseUrl ? ` (got "${baseUrl}")` : ''}`);
+  const named = iosPorts(port);
+  if (named) await checkUnanswered(named);
   const runner = await runnerApp();
   const name = await checkApp(app);
   const device = `${name} (${app.udid})`;
@@ -127,13 +192,13 @@ export async function connectIosApp(baseUrl: string | undefined, log: (m: string
   try {
     undo.push({ what: 'put the device back as it was given', run: await dressDevice(app.udid, log) });
     undo.push({ what: 'remove the runner app', run: () => removeRunner(app.udid) });
-    const server = await startAppium(log);
+    const server = await startAppium(log, named?.appium);
     undo.push({ what: 'stop Appium', run: server.stop });
     // WebDriverAgent's two ports differ from each other, and from Appium's, which Appium
     // holds by now. Nothing holds them from here until WebDriverAgent listens on them, so
     // another process can still take one first: the XCUITest driver checks no port on a
     // simulator.
-    const [wdaPort, framesPort] = await freePorts(2);
+    const [wdaPort, framesPort] = named ? [named.agent, named.frames] : await freePorts(2);
     const capabilities = {
       platformName: 'iOS',
       'appium:automationName': 'XCUITest',

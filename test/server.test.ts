@@ -3,12 +3,13 @@
 //
 // With no port named it listens on one the system assigns, so two captures on one host
 // each get a server of their own. A named port that is taken fails the start with an
-// error the caller can report, and a port no server can listen on is refused before
-// anything is served or spawned.
+// error the caller can report, and a port no server can listen on, or more than one, is
+// refused before anything is served or spawned.
 //
 // An iOS app's `--serve` command is a stand-in here, a node script that prints what a
 // start command prints: the app's simulator URL on a line of its standard output once the
-// app is up. test/ios-live.test.ts runs the sample's real one.
+// app is up. test/ios-live.test.ts runs the sample's real one. The ports an iOS app run's
+// servers listen on are checked before the app is brought up.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -76,6 +77,27 @@ test('a port that is not a whole number from 1 to 65535 is refused before anythi
       await assert.rejects(ensureServer({ serveDir: dir, port, log: quiet }), { message });
       await assert.rejects(ensureServer({ serve: `touch ${JSON.stringify(marker)}`, port, log: quiet }), { message });
     }
+    assert.equal(existsSync(marker), false, 'no serve command was spawned');
+  });
+});
+
+test('a page script\'s server takes one port, named alone or as the only one of a list, and more than one is refused before anything is served or spawned', async () => {
+  await withSite(async (dir) => {
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, resolve));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    const s = await ensureServer({ serveDir: dir, port: [port], log: quiet });
+    try {
+      assert.equal(s.baseUrl, `http://localhost:${port}`);
+    } finally {
+      await s.stop();
+    }
+    const marker = path.join(dir, 'spawned');
+    const message = `server: a page script's server listens on one port, so --port names one (got ${port},${port + 1})`;
+    await assert.rejects(ensureServer({ serveDir: dir, port: [port, port + 1], log: quiet }), { message });
+    await assert.rejects(ensureServer({ serve: `touch ${JSON.stringify(marker)}`, port: [port, port + 1], log: quiet }), { message });
     assert.equal(existsSync(marker), false, 'no serve command was spawned');
   });
 });
@@ -175,10 +197,32 @@ test("an iOS app already running is named by its simulator URL as --base-url, an
   await assert.rejects(ensureIosApp({ log: quiet }), /no app: pass --base-url ios-simulator:\/\/<device UDID>\/<bundle id>, or --serve "<command>"/);
 });
 
-test('an iOS app takes no --port and no --serve-dir, and a page script takes no simulator URL', async () => {
-  await assert.rejects(ensureIosApp({ serve: 'true', port: 3000, log: quiet }), /an iOS app script takes no --port/);
+test('an iOS app takes no --serve-dir, and a page script takes no simulator URL', async () => {
   await assert.rejects(ensureIosApp({ serveDir: '.', log: quiet }), /an iOS app is not served from a directory/);
   await assert.rejects(ensureServer({ baseUrl: APP_URL, log: quiet }), /names an iOS app on a simulator, which a script that declares \*\*Platform:\*\* iOS drives/);
+});
+
+test("an iOS app run's ports are a port for each of its servers or none, and are checked before its --serve command starts", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'sprintshow-test-'));
+  try {
+    const marker = path.join(dir, 'spawned');
+    const serve = `touch ${JSON.stringify(marker)}`;
+    const each = /ios: --port names a port for each server an iOS app run starts, Appium's server, WebDriverAgent's server and WebDriverAgent's stream of the screen's frames, in that order, or none \(got /;
+    for (const port of [3000, [4723, 8100], [4723, 8100, 9100, 9200]]) {
+      await assert.rejects(ensureIosApp({ serve, port, log: quiet }), each);
+    }
+    for (const bad of [Number.NaN, 0, 65536, 80.5]) {
+      await assert.rejects(ensureIosApp({ serve, port: [4723, bad, 9100], log: quiet }), { message: `ios: the port must be a whole number from 1 to 65535 (got ${bad})` });
+    }
+    await assert.rejects(ensureIosApp({ serve, port: [4723, 8100, 4723], log: quiet }), { message: 'ios: --port names port 4723 twice, and each server an iOS app run starts listens on a port of its own' });
+    assert.equal(existsSync(marker), false, 'no serve command was spawned');
+
+    const app = await ensureIosApp({ baseUrl: APP_URL, port: [4723, 8100, 9100], log: quiet });
+    assert.equal(app.baseUrl, APP_URL, 'the ports are the servers\' to listen on, and the app is named as it is without them');
+    await app.stop();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("an iOS app's --serve command is ready once it prints the app's simulator URL, gets no key the engine holds, and is stopped with SIGTERM", async () => {
