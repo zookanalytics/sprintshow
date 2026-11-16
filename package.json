@@ -59,7 +59,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test \"test/**/*.test.ts\"",
     "lint:demo": "node src/cli.ts lint demos/sample.md && node src/cli.ts lint demos/terminal.md && node src/cli.ts lint demos/keyboard.md && node src/cli.ts lint demos/ios.md",
-    "provision:ffmpeg": "node node_modules/ffmpeg-static/install.js",
+    "provision:ffmpeg": "node src/cli.ts provision ffmpeg",
     "provision:browser": "playwright install chromium-headless-shell",
     "provision:appium": "node src/cli.ts provision appium",
     "prepublishOnly": "npm run build"

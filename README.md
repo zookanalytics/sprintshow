@@ -68,17 +68,19 @@ Prerequisites, fetched on demand rather than assumed:
   missing. A host-provided browser is used when present.
 - **ffmpeg**, for video (a screenshot runs without it) — a host `ffmpeg` on `PATH` (set
   `FFMPEG_BIN` to point at one) is used when present. Otherwise `ffmpeg-static` provides
-  it, but npm ≥ 12 blocks its install script, so fetch the binary once:
-  `npm run provision:ffmpeg` (or, for this package's own tests, it is fetched the same way).
+  it, but npm ≥ 12 blocks its install script, so fetch the binary once with
+  `npx @zookanalytics/sprintshow provision ffmpeg`. The engine prints this command if the
+  binary is missing. A checkout of sprintshow fetches it for its own tests with
+  `npm run provision:ffmpeg`.
 - **bash on `PATH`**, for a terminal demo. Its pty comes from `@lydell/node-pty`, which
   installs a prebuilt binary for macOS or Linux (x64 or arm64) with nothing to build or
   allow.
 - **macOS with Xcode and an iOS Simulator runtime**, for an iOS app demo. Appium and its
   XCUITest driver, about 150 MB, do not come with the package, so an install that demos no
-  iOS app does not carry them. `npx sprintshow provision appium` installs them once into
-  the user's cache, at the versions sprintshow pins, and builds the runner app the driver
-  installs on the device, WebDriverAgent, with the host's Xcode. A run that finds either
-  missing prints this command.
+  iOS app does not carry them. `npx @zookanalytics/sprintshow provision appium` installs
+  them once into the user's cache, at the versions sprintshow pins, and builds the runner
+  app the driver installs on the device, WebDriverAgent, with the host's Xcode. A run that
+  finds either missing prints this command.
 
 ## Run a demo
 

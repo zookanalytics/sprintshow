@@ -1,14 +1,15 @@
-// The output plumbing: ffmpeg binary resolution, TTS synthesis, narration-track
-// assembly, and the optional music bed. All ffmpeg use funnels through here so both
-// capture modes share one encoder path.
+// The output plumbing: ffmpeg binary resolution and provisioning, TTS synthesis,
+// narration-track assembly, and the optional music bed. All ffmpeg use funnels through
+// here so both capture modes share one encoder path.
 //
 // Narration is OPTIONAL and best-effort: with no OPENAI_API_KEY, or on ANY synthesis
 // failure, every builder collapses to null and the caller keeps a silent video. That
 // degradation is the contract — narration can never break the video.
 
 import ffmpegPath from 'ffmpeg-static';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { writeFileSync, existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 /**
@@ -18,7 +19,7 @@ import path from 'node:path';
  * blocks install scripts for packages outside `allowScripts`. On such a host a plain
  * `npm install` leaves the package directory populated (index.js, install.js, types/)
  * while the binary itself is ABSENT — so the binary is a PROVISIONED asset here:
- * `npm run provision:ffmpeg` fetches it on demand.
+ * `sprintshow provision ffmpeg` fetches it on demand (provisionFfmpeg).
  *
  * `ffmpeg-static` resolves an `FFMPEG_BIN` override itself at module load, so this
  * covers both the bundled binary and an explicit system ffmpeg.
@@ -32,16 +33,55 @@ export function ffmpegBin(): string | null {
   return existsSync(p) ? p : null;
 }
 
-/** The binary, or a diagnosis of why there isn't one. For the paths that cannot degrade. */
+/**
+ * The binary, or a diagnosis of why there isn't one. For the paths that cannot degrade.
+ *
+ * The diagnosis names the fetch by the package's published name, which npx takes. npx runs
+ * the package of that name where one is installed, and fetches it by that name where none
+ * is. A bare `sprintshow` reaches this package only through an installed bin, and
+ * otherwise fetches whatever package npm holds under that name.
+ */
 export function requireFfmpeg(): string {
   const bin = ffmpegBin();
   if (!bin) {
     throw new Error(
       'no ffmpeg binary available. `ffmpeg-static` ships it via an install script, which ' +
-        'npm ≥12 blocks for packages outside `allowScripts` — run `npm run provision:ffmpeg` ' +
-        'to fetch it, or set FFMPEG_BIN to a system ffmpeg.',
+        'npm ≥12 blocks for packages outside `allowScripts` — fetch it once with ' +
+        '`npx @zookanalytics/sprintshow provision ffmpeg`, or with `npm run provision:ffmpeg` ' +
+        'in a checkout of sprintshow, or set FFMPEG_BIN to a system ffmpeg.',
     );
   }
+  return bin;
+}
+
+/**
+ * Fetch `ffmpeg-static`'s binary unless the engine has a binary already, and resolve with
+ * the binary the engine uses. It is what `sprintshow provision ffmpeg` runs.
+ *
+ * The fetch is `ffmpeg-static`'s own install script, run with node in the engine's
+ * environment and working directory, so it writes the binary at the place `ffmpeg-static`
+ * resolves for the engine, which is where ffmpegBin looks. The script is found by module
+ * resolution from this module, as `ffmpeg-static` itself is, so it runs wherever the
+ * package manager put the package, such as hoisted into the node_modules of a project
+ * that installed sprintshow.
+ */
+export async function provisionFfmpeg(log: (m: string) => void = (m) => console.log(m)): Promise<string> {
+  const have = ffmpegBin();
+  if (have) {
+    log(`ffmpeg: a binary is in place: ${have}`);
+    return have;
+  }
+  const script = createRequire(import.meta.url).resolve('ffmpeg-static/install.js');
+  log("ffmpeg: fetching ffmpeg-static's binary…");
+  const status = await new Promise<number>((resolve, reject) => {
+    const child = spawn(process.execPath, [script], { stdio: ['ignore', 'inherit', 'inherit'] });
+    child.on('error', reject);
+    child.on('exit', (code, signal) => resolve(signal ? 128 : (code ?? 1)));
+  });
+  if (status !== 0) throw new Error(`ffmpeg: ffmpeg-static's install script exited ${status}`);
+  const bin = ffmpegBin();
+  if (!bin) throw new Error("ffmpeg: ffmpeg-static's install script exited 0 and left no binary");
+  log(`ffmpeg: fetched ${bin}`);
   return bin;
 }
 
