@@ -39,6 +39,13 @@ export interface CaptureProofOptions {
   baseUrl?: string;
   /** The directory a terminal script's shell starts in (default: the working directory). */
   cwd?: string;
+  /**
+   * For an iOS app script, the loopback ports of the servers the driver starts to drive the
+   * app, Appium's, WebDriverAgent's and its stream of the screen's frames, one for each in
+   * that order (iosPorts). Each listens on a free port the system assigns unless this
+   * names them. A page or terminal script's driver starts no server, and reads none.
+   */
+  port?: number | readonly number[];
   /** The parsed demo, or a markdown string to parse. */
   demo: Demo | string;
   /** Final mp4 path. */
@@ -143,7 +150,7 @@ async function proofVideo(opts: CaptureProofOptions, demo: Demo, start: Viewport
   mkdirSync(path.dirname(path.resolve(opts.outputPath)), { recursive: true });
 
   await page.setViewportSize(start).catch(() => {});
-  const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, backdrop: true, log });
+  const surface = await openSurface(page, demo, { baseUrl, cwd: opts.cwd, port: opts.port, backdrop: true, log });
 
   const frames: Frame[] = [];
   const issues: NonNullable<StepResult['issue']>[] = [];

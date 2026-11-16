@@ -1,8 +1,8 @@
 // Tests for what the two capture commands share in the CLI (src/cli.ts): `run` and
-// `screenshot` read their server flags through one mapping, and both exit 0 when the
-// output is saved and every step's proof held, 3 when it is saved but a proof failed, and
-// 1 when nothing is saved. Also, what `surface` prints and how it exits, and what
-// `provision` takes.
+// `screenshot` read their server flags through one mapping, `--port` among them as one
+// port or a comma-separated list, and both exit 0 when the output is saved and every
+// step's proof held, 3 when it is saved but a proof failed, and 1 when nothing is saved.
+// Also, what `surface` prints and how it exits, and what `provision` takes.
 //
 // The tests that save an output need a headless Chromium and skip without one (see
 // browser-fixture.ts). `run` captures in proof mode over a stand-in ffmpeg, so no host
@@ -79,6 +79,28 @@ test('run and screenshot both refuse a --port that is not a whole number, before
     for (const res of [run, shot]) {
       assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
       assert.match(res.stderr, /server: the port must be a whole number from 1 to 65535 \(got NaN\)/);
+      assert.doesNotMatch(res.stdout, /server: serving/);
+    }
+    assert.equal(existsSync(path.join(dir, 'out.mp4')), false);
+    assert.equal(existsSync(path.join(dir, 'out.png')), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('run and screenshot both read --port as one port, or as one for each server a run starts, separated by commas', async () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    const app = ['--base-url', 'ios-simulator://00000000-0000-0000-0000-000000000000/com.example.Board'];
+    const ios = await bothCommands(dir, path.join(REPO, 'demos', 'ios.md'), [...app, '--port', '4723,8100']);
+    const page = await bothCommands(dir, SAMPLE, ['--serve-dir', SAMPLE_APP, '--port', '5173,5174']);
+    for (const res of [ios.run, ios.shot]) {
+      assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
+      assert.match(res.stderr, /ios: --port names a port for each server an iOS app run starts, .* in that order, or none \(got 4723,8100\)/);
+    }
+    for (const res of [page.run, page.shot]) {
+      assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
+      assert.match(res.stderr, /server: a page script's server listens on one port, so --port names one \(got 5173,5174\)/);
       assert.doesNotMatch(res.stdout, /server: serving/);
     }
     assert.equal(existsSync(path.join(dir, 'out.mp4')), false);

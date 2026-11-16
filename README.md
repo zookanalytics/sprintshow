@@ -98,7 +98,8 @@ sprintshow run demo.md --serve-dir ./public --mode proof
 
 `--serve-dir` listens on a free port unless `--port` names one, so captures can run side
 by side on one host. `--serve` waits on port 5173 unless `--port` names the port its
-command binds.
+command binds. An iOS app script's run takes a port for each of its servers
+([below](#ios-app-demos)).
 
 The MP4 lands at `demos/<script-name>.mp4` by default (`-o` to override). Useful flags:
 `--no-narrate`, `--music <file.mp3>` (a background bed under the narration), `--keep` (keep
@@ -368,8 +369,7 @@ read as a shorter one. The command then keeps running until sprintshow stops it 
 when the run ends, and sprintshow waits up to a minute for it to exit.
 `examples/sample-ios/serve.mjs` is such a command: it builds the sample app, creates and boots
 a device of its own, installs and launches the app, prints its URL, and deletes the device
-when it is stopped. A port and a directory have no meaning for an app on a simulator, so
-`--port` and `--serve-dir` are refused.
+when it is stopped. An app is not served from a directory, so `--serve-dir` is refused.
 
 sprintshow builds, installs and removes no app, and creates, boots, shuts down or deletes no
 device: the caller does, or the command `--serve` starts. A run takes the app as it stands. It
@@ -383,6 +383,21 @@ WebDriverAgent runner app another tool installed is refused, because Appium woul
 
 No key the engine holds, `VERCEL_AUTOMATION_BYPASS_SECRET` or `OPENAI_API_KEY`, reaches
 Appium, the tools it runs, `simctl`, `xcodebuild`, or the command `--serve` starts.
+
+**Ports.** A run drives the app through servers on the loopback interface: Appium's server,
+WebDriverAgent's server, which Appium launches on the device to take its commands, and
+WebDriverAgent's stream of the screen's frames, which the videos are drawn from. Each listens
+on a free port the system assigns, unless `--port` names a port for each, in that order:
+
+```bash
+sprintshow run demos/ios.md --base-url ios-simulator://<device UDID>/<bundle id> --port 4723,8100,9100
+```
+
+Given its ports, sprintshow, Appium and WebDriverAgent listen on and connect to no other
+loopback port, so a caller that lets a run reach only the loopback ports it chose before the
+run, such as a sandbox, names them and opens exactly those. `--port` names a port for every
+server or for none. A port that something already answers on is refused, because Appium or
+sprintshow would reach that server in place of the run's own.
 
 **Selectors.** A selector names an element by its accessibility identifier, such as
 `new-task` for a SwiftUI view given `.accessibilityIdentifier("new-task")`, or by its label
@@ -552,7 +567,8 @@ that device: make its context with `contextOptions(demo)`, as they do. The drive
 page's viewport to the one the script starts at, and the rest of the device is the
 context's. A custom driver that runs its steps through `runStep` checks each proof as the
 built-in captures do. For a terminal script, a driver takes a `cwd` in place of a
-`baseUrl`, and for an iOS app script, the app's simulator URL as its `baseUrl`.
+`baseUrl`, and for an iOS app script, the app's simulator URL as its `baseUrl` and a port for
+each of its servers as its `port`, as `--port` names them.
 `openSurface` brings up what any script drives: the app at its start path, the engine's
 terminal and its shell, or an iOS app, connected through Appium and shown in the page.
 `connectSurface` connects first and shows the surface later, as the walkthrough does to

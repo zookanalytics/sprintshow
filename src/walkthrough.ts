@@ -57,6 +57,13 @@ export interface CaptureWalkthroughOptions {
   baseUrl?: string;
   /** The directory a terminal script's shell starts in (default: the working directory). */
   cwd?: string;
+  /**
+   * For an iOS app script, the loopback ports of the servers the driver starts to drive the
+   * app, Appium's, WebDriverAgent's and its stream of the screen's frames, one for each in
+   * that order (iosPorts). Each listens on a free port the system assigns unless this
+   * names them. A page or terminal script's driver starts no server, and reads none.
+   */
+  port?: number | readonly number[];
   demo: Demo | string;
   outputPath: string;
   noNarrate?: boolean;
@@ -277,7 +284,7 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
   let recording: RecordingFrames;
   let openedAt: number;
   try {
-    connection = await connectSurface(demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, log });
+    connection = await connectSurface(demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, port: opts.port, log });
     context = await browser.newContext({ ...device, recordVideo: { dir: capturesDir, size: frameSize } });
     page = await context.newPage();
     recording = await watchRecording(page);

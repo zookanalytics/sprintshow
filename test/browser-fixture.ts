@@ -93,10 +93,14 @@ export interface CliRun {
   stderr: string;
 }
 
-/** Run `sprintshow <args>` from the source tree, the way `node src/cli.ts` runs it. */
-export function runCli(args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<CliRun> {
+/**
+ * Run `sprintshow <args>` from the source tree, the way `node src/cli.ts` runs it, or as
+ * the last arguments of the command `prefix` names, such as `sandbox-exec -p <profile>`.
+ */
+export function runCli(args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; prefix?: string[] } = {}): Promise<CliRun> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: opts.cwd ?? REPO, env: opts.env ?? process.env });
+    const [command, ...rest] = [...(opts.prefix ?? []), process.execPath, CLI, ...args];
+    const child = spawn(command, rest, { cwd: opts.cwd ?? REPO, env: opts.env ?? process.env });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => (stdout += d));

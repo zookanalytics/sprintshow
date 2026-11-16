@@ -39,8 +39,13 @@ run options:
                               For an iOS app script, the command brings the app up on a
                               simulator and prints its ios-simulator:// URL when it is up.
   --serve-dir <dir>           Serve a static directory with the built-in file server.
-  --port <n>                  Port for --serve (default 5173) or --serve-dir (default: a
-                              free port the system assigns).
+  --port <n>[,<n>...]         The loopback port of each server the run starts. A page
+                              script's run starts one: --serve's (default 5173) or
+                              --serve-dir's (default: a free port the system assigns).
+                              For an iOS app script, a port for each of Appium's
+                              server, WebDriverAgent's and its stream of the screen's
+                              frames, in that order (default: free ports the system
+                              assigns).
   --cwd <dir>                 Working directory for --serve, and where a terminal
                               script's shell starts.
   -o, --output <file.mp4>     Output path (default demos/<script-name>.mp4).
@@ -57,7 +62,8 @@ run options:
 
 screenshot options:
   --base-url, --serve, --serve-dir, --port, --cwd
-                              Where the pages come from, as for run.
+                              Where the pages come from, and the ports a run's servers
+                              listen on, as for run.
   -o, --output <file.png>     Output path (required).
   --full-page                 Capture the whole scrollable page instead of the viewport,
                               or a terminal script's whole session instead of its screen,
@@ -79,13 +85,17 @@ terminal scripts:
 
 iOS app scripts:
   A script that declares **Platform:** iOS drives an iOS app on a simulator through
-  Appium, named by --base-url or brought up by --serve, and takes no --serve-dir or
-  --port. Its steps tap, type, scroll and press keys, naming an element by its
-  accessibility identifier, or by its label when it has none, and its proofs read the
-  app's elements. Each step's PNG, and screenshot's, is the device's own screenshot.
-  Appium, its XCUITest driver and its runner app are installed once, with
+  Appium, named by --base-url or brought up by --serve, and takes no --serve-dir. Its
+  steps tap, type, scroll and press keys, naming an element by its accessibility
+  identifier, or by its label when it has none, and its proofs read the app's elements.
+  Each step's PNG, and screenshot's, is the device's own screenshot. Appium, its
+  XCUITest driver and its runner app are installed once, with
   \`sprintshow provision appium\`. A run sets a light appearance and a fixed status bar,
-  and puts the device back as it was given.
+  and puts the device back as it was given. Appium's server, WebDriverAgent's and its
+  stream of the screen's frames listen on free loopback ports, or on the ports --port
+  names, one for each in that order, such as --port 4723,8100,9100. A run given its
+  ports reaches no other loopback port, and refuses a port something already answers
+  on.
 
 run and screenshot exit codes:
   0                           The outputs are saved and every step's proof held.
@@ -145,15 +155,21 @@ function takeValue(flag: string, v: string | undefined): string {
   return v;
 }
 
-/** The server options from the flags `run` and `screenshot` share. The server checks the port. */
+/** The server options from the flags `run` and `screenshot` share. The server checks the ports. */
 function serveOptions(flags: Parsed['flags']): ServeOptions {
   return {
     baseUrl: (flags['base-url'] as string) ?? null,
     serve: (flags.serve as string) ?? null,
     serveDir: (flags['serve-dir'] as string) ?? null,
-    port: flags.port === undefined ? undefined : Number(flags.port),
+    port: flags.port === undefined ? undefined : ports(flags.port as string),
     cwd: flags.cwd as string | undefined,
   };
+}
+
+/** The ports a `--port` value names: one, or one for each server a run starts, separated by commas. */
+function ports(value: string): number | number[] {
+  const named = value.split(',').map(Number);
+  return named.length === 1 ? named[0] : named;
 }
 
 /**

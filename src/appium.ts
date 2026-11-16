@@ -13,8 +13,9 @@
 // It gets the engine's environment less the keys the engine holds (toolEnv), so no key
 // reaches Appium or what it starts: the XCUITest driver, simctl, xcodebuild and
 // WebDriverAgent. npm, when it installs them, gets the same environment. The server listens
-// on a free port of the loopback interface. What it prints is kept a whole line at a time,
-// its last lines only, for the message of a session that does not start.
+// on a port of the loopback interface: the one its caller names, or a free one. What it
+// prints is kept a whole line at a time, its last lines only, for the message of a session
+// that does not start.
 //
 // The client speaks the W3C WebDriver protocol over fetch, with Appium's extensions: its
 // `mobile:` scripts and its settings. WebdriverIO's clients need Node 22.23.4 or later on
@@ -26,7 +27,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { createServer, type AddressInfo, type Server } from 'node:net';
+import { connect, createServer, type AddressInfo, type Server } from 'node:net';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -75,6 +76,31 @@ export async function freePorts(count: number): Promise<number[]> {
   const failed = held.find((h) => h.status === 'rejected');
   if (failed) throw (failed as PromiseRejectedResult).reason;
   return ports;
+}
+
+/** How long a connection to a loopback port has to be accepted or refused. */
+const KNOCK_MS = 2000;
+
+/**
+ * Whether anything answers on `port` of the loopback interface. A connection shows it, and
+ * holding the port does not: a server that listens on every interface answers on the
+ * loopback interface too, and the port can still be held there alone. A port that takes
+ * no connection within KNOCK_MS has a server that does not accept one. Throws when the
+ * connection fails for any reason but a refusal, as when the port cannot be reached.
+ */
+export function portAnswers(port: number): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ host: '127.0.0.1', port });
+    socket.setTimeout(KNOCK_MS, () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('error', (e: NodeJS.ErrnoException) => (e.code === 'ECONNREFUSED' ? resolve(false) : reject(e)));
+  });
 }
 
 /** Where Appium's home for the pinned versions is, whether or not it is provisioned. */
@@ -180,11 +206,11 @@ function exited(child: ChildProcess, ms: number): Promise<boolean> {
   });
 }
 
-/** Start an Appium server for one run, and resolve once it answers. */
-export async function startAppium(log: (m: string) => void): Promise<AppiumServer> {
+/** Start an Appium server for one run, on the loopback port `named`, or on a free one, and resolve once it answers. */
+export async function startAppium(log: (m: string) => void, named?: number): Promise<AppiumServer> {
   const home = appiumHome();
   const main = path.join(home, 'node_modules', 'appium', 'index.js');
-  const [port] = await freePorts(1);
+  const port = named ?? (await freePorts(1))[0];
   const url = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, [main, 'server', '--address', '127.0.0.1', '--port', String(port), '--log-no-colors'], {
     cwd: home,

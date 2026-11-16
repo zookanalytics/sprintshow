@@ -4,17 +4,20 @@
 // elements, that the page draws the frames of the device's screen, and settles on one
 // taken after a step, that settling fails once the frames stop reaching the page, that a
 // step's still is the device's own screenshot, and where a tap's touch lands in the page.
-// test/ios-live.test.ts drives a real app on a simulator.
+// Also, which servers the ports a caller names are for, and that a named port something
+// already answers on is refused before the device is looked at. test/ios-live.test.ts
+// drives a real app on a simulator.
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:net';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
 import { parseDemoScript } from '../src/demo-script.ts';
-import { AppiumSession } from '../src/appium.ts';
-import { showIosApp, hasIosApp, runIosAction, type IosConnection } from '../src/ios.ts';
+import { AppiumSession, freePorts } from '../src/appium.ts';
+import { connectIosApp, iosPorts, showIosApp, hasIosApp, runIosAction, type IosConnection } from '../src/ios.ts';
 import { runStep, VIEWPORT } from '../src/browser.ts';
 import { standInAppium, type Board, type StandIn } from './appium-stand-in.ts';
 import { launchBrowser, scratchDir } from './browser-fixture.ts';
@@ -24,6 +27,27 @@ after(() => browser?.close());
 
 const quiet = (): void => {};
 const PNG = Buffer.from('the device screenshot');
+
+test("the ports a caller names are Appium's server's, WebDriverAgent's and its stream of the screen's frames', in that order, and none leaves each to the system", () => {
+  assert.deepEqual(iosPorts([4723, 8100, 9100]), { appium: 4723, agent: 8100, frames: 9100 });
+  assert.equal(iosPorts(undefined), null);
+});
+
+test('a named port something already answers on is refused before the device is looked at', async () => {
+  const blocker = createServer();
+  await new Promise<void>((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+  const { port } = blocker.address() as AddressInfo;
+  // No device has this UDID, so a check that came after the device's would fail on it.
+  const url = 'ios-simulator://00000000-0000-0000-0000-000000000000/com.example.Board';
+  try {
+    const [appium, frames] = await freePorts(2);
+    await assert.rejects(connectIosApp(url, quiet, [appium, port, frames]), {
+      message: `ios: something already answers on port ${port}, which --port names for WebDriverAgent's server; name a port nothing listens on`,
+    });
+  } finally {
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
+  }
+});
 
 /** A JPEG of the whole screen in one colour, made by the browser. */
 async function solid(color: string): Promise<Buffer> {
