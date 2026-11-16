@@ -47,8 +47,8 @@ jobs:
   installed-package:
     runs-on: ubuntu-latest
     env:
-      # npx installs nothing the project lacks, so each command below runs the copy the
-      # project installed, or fails.
+      # npx installs nothing the project lacks, so each npx command below runs the copy
+      # the project installed, or fails.
       npm_config_yes: 'false'
     steps:
       - uses: actions/checkout@v4
@@ -90,7 +90,7 @@ jobs:
       - name: Fetch ffmpeg
         working-directory: ${{ runner.temp }}/project
         run: npx @zookanalytics/sprintshow provision ffmpeg
-      # CI has no narration key, and --no-narrate keeps the video silent with one.
+      # CI has no narration key, and --no-narrate keeps the video silent even with one.
       - name: Record a video
         working-directory: ${{ runner.temp }}/project
         run: |
