@@ -155,7 +155,7 @@ What a user runs, and the domains each draws on:
 - **The source runs as written.** Every source file is TypeScript that Node 22.18 or
   later runs by stripping its types: a relative import names the `.ts` file, and no
   syntax needs a transform. The tests and a checkout's command-line interface run the
-  source, and only the published package runs the build.
+  source, and only the packed package runs the build.
 
 ## Decisions
 
