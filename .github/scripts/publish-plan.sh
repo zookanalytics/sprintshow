@@ -6,7 +6,9 @@
 #
 # npm records the commit it published a version from as its gitHead, and the release goes
 # on that commit. So a re-run of the run that published finishes a missing release, and a
-# later push tags nothing.
+# later push tags nothing. The notes start from the last release tag in that commit's
+# history, so a re-run made after a newer release still takes the changes since the
+# release before its own.
 set -euo pipefail
 
 version=$(jq -r .version package.json)
@@ -31,7 +33,7 @@ if gh release view "v$version" >/dev/null 2>&1; then
   echo "v$version has its release."
 elif [ "$published_from" = "$GITHUB_SHA" ]; then
   release=true
-  previous=$(gh release view --json tagName --jq .tagName)
+  previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$GITHUB_SHA^")
   echo "v$version gets its release on this commit, with notes from $previous."
 else
   echo "$spec was not published from this commit, so this run tags nothing."

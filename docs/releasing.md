@@ -18,7 +18,7 @@ each commit subject on main is a merged PR's title:
 
 ```bash
 git fetch origin --tags
-git log --format=%s "$(git describe --tags --abbrev=0 origin/main)..origin/main"
+git log --format=%s "$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)..origin/main"
 ```
 
 It sets the next version from those titles. Before 1.0:
@@ -69,11 +69,14 @@ fixed by a merge, and that merge's run takes over. When npm still lacks the vers
 publishes it, and its commit gets the tag. When npm has it, no run creates the release: a run
 tags only the commit npm records the version was published from, and its token cannot tag a
 commit whose workflow files differ from main's. Tag that commit with git, then create the
-release on the tag:
+release on the tag, with notes from the last release tag in that commit's history:
 
 ```bash
-git push origin "$(npm view @zookanalytics/sprintshow@<x.y.z> gitHead):refs/tags/v<x.y.z>"
-gh release create v<x.y.z> --verify-tag --generate-notes --notes-start-tag <the previous release's tag>
+git fetch origin --tags
+published=$(npm view @zookanalytics/sprintshow@<x.y.z> gitHead)
+git push origin "$published:refs/tags/v<x.y.z>"
+gh release create v<x.y.z> --verify-tag --generate-notes \
+  --notes-start-tag "$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$published^")"
 ```
 
 GitHub's release API makes a tag on such a commit only for a token allowed to change
