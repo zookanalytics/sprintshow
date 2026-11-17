@@ -38,3 +38,62 @@ jobs:
       - run: npm run lint:demo
       - run: npm test
       - run: npm run build
+
+  # The package as npm users install it. The packed tarball goes into a project of its
+  # own, installed by npm 12, which blocks the install script of every dependency the
+  # project has not allowed, and the binaries come from the commands the README names.
+  # Every step after the install runs in that project, where npx reaches the installed
+  # copy's bin.
+  installed-package:
+    runs-on: ubuntu-latest
+    env:
+      # npx installs nothing the project lacks, so each npx command below runs the copy
+      # the project installed, or fails.
+      npm_config_yes: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # One Node is enough to check the package, and npm 12 does not run on the
+          # engines floor the check job tests.
+          node-version: '24'
+          cache: npm
+      - run: npm install --global npm@12
+      - run: npm ci
+      # The prepack script builds dist/ first, as it does for npm publish.
+      - run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: Install the tarball into a new project
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir project
+          cd project
+          npm init --yes
+          npm install ../zookanalytics-sprintshow-*.tgz
+      - name: Fetch the browser
+        working-directory: ${{ runner.temp }}/project
+        run: npx playwright install chromium-headless-shell --with-deps
+      - name: Lint the packaged demos
+        working-directory: ${{ runner.temp }}/project
+        run: |
+          for demo in node_modules/@zookanalytics/sprintshow/demos/*.md; do
+            npx sprintshow lint "$demo"
+          done
+      # Taken before ffmpeg is fetched, which checks that a screenshot needs none.
+      - name: Take a browser screenshot and a terminal screenshot
+        working-directory: ${{ runner.temp }}/project
+        run: |
+          pkg=node_modules/@zookanalytics/sprintshow
+          npx sprintshow screenshot "$pkg/demos/sample.md" --serve-dir "$pkg/examples/sample-app" -o board.png
+          npx sprintshow screenshot "$pkg/demos/terminal.md" --cwd "$pkg/examples/sample-cli" -o terminal.png
+          test -s board.png
+          test -s terminal.png
+      - name: Fetch ffmpeg
+        working-directory: ${{ runner.temp }}/project
+        run: npx @zookanalytics/sprintshow provision ffmpeg
+      # CI has no narration key, and --no-narrate keeps the video silent even with one.
+      - name: Record a video
+        working-directory: ${{ runner.temp }}/project
+        run: |
+          pkg=node_modules/@zookanalytics/sprintshow
+          npx sprintshow run "$pkg/demos/sample.md" --serve-dir "$pkg/examples/sample-app" --no-narrate -o sample.mp4
+          test -s sample.mp4
