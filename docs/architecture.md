@@ -14,8 +14,8 @@ video, screenshots or both, with each step's claim checked against the screen.
 
 This document is the architecture of the whole repository: the engine in `src/`, with its
 command-line interface and library, the samples and examples in `demos/` and
-`examples/`, and how the engine meets the systems around it. It leaves these topics to
-the living docs that hold them:
+`examples/`, the workflow in `.github/` that publishes each release, and how they meet
+the systems around them. It leaves these topics to the living docs that hold them:
 
 - Writing a demo script and running each command: [README.md](../README.md).
 - The frames manifest that an agent's own capture hands to `assemble`:
@@ -51,13 +51,20 @@ The quality goals, in rank order:
 
 ## Context
 
-The boundary is the capture. sprintshow takes a demo script and an app or a shell, and
-leaves an MP4, PNGs or both at the paths the caller names, for the caller to publish.
+The engine's boundary is the capture. sprintshow takes a demo script and an app or a
+shell, and leaves an MP4, PNGs or both at the paths the caller names, for the caller to
+publish.
+
+The repository's other boundary is the release. Its
+[publish workflow](../.github/workflows/publish.yml) publishes each new version of the
+package once the version reaches main, and publishes no version whose package fails the
+installed-package check that CI runs on every pull request.
 
 | Who or what | Its role |
 |---|---|
 | An agent or a developer | Writes the script, runs a command or calls the library, and reads the log and the exit code. |
 | A person watching, such as a pull request's reviewer | Watches the MP4 or looks at the PNGs wherever the caller puts them. |
+| The operator | Approves the pull request that sets each new version. That approval is the release, and the publish workflow carries it out. |
 | The app under demo | Answers over HTTP at an origin: a server already running, a dev-server command sprintshow starts and stops, or a static directory sprintshow serves. An iOS app runs on a booted iOS Simulator device instead, named by its simulator URL: an app already running, or one the repo's start command brings up, which sprintshow starts and stops. |
 | bash, and the programs a terminal script runs | Run on the host in a pseudo-terminal, in the directory the caller names. |
 | Chromium, through Playwright | Shows every page, the engine's terminal and device pages included, records the walkthrough, and takes every screenshot but an iOS app's. |
@@ -67,6 +74,8 @@ leaves an MP4, PNGs or both at the paths the caller names, for the caller to pub
 | OpenAI's speech API | Voices each caption when `OPENAI_API_KEY` is set. |
 | Vercel's Deployment Protection | Stands in front of a protected deployment, and lets the engine through with the key in `VERCEL_AUTOMATION_BYPASS_SECRET`. |
 | An agent that drives its own browser, such as through `@playwright/mcp` | Hands its frames and manifest to `sprintshow assemble`. sprintshow does not run it. |
+| npm | Holds each published version of `@zookanalytics/sprintshow`. It takes a new version from the publish workflow because the package's trusted publisher names that workflow. |
+| GitHub | Runs CI and the publish workflow, and holds a GitHub release and a `v<version>` tag for each version the workflow publishes, the tag on the commit the version was published from. The workflow writes them only once npm holds the version. |
 
 ## Domains
 
