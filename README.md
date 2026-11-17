@@ -592,6 +592,12 @@ See [`examples/agent-mcp`](examples/agent-mcp) for the MCP wiring and the manife
 
 `demos/sample.mp4` is in git-LFS, so a clone without git-lfs has a pointer file in its place.
 
+## Releases
+
+Each version on npm has a [GitHub release](https://github.com/zookanalytics/sprintshow/releases)
+with notes on the changes it brings. [docs/releasing.md](docs/releasing.md) says how a release
+is cut.
+
 ## License
 
 [AGPL-3.0](LICENSE). Running the tool to produce a video imposes nothing on the video or on

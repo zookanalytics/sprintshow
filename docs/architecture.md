@@ -24,6 +24,7 @@ the living docs that hold them:
   [examples/seed-test/README.md](../examples/seed-test/README.md).
 - How each part works, and why: its module's header comment in [src/](../src/).
 - What each test pins: its file's header comment in [test/](../test/).
+- How a release is cut and published: [releasing.md](releasing.md).
 - Work this document does not describe as architecture: the repository's beads.
 
 ## Purpose and quality goals
