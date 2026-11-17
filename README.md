@@ -594,7 +594,7 @@ See [`examples/agent-mcp`](examples/agent-mcp) for the MCP wiring and the manife
 
 ## Releases
 
-Each version on npm has a [GitHub release](https://github.com/zookanalytics/sprintshow/releases)
+Each version from 0.1.0 on has a [GitHub release](https://github.com/zookanalytics/sprintshow/releases)
 with notes on the changes it brings. [docs/releasing.md](docs/releasing.md) says how a release
 is cut.
 
