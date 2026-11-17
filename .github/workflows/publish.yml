@@ -1,0 +1,98 @@
+name: Publish
+
+# Each push to main publishes package.json's version to npm when npm lacks it, then tags
+# the commit it was published from v<version> and creates that tag's GitHub release.
+# docs/releasing.md says how a release is cut. The package's trusted publisher on npm
+# names this file, so the file keeps its name.
+on:
+  push:
+    branches: [main]
+
+# One run at a time: a run in progress is never cancelled, and a newer run never replaces
+# one that waits.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: write # the tag and the GitHub release
+  id-token: write # npm's trusted publishing
+
+jobs:
+  publish:
+    if: github.repository == 'zookanalytics/sprintshow'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          # A release installs its dependencies afresh, with nothing restored from a cache.
+          package-manager-cache: false
+      # Trusted publishing needs npm 11.5.1 or later, and the installed-package check
+      # installs the package with npm 12.
+      - run: npm install --global npm@12
+
+      # npm records the commit it published a version from as its gitHead. The release
+      # goes on that commit, so a re-run of the run that published finishes a missing
+      # release, and a later push tags nothing.
+      - name: Decide what to publish and release
+        id: plan
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -r .version package.json)
+          spec=$(jq -r .name package.json)@$version
+          # E404 means npm lacks the version, and any other error fails the run.
+          if view=$(npm view "$spec" version gitHead --json 2>"$RUNNER_TEMP/npm-view.log"); then
+            publish=false
+            published_from=$(jq -r '(if type == "array" then .[0] else . end) | objects | .gitHead // empty' <<<"$view")
+            echo "npm has $spec, published from ${published_from:-a commit it did not record}."
+          elif [ "$(jq -r '.error.code? // empty' <<<"$view")" = E404 ]; then
+            publish=true
+            published_from=$GITHUB_SHA
+            echo "npm lacks $spec, so this run publishes it."
+          else
+            printf '%s\n' "$view"
+            cat "$RUNNER_TEMP/npm-view.log"
+            exit 1
+          fi
+          release=false
+          previous=
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "v$version has its release."
+          elif [ "$published_from" = "$GITHUB_SHA" ]; then
+            release=true
+            previous=$(gh release view --json tagName --jq .tagName)
+            echo "v$version gets its release on this commit, with notes from $previous."
+          else
+            echo "$spec was not published from this commit, so this run tags nothing."
+          fi
+          {
+            echo "version=$version"
+            echo "publish=$publish"
+            echo "release=$release"
+            echo "previous=$previous"
+          } >>"$GITHUB_OUTPUT"
+
+      - if: steps.plan.outputs.publish == 'true'
+        run: npm ci
+      - if: steps.plan.outputs.publish == 'true'
+        uses: ./.github/actions/installed-package
+      # Trusted publishing gives the run its npm token, and npm attests the provenance of
+      # a public package published from a public repository.
+      - if: steps.plan.outputs.publish == 'true'
+        run: npm publish --access public
+
+      - name: Create the GitHub release
+        if: steps.plan.outputs.release == 'true'
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.plan.outputs.version }}
+          PREVIOUS: ${{ steps.plan.outputs.previous }}
+        run: gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --notes-start-tag "$PREVIOUS"
