@@ -61,4 +61,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ steps.plan.outputs.version }}
           PREVIOUS: ${{ steps.plan.outputs.previous }}
-        run: gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --notes-start-tag "$PREVIOUS"
+          LATEST: ${{ steps.plan.outputs.latest }}
+        run: gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --notes-start-tag "$PREVIOUS" --latest="$LATEST"

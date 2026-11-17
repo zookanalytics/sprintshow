@@ -1,6 +1,7 @@
 // Tests for what a run of the publish workflow decides (.github/scripts/publish-plan.sh):
 // whether it publishes package.json's version, whether it creates the version's GitHub
-// release, and the tag that release's notes start from.
+// release, the tag that release's notes start from, and whether the release is marked
+// Latest.
 //
 // Each case runs the script in a git repository of its own, checked out at one commit, as
 // the workflow's checkout is. The history is 0.1.0 tagged v0.1.0, a commit that sets
@@ -131,35 +132,43 @@ test('a version npm lacks is published, then released with notes from the releas
   const h = history({ newerRelease: false });
   const run = plan(h, h.released, { npm: npmLacks, releases: ['v0.1.0'] });
   assert.equal(run.status, 0, run.log);
-  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'true', release: 'true', previous: 'v0.1.0' });
+  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'true', release: 'true', previous: 'v0.1.0', latest: 'true' });
 });
 
 test('a re-run of the run that published creates only the missing release', () => {
   const h = history({ newerRelease: false });
   const run = plan(h, h.released, { npm: npmHasFrom(h.released), releases: ['v0.1.0'] });
   assert.equal(run.status, 0, run.log);
-  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'false', release: 'true', previous: 'v0.1.0' });
+  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'false', release: 'true', previous: 'v0.1.0', latest: 'true' });
 });
 
-test('a re-run made after a newer release takes its notes from the release before its own commit', () => {
+test('a re-run made after a newer release takes its notes from the release before its own commit, and leaves the newer release Latest', () => {
   const h = history({ newerRelease: true });
   const run = plan(h, h.released, { npm: npmHasFrom(h.released), releases: ['v0.1.0', 'v0.3.0'] });
   assert.equal(run.status, 0, run.log);
-  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'false', release: 'true', previous: 'v0.1.0' });
+  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'false', release: 'true', previous: 'v0.1.0', latest: 'false' });
+});
+
+test("a release on a commit that already has its version's tag is still marked Latest", () => {
+  const h = history({ newerRelease: false });
+  execFileSync('git', ['tag', 'v0.2.0', h.released], { cwd: h.repo, env: GIT_ENV });
+  const run = plan(h, h.released, { npm: npmHasFrom(h.released), releases: ['v0.1.0'] });
+  assert.equal(run.status, 0, run.log);
+  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'false', release: 'true', previous: 'v0.1.0', latest: 'true' });
 });
 
 test('a version whose release exists is neither published nor released again', () => {
   const h = history({ newerRelease: false });
   const run = plan(h, h.released, { npm: npmHasFrom(h.released), releases: ['v0.1.0', 'v0.2.0'] });
   assert.equal(run.status, 0, run.log);
-  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'false', release: 'false', previous: '' });
+  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'false', release: 'false', previous: '', latest: '' });
 });
 
 test('a later push that leaves the version unchanged tags nothing, even while its release is missing', () => {
   const h = history({ newerRelease: false });
   const run = plan(h, h.later, { npm: npmHasFrom(h.released), releases: ['v0.1.0'] });
   assert.equal(run.status, 0, run.log);
-  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'false', release: 'false', previous: '' });
+  assert.deepEqual(run.outputs, { version: '0.2.0', publish: 'false', release: 'false', previous: '', latest: '' });
 });
 
 test('a registry error other than E404 fails the run before it decides anything', () => {

@@ -69,13 +69,16 @@ fixed by a merge, and that merge's run takes over. When npm still lacks the vers
 publishes it, and its commit gets the tag. When npm has it, no run creates the release: a run
 tags only the commit npm records the version was published from, and its token cannot tag a
 commit whose workflow files differ from main's. Tag that commit with git, then create the
-release on the tag, with notes from the last release tag in that commit's history:
+release on the tag, with notes from the last release tag in that commit's history. GitHub marks
+a new release Latest unless told not to, so pass `--latest=false` when the `git tag` line below
+lists a tag, a newer release on a later commit, and `--latest=true` when it lists none:
 
 ```bash
 git fetch origin --tags
 published=$(npm view @zookanalytics/sprintshow@<x.y.z> gitHead)
 git push origin "$published:refs/tags/v<x.y.z>"
-gh release create v<x.y.z> --verify-tag --generate-notes \
+git tag --list 'v[0-9]*' --contains "$published" --no-merged "$published"
+gh release create v<x.y.z> --verify-tag --generate-notes --latest=<true or false> \
   --notes-start-tag "$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$published^")"
 ```
 
