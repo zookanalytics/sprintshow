@@ -57,8 +57,7 @@ publish.
 
 The repository's other boundary is the release. Its
 [publish workflow](../.github/workflows/publish.yml) publishes each new version of the
-package once the version reaches main, and publishes no version whose package fails the
-installed-package check that CI runs on every pull request.
+package once the version reaches main.
 
 | Who or what | Its role |
 |---|---|
@@ -75,7 +74,7 @@ installed-package check that CI runs on every pull request.
 | Vercel's Deployment Protection | Stands in front of a protected deployment, and lets the engine through with the key in `VERCEL_AUTOMATION_BYPASS_SECRET`. |
 | An agent that drives its own browser, such as through `@playwright/mcp` | Hands its frames and manifest to `sprintshow assemble`. sprintshow does not run it. |
 | npm | Holds each published version of `@zookanalytics/sprintshow`. It takes a new version from the publish workflow because the package's trusted publisher names that workflow. |
-| GitHub | Runs CI and the publish workflow, and holds a GitHub release and a `v<version>` tag for each version the workflow publishes, the tag on the commit the version was published from. The workflow writes them only once npm holds the version. |
+| GitHub | Runs CI and the publish workflow, and holds a GitHub release and a tag for each version the workflow publishes. |
 
 ## Domains
 
