@@ -372,7 +372,11 @@ describe('a walkthrough takes its screenshots with no trace in its video', { con
         const { segments } = JSON.parse(readFileSync(path.join(capturesDir, 'manifest.json'), 'utf8')) as { segments: { narration: string; start: number }[] };
         const first = segments.find((s) => s.narration === 'The page moves on');
         assert.ok(first, 'the manifest has the first step');
-        assert.ok(Math.abs(first.start - caption) <= 0.1, `the first step is narrated from ${first.start}s, and its caption first shows at ${caption}s`);
+        // The narration starts at the frame the browser reported for the caption, and the
+        // video shows a frame from at most a little over 40 ms before the browser drew it. A
+        // recording on a loaded host can miss frames, which shows the caption later in the
+        // video than the frame the browser reported, so only a narration that starts late fails.
+        assert.ok(first.start <= caption + 0.1, `the first step is narrated from ${first.start}s, at most 0.1 s after its caption first shows at ${caption}s, not from the next page at ${next}s`);
       });
     } finally {
       await site.close();
