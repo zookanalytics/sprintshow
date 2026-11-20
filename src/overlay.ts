@@ -4,10 +4,11 @@
 // marker, a no-break space, makes the browser draw a frame that shows nothing new.
 //
 // The still-frame path injects a caption, screenshots, and removes it; the walkthrough
-// path leaves the caption up and updates it in place, and shows the cards as full-screen
-// overlays for a few seconds while recording continues.
+// path keeps the caption up, updates it in place and draws it again in each page a step
+// loads, and shows the cards as full-screen overlays for a few seconds while recording
+// continues.
 
-import type { Page } from 'playwright';
+import type { Disposable, Page } from 'playwright';
 
 // The engine's palette and UI font, which the terminal page (terminal.ts) draws in too.
 export const ACCENT = '#6ad08a';
@@ -29,19 +30,28 @@ export function esc(s: string): string {
 const SHOWN_TIMEOUT_MS = 5000;
 let captions = 0;
 
+/** A caption bar to draw: the step's number of `total`, its text and whether its proof failed, in the engine's palette and font. */
+interface CaptionBar {
+  idx: number;
+  total: number;
+  text: string;
+  failed: boolean;
+  /** The Element Timing identifier the counter and the label are marked with, or null for none. */
+  timing: string | null;
+  ACCENT: string;
+  ACCENT_FAIL: string;
+  FONT: string;
+}
+
 /**
- * Show (or update, if already present) the step caption bar at the bottom of the page.
- * Idempotent, so the walkthrough path can call it every step to retitle the same bar.
- *
- * The counter and the label are fresh elements each time, marked for the page's Element
- * Timing, so the browser reports the frame in which it first showed their text. Resolves
- * once it has, with that frame's wall-clock time in ms. When the browser reports no frame
- * within SHOWN_TIMEOUT_MS, it resolves with the time the page changed the bar.
+ * Runs in the page: draw the step caption bar at the bottom of the document, or retitle the
+ * one it holds. A document with no body yet, such as a new one an init script runs in,
+ * gets the bar once the parser has added the body. An init script runs in each child frame
+ * too, and a child frame gets no bar. Returns the wall-clock time in ms at which it ran.
  */
-export async function showCaption(page: Page, idx: number, total: number, text: string, failed: boolean): Promise<number> {
-  const id = `__ss_caption_${++captions}`;
-  const changedAt = await page.evaluate(
-    ({ idx, total, text, failed, id, ACCENT, ACCENT_FAIL, FONT }) => {
+function drawCaption({ idx, total, text, failed, timing, ACCENT, ACCENT_FAIL, FONT }: CaptionBar): number {
+  if (window.top === window) {
+    const draw = (): void => {
       const ID = '__ss_caption__';
       const accent = failed ? ACCENT_FAIL : ACCENT;
       let bar = document.getElementById(ID);
@@ -98,17 +108,59 @@ export async function showCaption(page: Page, idx: number, total: number, text: 
       const label = document.createElement('span');
       label.dataset.role = 'label';
       label.textContent = text;
-      for (const el of [counter, label]) el.setAttribute('elementtiming', id);
+      if (timing) for (const el of [counter, label]) el.setAttribute('elementtiming', timing);
       bar.querySelectorAll('[data-role=counter], [data-role=label]').forEach((el) => el.remove());
       bar.prepend(counter, label);
       const badge = bar.querySelector('[data-role=badge]') as HTMLElement;
       badge.style.display = failed ? 'inline-block' : 'none';
       badge.style.background = accent;
-      return performance.timeOrigin + performance.now();
-    },
-    { idx, total, text, failed, id, ACCENT, ACCENT_FAIL, FONT },
-  );
-  return (await shownAt(page, id)) ?? changedAt;
+    };
+    if (document.body) draw();
+    else {
+      const observer = new MutationObserver(() => {
+        if (!document.body) return;
+        observer.disconnect();
+        draw();
+      });
+      observer.observe(document, { childList: true, subtree: true });
+    }
+  }
+  return performance.timeOrigin + performance.now();
+}
+
+/**
+ * Show (or update, if already present) the step caption bar at the bottom of the page.
+ * Idempotent, so the walkthrough path can call it every step to retitle the same bar.
+ *
+ * The counter and the label are fresh elements each time, marked for the page's Element
+ * Timing, so the browser reports the frame in which it first showed their text. Resolves
+ * once it has, with that frame's wall-clock time in ms. When the browser reports no frame
+ * within SHOWN_TIMEOUT_MS, it resolves with the time the page was handed the caption.
+ */
+export async function showCaption(page: Page, idx: number, total: number, text: string, failed: boolean): Promise<number> {
+  const timing = `__ss_caption_${++captions}`;
+  const handedAt = await page.evaluate(drawCaption, { idx, total, text, failed, timing, ACCENT, ACCENT_FAIL, FONT });
+  return (await shownAt(page, timing)) ?? handedAt;
+}
+
+/** The init script that draws the caption each page keeps (keepCaption). */
+const kept = new WeakMap<Page, Disposable>();
+
+/**
+ * Show the step caption bar, as showCaption does, and keep it up in each document the page
+ * loads from now on, such as one a `goto` or a click on a link opens, until the next call
+ * replaces it. It resolves as showCaption does, with the bar's first showing in the
+ * document the page holds now: the bar drawn again in a later one is marked for no Element
+ * Timing, so the browser reports none of it.
+ *
+ * The new caption's script is registered before the last one's is removed, so a document
+ * that loads in between still gets a bar, and showCaption then retitles it.
+ */
+export async function keepCaption(page: Page, idx: number, total: number, text: string, failed: boolean): Promise<number> {
+  const script = await page.addInitScript(drawCaption, { idx, total, text, failed, timing: null, ACCENT, ACCENT_FAIL, FONT });
+  await kept.get(page)?.dispose();
+  kept.set(page, script);
+  return showCaption(page, idx, total, text, failed);
 }
 
 /**

@@ -41,7 +41,7 @@ import { chromium, type Browser, type BrowserContext, type BrowserContextOptions
 import { parseDemoScript, outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
 import { requireFfmpeg, run, probeDuration, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
 import { installPointer, runStep, connectSurface, chromiumLaunchArgs, contextOptions, videoFrame, type Surface, type SurfaceConnection } from './browser.ts';
-import { showCaption, markFrame, removeMarker, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
+import { keepCaption, markFrame, removeMarker, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
 import { stepScreenshots, type StepScreenshots } from './screenshot.ts';
 import { capturesRoot, type CaptureResult } from './capture.ts';
 
@@ -200,14 +200,18 @@ export async function watchRecording(page: Page): Promise<RecordingFrames> {
   };
 }
 
-/** Walk one step, and resolve with whether its proof held and when the browser first showed its caption. */
+/**
+ * Walk one step, and resolve with whether its proof held and when the browser first showed
+ * its caption. The caption stays up, through each page the step's actions load, until the
+ * next step's replaces it.
+ */
 async function walkStep(page: Page, base: string, step: DemoStep, total: number, log: (m: string) => void): Promise<{ proved: boolean; shownAt: number }> {
   let shownAt = Date.now();
   const { proved } = await runStep(page, base, step, total, true, log, async () => {
-    shownAt = await showCaption(page, step.index, total, step.narration, false);
+    shownAt = await keepCaption(page, step.index, total, step.narration, false);
   });
   if (!proved) {
-    await showCaption(page, step.index, total, step.narration, true);
+    await keepCaption(page, step.index, total, step.narration, true);
     await page.waitForTimeout(FAIL_HOLD_MS);
   }
   return { proved, shownAt };
