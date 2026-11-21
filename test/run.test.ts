@@ -14,13 +14,13 @@
 // cuts for them, every frame from the first step's caption to the closing card shows the
 // caption, no frame shows a terminal's window laid out as a still, a step that ends at
 // once shows its caption before the cut for its screenshot, a step that moves to another
-// page, leaving its caption behind, gets no caption back, and no frame of a page whose
-// stylesheet decorates every element shows anything at its top-left corner, where the
-// engine's frame marker sits. A cut takes in every frame within reach of its still, and a
-// moment after it moves up by the frames it drops. The stretch a still can show ends at a
-// frame drawn after the still that the recording has, and frames are drawn until one
-// reaches it, on a page whose Content Security Policy refuses an image from a data: URL
-// as on any other, and on a page that cannot take the marker.
+// page keeps its caption there and is narrated from the caption's first showing, and no
+// frame of a page whose stylesheet decorates every element shows anything at its top-left
+// corner, where the engine's frame marker sits. A cut takes in every frame within reach
+// of its still, and a moment after it moves up by the frames it drops. The stretch a
+// still can show ends at a frame drawn after the still that the recording has, and frames
+// are drawn until one reaches it, on a page whose Content Security Policy refuses an
+// image from a data: URL as on any other, and on a page that cannot take the marker.
 // A run with no video needs a screenshot directory and refuses the video's options, and a
 // directory that holds files, or would also hold the video or the run's working
 // directory, is refused before anything is served or made. The directory and the paths
@@ -259,7 +259,7 @@ const PAGE_WALK = `# Demo: Screenshots of a walkthrough
 - Every frame of the steps shows the caption.
 `;
 
-/** A second page, in a colour of its own, which a step moves to and so leaves its caption behind. */
+/** A second page, in a colour of its own, which a step moves to. */
 const NEXT_HTML = '<!doctype html><body style="margin:0;background:#9cc"><main id="next" style="height:100vh"></main></body>';
 
 /**
@@ -352,25 +352,31 @@ describe('a walkthrough takes its screenshots with no trace in its video', { con
     }
   });
 
-  test('a walkthrough step that moves to another page, and so leaves its caption behind, gets no caption back from its screenshot', { timeout: 300_000 }, async () => {
+  test("a walkthrough step that moves to another page keeps its caption there, and is narrated from the caption's first showing", { timeout: 300_000 }, async () => {
     const site = await serveSite({ 'index.html': COUNTER_HTML, 'next.html': NEXT_HTML });
     try {
       await walkWithScreenshots(MOVING_WALK, { baseUrl: site.baseUrl }, (video, capturesDir) => {
         // The first page is white and the next one a mid tone, and the caption bar darkens
-        // the foot of either. The first step's caption shows on the first page, and the next
-        // page has none of its own until the second step's.
+        // the foot of either. The first step's caption first shows on the first page, and
+        // the next page draws it again.
         const frames = patchLuma(video, 320, 300);
         const foot = patchLuma(video, 640, 880);
         const cover = firstFrame(frames, 0, (l) => l < 100, 'the cover');
         const between = firstFrame(frames, cover, (l) => l > 220, 'the first page after the cover');
         const captionFrame = foot.find((f, i) => f.t >= between && f.luma < 100 && frames[i].luma > 220);
         assert.ok(captionFrame, `no frame from ${between}s shows the first step's caption`);
-        const left = firstFrame(foot, captionFrame.t, (l) => l >= 100, 'the next page without the caption');
+        const caption = captionFrame.t;
+        const next = firstFrame(frames, caption, (l) => l >= 100 && l <= 220, 'the next page');
+        const bare = foot.filter((f) => f.t >= caption && f.luma >= 100).map((f) => f.t);
+        assert.deepEqual(bare, [], `every frame from the first caption at ${caption}s, through the move to the next page at ${next}s, to the end shows the caption`);
         const { segments } = JSON.parse(readFileSync(path.join(capturesDir, 'manifest.json'), 'utf8')) as { segments: { narration: string; start: number }[] };
-        const second = segments.find((s) => s.narration === 'A step that ends at once');
-        assert.ok(second, 'the manifest has the second step');
-        const captioned = foot.filter((f) => f.t >= left && f.t < second.start - 0.05 && f.luma < 100).map((f) => f.t);
-        assert.deepEqual(captioned, [], `from the move to the next page at ${left}s to the second step's caption at ${second.start}s, no frame shows a caption`);
+        const first = segments.find((s) => s.narration === 'The page moves on');
+        assert.ok(first, 'the manifest has the first step');
+        // The narration starts at the frame the browser reported for the caption, and the
+        // video shows a frame from at most a little over 40 ms before the browser drew it. A
+        // recording on a loaded host can miss frames, which shows the caption later in the
+        // video than the frame the browser reported, so only a narration that starts late fails.
+        assert.ok(first.start <= caption + 0.1, `the first step is narrated from ${first.start}s, at most 0.1 s after its caption first shows at ${caption}s, not from the next page at ${next}s`);
       });
     } finally {
       await site.close();
