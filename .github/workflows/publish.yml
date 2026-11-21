@@ -1,0 +1,65 @@
+name: Publish
+
+# Each push to main publishes package.json's version to npm when npm lacks it, then tags
+# the commit it was published from v<version> and creates that tag's GitHub release.
+# docs/releasing.md says how a release is cut. The package's trusted publisher on npm
+# names this file, so the file keeps its name.
+on:
+  push:
+    branches: [main]
+
+# One run at a time: a run in progress is never cancelled, and a newer run never replaces
+# one that waits.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: write # the tag and the GitHub release
+  id-token: write # npm's trusted publishing
+
+jobs:
+  publish:
+    if: github.repository == 'zookanalytics/sprintshow'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The whole history and its tags, where the plan finds the release before this one.
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          # A release installs its dependencies afresh, with nothing restored from a cache.
+          package-manager-cache: false
+      # Trusted publishing needs npm 11.5.1 or later, and the installed-package check
+      # installs the package with npm 12.
+      - run: npm install --global npm@12
+
+      - name: Decide what to publish and release
+        id: plan
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/publish-plan.sh
+
+      - if: steps.plan.outputs.publish == 'true'
+        run: npm ci
+      - if: steps.plan.outputs.publish == 'true'
+        uses: ./.github/actions/installed-package
+      # Trusted publishing gives the run its npm token, and npm attests the provenance of
+      # a public package published from a public repository.
+      - if: steps.plan.outputs.publish == 'true'
+        run: npm publish --access public
+
+      - name: Create the GitHub release
+        if: steps.plan.outputs.release == 'true'
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.plan.outputs.version }}
+          PREVIOUS: ${{ steps.plan.outputs.previous }}
+          LATEST: ${{ steps.plan.outputs.latest }}
+        run: gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --notes-start-tag "$PREVIOUS" --latest="$LATEST"
