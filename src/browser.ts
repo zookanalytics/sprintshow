@@ -10,6 +10,7 @@
 //
 // The pointer is a DOM element the engine moves, so a click or a keystroke reads on
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
+// It is drawn in the chrome's layer (overlay.ts), so it shows above a dialog it clicks in.
 // The still-frame and screenshot paths skip it and drive the page directly, for speed and
 // determinism. A terminal needs no pointer: what is typed shows where the shell echoes it.
 // Nor does a page's `press`: its keys go wherever the page's focus is, and where keys
@@ -22,6 +23,7 @@ import { pressKeys } from './keyboard.ts';
 import { openTerminal, hasTerminalSession, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
 import { connectIosApp, showIosApp, hasIosApp, runIosAction, checkIosAssertion } from './ios.ts';
 import { passVercelSignIn } from './vercel.ts';
+import { chromeLayer } from './overlay.ts';
 
 /** The viewport a script that names no device is driven at, and every terminal or iOS app script's frame. */
 export const VIEWPORT = { width: 1280, height: 900 };
@@ -90,6 +92,7 @@ export function videoFrame(demo: Demo): ViewportSize {
 /** Init script (re-run on every navigation) that installs the pointer and its `window.__ss` API. */
 const POINTER_INIT = `(() => {
   if (window.__ss_installed) return; window.__ss_installed = true;
+  const chrome = ${chromeLayer};
   const build = () => {
     if (!document.body || document.getElementById('__ss_pointer__')) return;
     const style = document.createElement('style');
@@ -105,11 +108,11 @@ const POINTER_INIT = `(() => {
     p.id = '__ss_pointer__';
     p.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none">' +
       '<path d="M3 2l7 18 2.9-7.4L20 9.7 3 2z" fill="#fff" stroke="#111" stroke-width="1.3" stroke-linejoin="round"/></svg>';
-    document.body.appendChild(p);
+    chrome().appendChild(p);
   };
   window.__ss = {
     moveTo(x, y) { build(); const el = document.getElementById('__ss_pointer__'); if (el) { el.style.left = x + 'px'; el.style.top = y + 'px'; } },
-    ripple(x, y) { build(); const r = document.createElement('div'); r.className = '__ss_ripple__'; r.style.left = x + 'px'; r.style.top = y + 'px'; document.body.appendChild(r); setTimeout(() => r.remove(), 560); },
+    ripple(x, y) { build(); const r = document.createElement('div'); r.className = '__ss_ripple__'; r.style.left = x + 'px'; r.style.top = y + 'px'; chrome().appendChild(r); setTimeout(() => r.remove(), 560); },
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build); else build();
 })()`;

@@ -1,23 +1,42 @@
-// Tests for the caption bar a walkthrough keeps up through each step (keepCaption in
-// src/overlay.ts).
+// Tests for the engine's chrome in a page (src/overlay.ts, and the pointer in
+// src/browser.ts).
 //
 // A kept caption is drawn again in each document the page loads, whether a `goto` or a
 // click on a link loads it, in the top frame and in no child frame, and a later kept
 // caption replaces it, its failed state included. What a walkthrough's video shows of a
 // step that moves to another page is pinned in run.test.ts.
 //
-// They need a headless Chromium and skip without one (see browser-fixture.ts).
+// The chrome shows above what the app opens in the browser's top layer, which is drawn
+// above every z-index. A walkthrough's video shows its caption, uncovered and unfogged, in
+// every frame in which a step has left a popover or a modal dialog open, and its closing
+// card over the dialog still open. A proof video's frame of each step shows the caption
+// the same way, the pointer glides above a modal dialog, and the caption shows above an
+// element the app shows fullscreen. The caption bar lets a click through to the button of
+// the app's that it covers. The app styles its popovers and its
+// backdrops, and none of that style reaches the layer the chrome is drawn in: with
+// nothing of the app's open, the page shows as it is.
+//
+// They need a headless Chromium, and the videos a real ffmpeg, and skip without them (see
+// browser-fixture.ts and assemble.test.ts).
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { keepCaption } from '../src/overlay.ts';
-import { VIEWPORT } from '../src/browser.ts';
-import { launchBrowser, serveSite } from './browser-fixture.ts';
+import { keepCaption, showCaption } from '../src/overlay.ts';
+import { VIEWPORT, glideTo, installPointer } from '../src/browser.ts';
+import { parseDemoScript } from '../src/demo-script.ts';
+import { captureWalkthrough } from '../src/walkthrough.ts';
+import { captureProof } from '../src/capture.ts';
+import { stepFileName } from '../src/screenshot.ts';
+import { ffmpegBin } from '../src/ffmpeg.ts';
+import { launchBrowser, serveSite, scratchDir, patchLuma, pngPixels, rgba } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
 after(() => browser?.close());
+
+const needsFfmpeg = ffmpegBin() ? false : "ffmpeg un-provisioned (npm ≥12 blocks ffmpeg-static's install script) — `npm run provision:ffmpeg`";
 
 /** What the caption bar in `page`'s top frame shows, or null when it has none. */
 function captionOf(page: Page): Promise<{ counter: string; label: string; failed: boolean } | null> {
@@ -51,5 +70,177 @@ test('a kept caption is drawn again in each document the page loads, in its top 
   } finally {
     await page.close();
     await site.close();
+  }
+});
+
+/**
+ * An app that opens a toast and a drawer in the browser's top layer, on a dark grey page.
+ * The toast, a manual popover that a `popovertarget` button opens, is white across the
+ * foot of the page, under the caption bar, and holds an Undo button there. The drawer, a
+ * modal dialog the app's script opens, is white down the left side, and its backdrop fogs
+ * the rest of the page. The app gives every popover a transform and every backdrop a fog,
+ * as an app may style its own: had the chrome's layer taken the transform, the layer and
+ * not the viewport would be the box the caption bar is laid out in, and had it taken the
+ * fog, the page would show fogged with nothing of the app's open. Each step that opens
+ * one waits a while, so the video shows it under the step's caption.
+ */
+const TOP_LAYER_APP = `<!doctype html><html><head><style>
+body { margin: 0; height: 100vh; background: #444; font: 16px sans-serif; }
+[popover] { transform: translateY(0); }
+::backdrop { background: rgba(255, 255, 255, 0.5); }
+#toast { inset: auto 0 0 0; width: 100%; height: 120px; margin: 0; padding: 0; border: 0; background: #fff; }
+#undo { position: absolute; right: 40px; bottom: 20px; }
+#drawer { inset: 0 auto 0 0; width: 320px; height: 100vh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: #fff; }
+</style></head><body>
+<button id="toast-open" popovertarget="toast">Show the toast</button>
+<button id="drawer-open">Open the drawer</button>
+<div id="toast" popover="manual"><button id="undo">Undo</button></div>
+<dialog id="drawer"><p>Drawer</p></dialog>
+<script>
+  document.getElementById('undo').addEventListener('click', () => document.getElementById('toast').hidePopover());
+  document.getElementById('drawer-open').addEventListener('click', () => document.getElementById('drawer').showModal());
+</script>
+</body></html>`;
+
+const TOP_LAYER_SCRIPT = `# Demo: The app's top layer
+
+**Start:** \`/\`
+
+## Steps
+
+1. **A toast shows at the foot of the page**
+   \`click #toast-open\`
+   \`wait 800\`
+   _Prove:_ the toast shows — \`visible #toast\`
+
+2. **Undo, under the caption bar, takes the click**
+   \`click #undo\`
+   _Prove:_ the toast is gone — \`hidden #toast\`
+
+3. **A drawer opens over the page**
+   \`click #drawer-open\`
+   \`wait 800\`
+   _Prove:_ the drawer shows — \`visible #drawer\`
+
+## Scrutiny
+
+- The caption shows over the toast and the drawer.
+`;
+
+/**
+ * Where the frames of TOP_LAYER_APP are read: the toast above the caption bar, the drawer
+ * above it, the page beside the drawer, and the caption bar's top padding, which holds no
+ * text, under the drawer and beside it. The caption bar is dark over any of them, and
+ * the toast, the drawer or the fog would cover it in white or fog it light.
+ */
+const AT = { toast: { x: 640, y: 800 }, drawer: { x: 160, y: 150 }, page: { x: 1000, y: 400 }, barUnder: { x: 160, y: 850 }, barBeside: { x: 1000, y: 850 } };
+
+/** Luma at or above it is the toast's or the drawer's white, and below it the caption bar shows. */
+const WHITE = 200;
+const BAR = 100;
+/** Luma below it is the page's grey, with no fog over it. */
+const UNFOGGED = 115;
+
+test("a walkthrough's caption shows above the popover and the modal dialog a step opens, and its closing card above the dialog, and the caption bar lets a click through", { skip: skip || needsFfmpeg, timeout: 300_000 }, async () => {
+  const site = await serveSite({ 'index.html': TOP_LAYER_APP });
+  const { dir, cleanup } = scratchDir();
+  try {
+    const video = path.join(dir, 'walk.mp4');
+    const result = await captureWalkthrough({ browser: browser!, baseUrl: site.baseUrl, demo: TOP_LAYER_SCRIPT, outputPath: video, noNarrate: true, captureRoot: dir, log: () => {} });
+    assert.equal(result.failures, 0, 'every step held, Undo under the caption bar among them');
+
+    const [toast, drawer, page, barUnder, barBeside] = [AT.toast, AT.drawer, AT.page, AT.barUnder, AT.barBeside].map(({ x, y }) => patchLuma(video, x, y));
+    const frames = toast.map((_, i) => i);
+    const toastOpen = frames.filter((i) => toast[i].luma >= WHITE);
+    const drawerOpen = frames.filter((i) => drawer[i].luma >= WHITE);
+    assert.ok(toastOpen.length > 0, 'a frame shows the toast');
+    assert.ok(drawerOpen.length > 0, 'a frame shows the drawer');
+    const covered = [...toastOpen, ...drawerOpen].filter((i) => barUnder[i].luma >= BAR || barBeside[i].luma >= BAR).map((i) => toast[i].t);
+    assert.deepEqual(covered, [], 'every frame that shows the toast or the drawer shows the caption bar above it and the fog');
+
+    // Between the toast's going and the drawer's opening, nothing of the app's is open.
+    const between = frames.filter((i) => i > toastOpen.at(-1)! && i < drawerOpen[0]);
+    assert.ok(between.length > 0, 'frames show the page between the toast and the drawer');
+    const fogged = between.filter((i) => page[i].luma >= UNFOGGED || barUnder[i].luma >= BAR || barBeside[i].luma >= BAR).map((i) => toast[i].t);
+    assert.deepEqual(fogged, [], 'with nothing of the app\'s open, the page shows unfogged under the caption bar');
+
+    // The drawer stays open to the end, and the closing card, which is dark, shows once the last step is done.
+    const closing = frames.find((i) => i > drawerOpen[0] && drawer[i].luma < 60 && page[i].luma < 60);
+    assert.ok(closing !== undefined, 'the closing card shows over the drawer and its backdrop');
+  } finally {
+    await site.close();
+    cleanup();
+  }
+});
+
+test("a proof video's frame of a step shows the caption above the popover or the modal dialog the step opens", { skip: skip || needsFfmpeg, timeout: 300_000 }, async () => {
+  const site = await serveSite({ 'index.html': TOP_LAYER_APP });
+  const { dir, cleanup } = scratchDir();
+  const tab = await browser!.newPage({ viewport: VIEWPORT });
+  try {
+    const result = await captureProof({ page: tab, baseUrl: site.baseUrl, demo: TOP_LAYER_SCRIPT, outputPath: path.join(dir, 'proof.mp4'), noNarrate: true, keep: true, captureRoot: dir, log: () => {} });
+    assert.equal(result.failures, 0);
+    const { steps } = parseDemoScript(TOP_LAYER_SCRIPT);
+    const points = [AT.toast, AT.drawer, AT.page, AT.barUnder, AT.barBeside];
+    const frame = async (i: number): Promise<Record<keyof typeof AT, number>> => {
+      const px = await pngPixels(path.join(result.capturesDir as string, stepFileName(steps[i], steps.length)), points);
+      const [toast, drawer, page, barUnder, barBeside] = px.map(([r, g, b]) => 0.299 * r + 0.587 * g + 0.114 * b);
+      return { toast, drawer, page, barUnder, barBeside };
+    };
+    const shown = await frame(0);
+    assert.ok(shown.toast >= WHITE, `the first step's frame shows the toast (${shown.toast})`);
+    assert.ok(shown.barUnder < BAR && shown.barBeside < BAR, `the first step's frame shows the caption bar above the toast (${shown.barUnder}, ${shown.barBeside})`);
+    const gone = await frame(1);
+    assert.ok(gone.toast < UNFOGGED && gone.page < UNFOGGED, `with nothing of the app's open, the second step's frame shows the page unfogged (${gone.toast}, ${gone.page})`);
+    assert.ok(gone.barUnder < BAR && gone.barBeside < BAR, `the second step's frame shows the caption bar (${gone.barUnder}, ${gone.barBeside})`);
+    const opened = await frame(2);
+    assert.ok(opened.drawer >= WHITE, `the third step's frame shows the drawer (${opened.drawer})`);
+    assert.ok(opened.barUnder < BAR && opened.barBeside < BAR, `the third step's frame shows the caption bar above the drawer and its fog (${opened.barUnder}, ${opened.barBeside})`);
+  } finally {
+    await tab.close();
+    await site.close();
+    cleanup();
+  }
+});
+
+test('the pointer glides above a modal dialog the app opens', { skip }, async () => {
+  const page = await browser!.newPage({ viewport: VIEWPORT });
+  try {
+    await installPointer(page);
+    const dialog = '<dialog id="d" style="inset:0;margin:0;padding:0;border:0;width:100vw;height:100vh;max-width:none;max-height:none;background:#222"></dialog>';
+    await page.route('http://dialog.test/', (r) => r.fulfill({ contentType: 'text/html', body: `<body style="margin:0;background:#fff">${dialog}</body>` }));
+    await page.goto('http://dialog.test/');
+    await page.evaluate(() => (document.getElementById('d') as HTMLDialogElement).showModal());
+    await glideTo(page, 640, 450);
+    // The pointer's tip is at the point it glides to, and its white fill 6 px right of it and 7 px below.
+    const { width, data } = await rgba(page, await page.screenshot());
+    const fill = (457 * width + 646) * 4;
+    assert.deepEqual([...data.subarray(fill, fill + 3)], [255, 255, 255], 'the pointer shows its white fill over the dark dialog');
+  } finally {
+    await page.close();
+  }
+});
+
+test('the caption bar shows above an element the app shows fullscreen', { skip }, async () => {
+  const page = await browser!.newPage({ viewport: VIEWPORT });
+  try {
+    const body = '<body style="margin:0;background:#444"><div id="film" style="height:100px;background:#fff"></div><button id="go">Fullscreen</button>' +
+      "<script>document.getElementById('go').addEventListener('click', () => document.getElementById('film').requestFullscreen())</script></body>";
+    await page.route('http://fullscreen.test/', (r) => r.fulfill({ contentType: 'text/html', body }));
+    await page.goto('http://fullscreen.test/');
+    await showCaption(page, 1, 1, 'The film plays fullscreen', false);
+    // A click is the user's gesture that a request for fullscreen needs.
+    await page.click('#go');
+    await page.waitForFunction(() => document.fullscreenElement !== null);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const { width, data } = await rgba(page, await page.screenshot());
+    const luma = (x: number, y: number): number => {
+      const at = (y * width + x) * 4;
+      return 0.299 * data[at] + 0.587 * data[at + 1] + 0.114 * data[at + 2];
+    };
+    assert.ok(luma(AT.page.x, AT.page.y) >= WHITE, `the film fills the viewport (${luma(AT.page.x, AT.page.y)})`);
+    assert.ok(luma(AT.barBeside.x, AT.barBeside.y) < BAR, `the caption bar shows above the film (${luma(AT.barBeside.x, AT.barBeside.y)})`);
+  } finally {
+    await page.close();
   }
 });
