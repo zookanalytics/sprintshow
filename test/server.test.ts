@@ -4,9 +4,10 @@
 // It listens on the loopback interface only, so none of the host's other addresses
 // reaches it, and its base URL names the address it listens on. With no port named it
 // listens on one the system assigns, so two captures on one host each get a server of
-// their own. A named port that is taken fails the start with an error the caller can
-// report, and a port no server can listen on, or more than one, is refused before
-// anything is served or spawned.
+// their own. A named port that something already answers on fails the start with an
+// error the caller can report, and leaves that server its connections, and a port no
+// server can listen on, or more than one, is refused before anything is served or
+// spawned.
 //
 // An iOS app's `--serve` command is a stand-in here, a node script that prints what a
 // start command prints: the app's simulator URL on a line of its standard output once the
@@ -160,18 +161,26 @@ test('a page script\'s server takes one port, named alone or as the only one of 
   });
 });
 
-test('serve-dir on a named port that is taken on the loopback address rejects the start', async () => {
+test('serve-dir on a named port that something answers on rejects the start, and leaves that server its loopback connections', async () => {
   await withSite(async (dir) => {
-    // Taken on the address serve-dir listens on. On macOS a server on every interface does
-    // not take it: serve-dir can still listen on the loopback address, and gets that
-    // address's connections.
-    const blocker = createServer();
-    await new Promise<void>((resolve) => blocker.listen(0, '127.0.0.1', resolve));
-    const port = (blocker.address() as AddressInfo).port;
-    try {
-      await assert.rejects(ensureServer({ serveDir: dir, port, log: quiet }), /server: cannot serve .*EADDRINUSE/);
-    } finally {
-      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    // On macOS a listen on the loopback address succeeds beside a server on every
+    // interface, which Node listens on when it is given no address, over IPv6 where the
+    // host has it.
+    for (const host of ['127.0.0.1', '0.0.0.0', undefined]) {
+      const other = createHttpServer((_req, res) => res.end('another server'));
+      await new Promise<void>((resolve, reject) => {
+        other.once('error', reject);
+        other.listen({ port: 0, host }, resolve);
+      });
+      const { port, address } = other.address() as AddressInfo;
+      const start = ensureServer({ serveDir: dir, port, log: quiet });
+      try {
+        await assert.rejects(start, { message: `server: cannot serve ${dir}: something already answers on port ${port}, which --port names; name a port nothing listens on` }, `a server on ${address} holds the port`);
+        assert.equal(await (await fetch(`http://127.0.0.1:${port}/`)).text(), 'another server', `the server on ${address} still answers on the loopback address`);
+      } finally {
+        await start.then((s) => s.stop(), () => {});
+        await new Promise<void>((resolve) => other.close(() => resolve()));
+      }
     }
   });
 });
