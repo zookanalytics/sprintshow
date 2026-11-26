@@ -1,5 +1,6 @@
-// Tests for capturing a page script at a device's size: contextOptions and videoFrame in
-// src/browser.ts, and the captures that make their pages and videos from them.
+// Tests for capturing a page script at a device's size: contextOptions, videoFrame and
+// lastViewport in src/browser.ts, and the captures that make their pages and videos from
+// them.
 //
 // A page script that names a device is driven in a context made as that device, and a
 // `resize` step changes its viewport from that step on. The fixture page lays itself out
@@ -9,7 +10,10 @@
 // factor, touch and user agent, and that proof mode's cards are laid out at the phone's
 // own width. The videos pin that a script that starts at phone width and resizes to a
 // desktop's is filmed whole in one frame, as wide as the desktop and as tall as the
-// phone, with the phone's viewport at the frame's top-left corner on gray.
+// phone, with the phone's viewport at the frame's top-left corner on gray. A viewport one
+// capture cannot hold whole at its scale is refused: a screenshot's, at the size the last
+// step leaves it, before a server starts, and a run's screenshot or proof frame at the
+// device's own scale, saving none.
 //
 // The browser-backed tests need a headless Chromium, and the videos a real ffmpeg; they
 // skip without them (see browser-fixture.ts and assemble.test.ts).
@@ -17,12 +21,15 @@
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { devices } from 'playwright';
 
 import { parseDemoScript } from '../src/demo-script.ts';
-import { contextOptions, videoFrame, VIEWPORT } from '../src/browser.ts';
+import { contextOptions, lastViewport, videoFrame, VIEWPORT } from '../src/browser.ts';
+import { captureProof } from '../src/capture.ts';
 import { runDemo, runScreenshot } from '../src/run.ts';
+import { ensureServer } from '../src/server.ts';
 import { ffmpegBin } from '../src/ffmpeg.ts';
 import { cardDocument, coverInnerHtml } from '../src/overlay.ts';
 import { launchBrowser, scratchDir, writeFiles, runCli, pngSize } from './browser-fixture.ts';
@@ -72,6 +79,17 @@ const DESKTOP_STEP = `3. **Widened to a desktop's size, the page shows its sideb
    _Fail if:_ the menu button still shows — \`visible #menu\`
 `;
 
+const PHONE_AGAIN_STEP = `4. **Narrowed to a phone's width again, the menu button is back**
+   \`resize 375x812\`
+   _Prove:_ the menu button shows — \`visible #menu\`
+`;
+
+/** A step that widens the viewport to 3840x2160, which at a Galaxy S9+'s scale of 4.5 is 17280x9720 device pixels, more than one capture holds. */
+const WIDE_STEP = `1. **Widened to a 4K screen's size, the page shows its sidebar**
+   \`resize 3840x2160\`
+   _Prove:_ the sidebar shows — \`visible #sidebar\`
+`;
+
 /** A script on the fixture page at `device`, with `steps`. */
 const navScript = (device: string, steps: string): string => `# Demo: Navigation at a phone's width\n\n**Start:** \`/nav.html\`\n**Device:** ${device}\n\n## Steps\n\n${steps}`;
 
@@ -109,6 +127,12 @@ test('videoFrame is as wide as the widest viewport the script shows and as tall 
   assert.deepEqual(videoFrame(parseDemoScript(NAV)), { width: 1280, height: 812 });
   assert.deepEqual(videoFrame(parseDemoScript(navScript('375x812', PHONE_STEPS))), { width: 375, height: 812 });
   assert.deepEqual(videoFrame(parseDemoScript(IPHONE)), { width: 393, height: 659 });
+});
+
+test('lastViewport is the size the last resize names, or the viewport the script starts at', () => {
+  assert.deepEqual(lastViewport(parseDemoScript(NAV)), { width: 1280, height: 800 });
+  assert.deepEqual(lastViewport(parseDemoScript(navScript('375x812', `${PHONE_STEPS}\n${DESKTOP_STEP}\n${PHONE_AGAIN_STEP}`))), { width: 375, height: 812 });
+  assert.deepEqual(lastViewport(parseDemoScript(IPHONE)), { width: 393, height: 659 });
 });
 
 test("sprintshow lint looks a device up in Playwright's registry", async () => {
@@ -208,6 +232,44 @@ describe('a page script captured at a device size', { concurrency: true, skip },
         [],
       );
     } finally {
+      cleanup();
+    }
+  });
+
+  test('a screenshot is refused before a server is started at a scale where one capture cannot hold the viewport the last step leaves', async () => {
+    const { dir, cleanup } = scratchDir();
+    try {
+      writeFiles(dir, { 'site/nav.html': NAV_HTML });
+      const lines: string[] = [];
+      // At scale 12 one capture holds the 375x812 viewport the script starts at, and not the 1280x800 it ends at.
+      await assert.rejects(runScreenshot({ script: parseDemoScript(NAV), serveDir: path.join(dir, 'site'), scale: 12, outputPath: path.join(dir, 'x.png'), log: (m) => lines.push(m) }), {
+        message: 'screenshot: scale 12 is too large for one capture of a viewport of 1280x800 CSS pixels',
+      });
+      assert.deepEqual(lines, [], 'nothing was served or driven');
+      assert.equal(existsSync(path.join(dir, 'x.png')), false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a run's screenshots and proof frames are refused, saving nothing, when one capture at the device's own scale cannot hold the viewport whole", async () => {
+    const { dir, cleanup } = scratchDir();
+    const wide = parseDemoScript(navScript('Galaxy S9+', WIDE_STEP));
+    const refused = 'scale 4.5 is too large for one capture of a viewport of 3840x2160 CSS pixels';
+    writeFiles(dir, { 'site/nav.html': NAV_HTML });
+    const site = path.join(dir, 'site');
+    const server = await ensureServer({ serveDir: site, log: quiet });
+    const context = await browser!.newContext(contextOptions(wide));
+    try {
+      const shots = path.join(dir, 'shots');
+      await assert.rejects(runDemo({ script: wide, serveDir: site, noVideo: true, screenshotDir: shots, log: quiet }), { message: `screenshot: could not capture step 1: ${refused}` });
+      assert.equal(existsSync(shots), false, 'the run keeps no screenshot, nor the directory it made for them');
+      const video = path.join(dir, 'wide.mp4');
+      await assert.rejects(captureProof({ page: await context.newPage(), baseUrl: server.baseUrl, demo: wide, outputPath: video, noNarrate: true, captureRoot: dir, log: quiet }), { message: refused });
+      assert.equal(existsSync(video), false);
+    } finally {
+      await context.close();
+      await server.stop();
       cleanup();
     }
   });

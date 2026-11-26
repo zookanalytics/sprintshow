@@ -236,16 +236,26 @@ out the page's default white background, so on a page that paints no background 
 an element with rounded corners keeps transparent corners.
 
 Chromium draws one capture in tiles, and holds only so many of them at once: about 120
-million device pixels' worth. A `--full-page` capture larger than that holds what fits,
-whichever size of tile the browser draws in: 256 pixels on a side, or 512 in a browser
-started on a screen at scale 2 or more on macOS. A page keeps its top and a terminal
-session keeps its last lines, and the log says how much the capture holds. A capture that
-cannot hold one row of the page, or one line of the session, saves nothing and says the
-scale is too large for one capture. At `--scale 2`, a 1280-pixel-wide page keeps about its
-top 20,000 CSS pixels, and an 80x24 terminal about its last 870 lines. Those are the tiles
-of a browser that rasterizes in software, as the headless shell does. A browser that
-rasterizes on the GPU, such as a headed Chrome whose page is given to `captureScreenshot`,
-lays its tiles out another way, which the limit was not measured for.
+million device pixels' worth. A capture larger than that holds what fits, whichever size of
+tile the browser draws in: 256 pixels on a side, or 512 in a browser started on a screen at
+scale 2 or more on macOS. A `--full-page` capture of a page and a `--selector` capture of an
+element keep their top, a terminal session keeps its last lines, and the log says how much
+the capture holds. A capture that cannot hold one row of the page or the element, or one
+line of the session, saves nothing and says the scale is too large for one capture. At
+`--scale 2`, a 1280-pixel-wide page or element keeps about its top 20,000 CSS pixels, and
+an 80x24 terminal about its last 870 lines.
+
+The viewport and a terminal's window are captured whole or not at all. So a screenshot that
+takes either by default refuses, before its steps run, a scale at which one capture cannot
+hold it: the viewport at the size the last step leaves it, or the window. One capture holds
+a 1280x900 viewport at the top of its page up to `--scale 10`. A run's screenshots and proof
+frames are the whole viewport too, so where one capture cannot hold it at the device's
+scale, as for a Galaxy S9+ resized to 3840x2160, the run fails and saves no screenshot or
+video.
+
+Those are the tiles of a browser that rasterizes in software, as the headless shell does. A
+browser that rasterizes on the GPU, such as a headed Chrome whose page is given to
+`captureScreenshot`, lays its tiles out another way, which the limit was not measured for.
 
 ## Terminal demos
 
