@@ -16,6 +16,11 @@
 // backdrops, and none of that style reaches the layer the chrome is drawn in: with
 // nothing of the app's open, the page shows as it is.
 //
+// A popover or a modal dialog the app opens in a shadow root announces nothing to the
+// document. A walkthrough's caption shows above one once the step's action that opened it
+// is done. A caption drawn while one is open shows above it, as a proof's frame of a step
+// is drawn once the step's actions are done.
+//
 // They need a headless Chromium, and the videos a real ffmpeg, and skip without them (see
 // browser-fixture.ts and assemble.test.ts).
 
@@ -24,8 +29,8 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { keepCaption, showCaption } from '../src/overlay.ts';
-import { VIEWPORT, glideTo, installPointer } from '../src/browser.ts';
+import { keepCaption, showCaption, removeCaption } from '../src/overlay.ts';
+import { VIEWPORT, glideTo, installPointer, runStep } from '../src/browser.ts';
 import { parseDemoScript } from '../src/demo-script.ts';
 import { captureWalkthrough } from '../src/walkthrough.ts';
 import { captureProof } from '../src/capture.ts';
@@ -233,13 +238,89 @@ test('the caption bar shows above an element the app shows fullscreen', { skip }
     await page.click('#go');
     await page.waitForFunction(() => document.fullscreenElement !== null);
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    const { width, data } = await rgba(page, await page.screenshot());
-    const luma = (x: number, y: number): number => {
-      const at = (y * width + x) * 4;
-      return 0.299 * data[at] + 0.587 * data[at + 1] + 0.114 * data[at + 2];
-    };
-    assert.ok(luma(AT.page.x, AT.page.y) >= WHITE, `the film fills the viewport (${luma(AT.page.x, AT.page.y)})`);
-    assert.ok(luma(AT.barBeside.x, AT.barBeside.y) < BAR, `the caption bar shows above the film (${luma(AT.barBeside.x, AT.barBeside.y)})`);
+    const luma = await screenLuma(page);
+    assert.ok(luma(AT.page) >= WHITE, `the film fills the viewport (${luma(AT.page)})`);
+    assert.ok(luma(AT.barBeside) < BAR, `the caption bar shows above the film (${luma(AT.barBeside)})`);
+  } finally {
+    await page.close();
+  }
+});
+
+/** The luma of each point of `page`, as a screenshot taken now shows it. */
+async function screenLuma(page: Page): Promise<(point: { x: number; y: number }) => number> {
+  const { width, data } = await rgba(page, await page.screenshot());
+  return ({ x, y }) => {
+    const at = (y * width + x) * 4;
+    return 0.299 * data[at] + 0.587 * data[at + 1] + 0.114 * data[at + 2];
+  };
+}
+
+/**
+ * An app with a sheet, which is a manual popover, and a modal dialog, both in the shadow
+ * root of an element of its own, where the browser announces neither opening to the
+ * document. Each is white across the foot of the page, where the caption bar is, and above
+ * the bar too, at FOOT.
+ */
+const SHADOW_APP = `<!doctype html><html><body style="margin:0;height:100vh;background:#444">
+<x-panel id="panel"></x-panel>
+<button id="sheet-open">Open the sheet</button>
+<script>
+  customElements.define('x-panel', class extends HTMLElement {
+    constructor() {
+      super();
+      const foot = 'inset:auto 0 0 0;width:100%;max-width:none;height:200px;margin:0;padding:0;border:0;background:#fff';
+      this.attachShadow({ mode: 'open' }).innerHTML = '<div id="sheet" popover="manual" style="' + foot + '"></div><dialog id="dialog" style="' + foot + '"></dialog>';
+    }
+  });
+  document.getElementById('sheet-open').addEventListener('click', () => document.getElementById('panel').shadowRoot.getElementById('sheet').showPopover());
+</script>
+</body></html>`;
+
+const FOOT = { x: 640, y: 760 };
+
+const SHADOW_SCRIPT = `# Demo: A sheet in a shadow root
+
+**Start:** \`/\`
+
+## Steps
+
+1. **A sheet opens at the foot of the page**
+   \`click #sheet-open\`
+   _Prove:_ the sheet shows — \`visible #sheet\`
+`;
+
+test("a walkthrough's caption shows above a popover that a step's action opens in a shadow root, once the action is done", { skip }, async () => {
+  const page = await browser!.newPage({ viewport: VIEWPORT });
+  try {
+    await installPointer(page);
+    await page.route('http://shadow.test/', (r) => r.fulfill({ contentType: 'text/html', body: SHADOW_APP }));
+    await page.goto('http://shadow.test/');
+    const [step] = parseDemoScript(SHADOW_SCRIPT).steps;
+    // This walks the step as a walkthrough does (walkStep in walkthrough.ts), with its caption kept up while its actions run humanized.
+    const proof = await runStep(page, 'http://shadow.test', step, 1, true, () => {}, async () => void (await keepCaption(page, step.index, 1, step.narration, false)));
+    assert.ok(proof.proved, 'the sheet shows');
+    const luma = await screenLuma(page);
+    assert.ok(luma(FOOT) >= WHITE, `the sheet shows above the page (${luma(FOOT)})`);
+    assert.ok(luma(AT.barBeside) < BAR, `the caption bar shows above the sheet (${luma(AT.barBeside)})`);
+  } finally {
+    await page.close();
+  }
+});
+
+test("a caption drawn over a modal dialog the app shows in a shadow root shows above it, as a proof's frame of a step is drawn", { skip }, async () => {
+  const page = await browser!.newPage({ viewport: VIEWPORT });
+  try {
+    await page.route('http://shadow.test/', (r) => r.fulfill({ contentType: 'text/html', body: SHADOW_APP }));
+    await page.goto('http://shadow.test/');
+    // A proof draws each step's caption once the step's actions are done, and removes it
+    // once the frame is taken, so the layer the caption is drawn in is up from the first frame on.
+    await showCaption(page, 1, 2, 'The panel waits', false);
+    await removeCaption(page);
+    await page.evaluate(() => (document.getElementById('panel')!.shadowRoot!.getElementById('dialog') as HTMLDialogElement).showModal());
+    await showCaption(page, 2, 2, 'The panel shows its dialog', false);
+    const luma = await screenLuma(page);
+    assert.ok(luma(FOOT) >= WHITE, `the dialog shows above the page (${luma(FOOT)})`);
+    assert.ok(luma(AT.barBeside) < BAR, `the caption bar shows above the dialog (${luma(AT.barBeside)})`);
   } finally {
     await page.close();
   }

@@ -32,17 +32,19 @@ export function esc(s: string): string {
 
 /**
  * Runs in the page: the layer the engine draws its chrome in, made the first time a document
- * asks for it, and shown in the page's top layer.
+ * asks for it, and shown in the page's top layer above all else there.
  *
  * The browser draws its top layer above every z-index. The top layer holds what the page
  * shows there, such as an open modal dialog and its backdrop, a popover or a fullscreen
  * element, and draws each above the ones added before it. So the layer is a popover of its
- * own, and in the frame after the page adds anything else to the top layer, the layer is
- * raised: hidden and shown again, which puts it above the rest. The browser announces a
- * dialog or a popover about to open with `beforetoggle`, and a change of fullscreen with
- * `fullscreenchange`. The raise waits for the next frame because a popover that a
- * `popovertarget` button opens announces itself while it is still being shown, and showing
- * another popover then fails.
+ * own, and a raise, which hides it and shows it again, puts it above the rest. Each call
+ * raises it, and so does the frame after the page adds anything else to the top layer. The
+ * browser announces a dialog or a popover about to open with `beforetoggle`, and a change of
+ * fullscreen with `fullscreenchange`. The raise waits for the next frame because a popover
+ * that a `popovertarget` button opens announces itself while it is still being shown, and
+ * showing another popover then fails. A dialog or a popover in a shadow root announces
+ * itself only inside that root, where no listener of the document's hears it, so the layer
+ * goes above one there at the next call, such as the next caption's or raiseChrome's.
  *
  * The layer is a manual popover: no click or key closes it, and showing it closes none of
  * the page's popovers. It has no size and shows nothing of its own. What it holds takes no
@@ -58,6 +60,10 @@ export function esc(s: string): string {
 export function chromeLayer(): HTMLElement {
   const id = '__ss_chrome__';
   const w = window as unknown as { __ss_chrome_sheet?: CSSStyleSheet };
+  const raise = (layer: HTMLElement): void => {
+    if (layer.matches(':popover-open')) layer.hidePopover();
+    layer.showPopover();
+  };
   let layer = document.getElementById(id);
   if (!layer) {
     layer = document.createElement('div');
@@ -71,17 +77,14 @@ export function chromeLayer(): HTMLElement {
     w.__ss_chrome_sheet = new CSSStyleSheet();
     w.__ss_chrome_sheet.replaceSync(`#${id}::backdrop,#${id}::before,#${id}::after{display:none!important}`);
     let queued = false;
-    const raise = (): void => {
-      queued = false;
-      const shown = document.getElementById(id);
-      if (!shown) return;
-      if (shown.matches(':popover-open')) shown.hidePopover();
-      shown.showPopover();
-    };
     const raiseNextFrame = (): void => {
       if (queued) return;
       queued = true;
-      requestAnimationFrame(raise);
+      requestAnimationFrame(() => {
+        queued = false;
+        const shown = document.getElementById(id);
+        if (shown) raise(shown);
+      });
     };
     addEventListener(
       'beforetoggle',
@@ -94,7 +97,7 @@ export function chromeLayer(): HTMLElement {
   }
   // A page can replace the sheets the document has adopted, and hide a popover it did not show.
   if (!document.adoptedStyleSheets.includes(w.__ss_chrome_sheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, w.__ss_chrome_sheet];
-  if (!layer.matches(':popover-open')) layer.showPopover();
+  raise(layer);
   return layer;
 }
 
@@ -105,6 +108,16 @@ export function chromeLayer(): HTMLElement {
  */
 export function withChromeLayer<A>(fn: (chrome: () => HTMLElement, arg: A) => unknown, arg: A): string {
   return `(${fn})(${chromeLayer}, ${JSON.stringify(arg)})`;
+}
+
+/**
+ * Raise the chrome's layer (chromeLayer) above all the page shows in its top layer now.
+ * That takes in a dialog or a popover the page has opened in a shadow root, which the
+ * layer's listeners never hear open. Does nothing in a page with no body yet, or in one
+ * that goes away first.
+ */
+export async function raiseChrome(page: Page): Promise<void> {
+  await page.evaluate(withChromeLayer((chrome) => void chrome(), null)).catch(() => {});
 }
 
 /** How long a caption waits for the browser to report that it has shown it. */

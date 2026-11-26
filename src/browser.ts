@@ -23,7 +23,7 @@ import { pressKeys } from './keyboard.ts';
 import { openTerminal, hasTerminalSession, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
 import { connectIosApp, showIosApp, hasIosApp, runIosAction, checkIosAssertion } from './ios.ts';
 import { passVercelSignIn } from './vercel.ts';
-import { chromeLayer } from './overlay.ts';
+import { chromeLayer, raiseChrome } from './overlay.ts';
 
 /** The viewport a script that names no device is driven at, and every terminal or iOS app script's frame. */
 export const VIEWPORT = { width: 1280, height: 900 };
@@ -312,7 +312,12 @@ export interface StepProof {
 export async function runStep(page: Page, base: string, step: DemoStep, total: number, humanize: boolean, log: (m: string) => void, beforeActions?: () => Promise<void>): Promise<StepProof> {
   log(`step ${step.index}/${total}: ${step.narration}`);
   await beforeActions?.();
-  for (const act of step.actions) await runAction(page, base, act, humanize, log);
+  for (const act of step.actions) {
+    await runAction(page, base, act, humanize, log);
+    // A humanized step is filmed with the pointer and the caption up, and a dialog or a
+    // popover the action opened in a shadow root covers them until they are raised.
+    if (humanize) await raiseChrome(page);
+  }
 
   // A prove-assertion must become true; a failIf-assertion becoming true overrides it.
   let proved = true;
