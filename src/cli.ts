@@ -25,7 +25,7 @@ Usage:
   sprintshow assemble <captures-dir> [options]  Frames + manifest.json → narrated mp4
   sprintshow lint <demo.md> [--strict]         Check a demo script before capturing
   sprintshow surface <demo.md>                 Print the surface a demo script drives,
-                                               page or terminal, as JSON
+                                               page, terminal or ios, as JSON
   sprintshow provision appium                  Install Appium and its XCUITest driver, and
                                                build the runner app the driver installs on
                                                an iOS app's device
@@ -112,10 +112,11 @@ assemble options:
 
 surface output:
   One JSON object, the only thing on stdout: {"surface":"page"} for a script that
-  drives an app in a browser page, or {"surface":"terminal"} for one that declares
-  **Terminal:**. Every surface the engine drives is a value of this one field. It exits
-  0 when the script parses, and 1 when the file is missing or does not parse, with the
-  reason on stderr and nothing on stdout.
+  drives an app in a browser page, {"surface":"terminal"} for one that declares
+  **Terminal:**, or {"surface":"ios"} for one that declares **Platform:** iOS. Every
+  surface the engine drives is a value of this one field. It exits 0 when the script
+  parses, and 1 when the file is missing or does not parse, with the reason on stderr
+  and nothing on stdout.
 
 Narration is optional: set OPENAI_API_KEY to voice the steps (tts-1/nova; override with
 DEMO_TTS_MODEL / DEMO_TTS_VOICE). Without it the mp4 is silent and captioned.

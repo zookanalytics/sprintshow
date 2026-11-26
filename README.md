@@ -211,10 +211,11 @@ the only thing on its stdout:
 sprintshow surface demos/terminal.md    # prints {"surface":"terminal"}
 ```
 
-`"surface"` is `"page"` for a script that drives an app in a browser page, and
-`"terminal"` for one that declares `**Terminal:**`. Every surface the engine drives is a
-value of this one field. The command exits 0 when the script parses, and 1 when the file
-is missing or does not parse, with the reason on stderr and nothing on stdout.
+`"surface"` is `"page"` for a script that drives an app in a browser page, `"terminal"`
+for one that declares `**Terminal:**`, and `"ios"` for one that declares
+`**Platform:** iOS`. Every surface the engine drives is a value of this one field. The
+command exits 0 when the script parses, and 1 when the file is missing or does not parse,
+with the reason on stderr and nothing on stdout.
 
 ## Capture a screenshot
 
