@@ -439,7 +439,8 @@ at its own scale, status bar included, with nothing of the engine's on it. So `-
 `--selector`, `--scale` and `--transparent` are refused for one. A walkthrough connects to
 the app before it starts recording, which takes Appium a few seconds to tens of seconds, so
 the video opens on the cover.
-`specs/ss-rmvnx/design.md` records why the surface is built this way.
+`specs/ss-rmvnx/design.md` records why the surface is built this way, and
+`specs/ss-f5wor/stale-proof-frame.md` why a proof's frames are the device's screenshots.
 
 ## Exit codes
 
