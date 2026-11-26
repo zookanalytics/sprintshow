@@ -314,8 +314,8 @@ program holds the alternate screen, that screen.
 - `exit <op> <n>`: the exit status of the last command the shell finished compares with
   `n` (`>= > == <= <`). While a command runs, no `exit` assertion holds.
 
-A matcher is as in a page script's `text` assertion, and a `/regex/` is tested with the
-`m` flag, so `^` and `$` match at each row's start and end.
+A matcher is as in a page script's `text` assertion, and a regex is tested with the `m`
+flag added to its own, so `^` and `$` match at each row's start and end.
 
 **Captures.** `sprintshow screenshot` saves the terminal window, title bar included, with
 its rounded corners transparent, and so does each step's PNG of a run with `--screenshots`.
@@ -493,9 +493,13 @@ browser draws where keys move focus, unless the page's style hides it.
 
 **Assertions** (in `_Prove:_` / `_Fail if:_`): `visible <sel>` · `hidden <sel>` ·
 `focused <sel>` (an element the selector matches has focus) · `count <sel> <op> <n>`
-(`>= > == <= <`) · `text <sel> ~ <matcher>` · `eval <js>`. A matcher is `/regex/`,
-`"substring"`, or a bare substring. `_Prove:_` must hold (polled); `_Fail if:_` fails the
-step if it matches.
+(`>= > == <= <`) · `text <sel> ~ <matcher>` · `eval <js>`. A matcher is `/regex/flags`,
+`"substring"`, or a bare substring. The regex is JavaScript's, and the flags after it are
+any of `dgimsuvy`, or none. `/3 tasks/i` matches in any letter case. A bare matcher reads
+as a regex whenever it can, so a substring that opens with `/` is written quoted. The
+linter reports a bare matcher that opens with `/` but is not a regex, which a capture
+matches as the substring it spells, and a regex that does not compile, which matches
+nothing. `_Prove:_` must hold (polled); `_Fail if:_` fails the step if it matches.
 
 A draft in the generic `demo:capture` dialect — an `**Auth:**` line, a `## Scrutiny`
 section, and prose-only `_Prove:_`/`_Fail if:_` — parses and runs unedited (its steps record

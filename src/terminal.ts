@@ -727,28 +727,36 @@ export async function terminalPress(page: Page, keys: PressKey[], pace: PressPac
   await pressKeys(page, keys, pace);
 }
 
+/**
+ * `m` as the terminal tests it: a regex gains the `m` flag, unless it carries one already,
+ * so `^` and `$` match at each row's start and end.
+ */
+function multiline(m: Matcher): Matcher {
+  return m.type === 'regex' && !m.flags.includes('m') ? { ...m, flags: `${m.flags}m` } : m;
+}
+
 /** `waitForScreen <matcher>`: wait until the screen's text matches. */
 export async function terminalWaitForScreen(page: Page, matcher: Matcher, timeout: number): Promise<void> {
   await requireTerminal(page);
   await page.waitForFunction(
     (m) => {
       const text = (window as unknown as TermWindow).__ss_term.screen();
-      return m.type === 'regex' ? new RegExp(m.value, 'm').test(text) : text.includes(m.value);
+      return m.type === 'regex' ? new RegExp(m.value, m.flags).test(text) : text.includes(m.value);
     },
-    matcher,
+    multiline(matcher),
     { timeout, polling: 100 },
   );
 }
 
 /**
  * Check a terminal assertion against the page's terminal once: `screen`, `row`, `cursor`
- * or `exit`. A regex matcher is tested with the `m` flag, so `^` and `$` match at each
- * row's start and end. An `exit` assertion holds only while the shell reports a status.
+ * or `exit`. A regex matcher is tested with its own flags and `m`, so `^` and `$` match at
+ * each row's start and end. An `exit` assertion holds only while the shell reports a status.
  */
 export async function checkTerminalAssertion(page: Page, a: Assertion): Promise<boolean> {
   return page.evaluate((a) => {
     const t = (window as unknown as TermWindow).__ss_term;
-    const matches = (text: string, m: Matcher | undefined): boolean => (m?.type === 'regex' ? new RegExp(m.value, 'm').test(text) : text.includes(m?.value ?? ''));
+    const matches = (text: string, m: Matcher | undefined): boolean => (m?.type === 'regex' ? new RegExp(m.value, m.flags).test(text) : text.includes(m?.value ?? ''));
     switch (a.kind) {
       case 'screen':
         return matches(t.screen(), a.matcher);
@@ -777,7 +785,7 @@ export async function checkTerminalAssertion(page: Page, a: Assertion): Promise<
       default:
         return false;
     }
-  }, a);
+  }, a.matcher ? { ...a, matcher: multiline(a.matcher) } : a);
 }
 
 /**
