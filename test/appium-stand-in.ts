@@ -42,8 +42,8 @@ export interface StandIn {
 export interface StandInOptions {
   /** The JPEG of the screen the board shows. */
   frame: (board: Board) => Buffer;
-  /** The PNG the screenshot command answers with. */
-  screenshot: Buffer;
+  /** The PNG the screenshot command answers with, or the one it answers with for the board, where null is a screenshot it cannot take. */
+  screenshot: Buffer | ((board: Board) => Buffer | null);
   /** Frames a second. */
   fps?: number;
 }
@@ -104,7 +104,10 @@ export async function standInAppium(opts: StandInOptions): Promise<StandIn> {
       if (req.method === 'POST' && req.url === '/session') return answer({ sessionId: 's1', capabilities: json });
       if (req.method === 'DELETE' && route === '') return answer(null);
       if (route === '/window/rect') return answer({ x: 0, y: 0, width: 400, height: 800 });
-      if (route === '/screenshot') return answer(opts.screenshot.toString('base64'));
+      if (route === '/screenshot') {
+        const png = typeof opts.screenshot === 'function' ? opts.screenshot(board) : opts.screenshot;
+        return png ? answer(png.toString('base64')) : answer({ error: 'unable to capture screen', message: 'Unable to take a screenshot\nof the screen' }, 500);
+      }
       if (route === '/element' || route === '/elements') {
         const ids = named(String(json.value));
         if (route === '/elements') return answer(ids.map((id) => ({ [ELEMENT]: id })));
