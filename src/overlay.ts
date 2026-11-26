@@ -300,7 +300,11 @@ export async function showCardOverlay(page: Page, inner: string, ms: number): Pr
       });
       el.innerHTML = inner;
       document.body.appendChild(el);
-      requestAnimationFrame(() => (el.style.opacity = '1'));
+      // A transition runs from the style the browser last computed for the element, and a
+      // page need not compute one for the card before the frame that draws it. Reading its
+      // opacity computes it at 0 here, so setting 1 fades the card in.
+      void getComputedStyle(el).opacity;
+      el.style.opacity = '1';
       return performance.timeOrigin + performance.now();
     },
     { inner, BG, FG, FONT },

@@ -365,7 +365,7 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
   const cuts = stillCuts(stills, start);
   // A segment starts with the frame that first shows it, so neither the time an evaluate
   // takes to reach a busy page nor the time a loaded browser takes to draw counts against
-  // its clip. A caption's frame is the one the browser reported. A card can fade in, and
+  // its clip. A caption's frame is the one the browser reported. A card fades in, and
   // the browser reports no frame for text it first paints unseen, so a card starts with
   // the first frame the browser drew after the page added it. That is the card's frame
   // unless the page was drawing frames of its own then. The page, the browser and the
