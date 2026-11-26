@@ -39,10 +39,15 @@ The operator's approval of that PR is the release.
 
 On every push to main, [publish.yml](../.github/workflows/publish.yml) asks npm whether it has
 `package.json`'s version. When npm lacks it, the workflow runs the installed-package check that
-CI runs on every PR, then publishes the version through npm's trusted publishing, which attests
-its provenance. It then tags that commit `v<version>` and creates its GitHub release, with notes
-generated from the PRs merged since the previous release. A check that fails publishes nothing,
-and a merge whose version npm already has publishes and tags nothing.
+CI runs on every PR, in a job of its own. Once the check passes, the workflow's publish job
+publishes the version through npm's trusted publishing, which attests its provenance. It then
+tags that commit `v<version>` and creates its GitHub release, with notes generated from the PRs
+merged since the previous release. A check that fails publishes nothing, and a merge whose
+version npm already has publishes and tags nothing.
+
+Only the publish job can publish, tag or release. The check installs the package's dependencies
+afresh from the registry and runs them, so its job holds no write permission and cannot request
+the identity token that npm's trusted publishing exchanges for the right to publish.
 
 npm takes a publish only from the workflow the package's trusted publisher names. The
 connection is made in the package's settings on npmjs.com, or with npm 11.15 or later:
@@ -56,8 +61,11 @@ stage a publish. A new connection expires unless a publish uses it within 2 days
 
 ## When a publish run fails
 
-Re-run a failed run once its cause is fixed. The re-run finishes only what is missing: it skips
-the publish when npm has the version, and the release when it exists.
+Re-run a failed run once its cause is fixed, with all of its jobs, as `gh run rerun` does
+without `--failed`. The re-run asks npm and GitHub again and finishes only what is missing: it
+skips the publish when npm has the version, and the release when it exists. A re-run of only the
+failed jobs reuses what the first attempt decided, so when the publish went through and the
+release failed, it tries the publish again, which npm refuses.
 
 ```bash
 gh run list --workflow publish.yml --limit 5

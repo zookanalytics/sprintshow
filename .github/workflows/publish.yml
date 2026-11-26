@@ -15,14 +15,22 @@ concurrency:
   cancel-in-progress: false
   queue: max
 
+# Every job only reads, except the publish job, which can tag, release and request the
+# token npm's trusted publishing takes. The installed-package job installs the package's
+# dependencies afresh from the registry and runs them, so it holds neither right.
 permissions:
-  contents: write # the tag and the GitHub release
-  id-token: write # npm's trusted publishing
+  contents: read
 
 jobs:
-  publish:
+  plan:
     if: github.repository == 'zookanalytics/sprintshow'
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+      release: ${{ steps.plan.outputs.release }}
+      previous: ${{ steps.plan.outputs.previous }}
+      latest: ${{ steps.plan.outputs.latest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,12 +40,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
-          # A release installs its dependencies afresh, with nothing restored from a cache.
+          # A release installs everything afresh, with nothing restored from a cache.
           package-manager-cache: false
-      # Trusted publishing needs npm 11.5.1 or later, and the installed-package check
-      # installs the package with npm 12.
+      # The plan reads npm's answers as npm 12 prints them.
       - run: npm install --global npm@12
-
       - name: Decide what to publish and release
         id: plan
         env:
@@ -45,21 +51,61 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: .github/scripts/publish-plan.sh
 
-      - if: steps.plan.outputs.publish == 'true'
+  # CI's installed-package check, on the commit this run publishes.
+  installed-package:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm install --global npm@12
+      - run: npm ci
+      - uses: ./.github/actions/installed-package
+
+  publish:
+    needs: [plan, installed-package]
+    # The installed-package job runs only when this run publishes, so a run that only
+    # creates a missing release goes ahead with that job skipped.
+    if: >-
+      !cancelled() && needs.plan.result == 'success' &&
+      (needs.installed-package.result == 'success' ||
+      (needs.plan.outputs.publish == 'false' && needs.plan.outputs.release == 'true'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the tag and the GitHub release
+      id-token: write # npm's trusted publishing
+    steps:
+      # npm publishes this checkout, not the tarball the installed-package job checked,
+      # because npm records the commit a version came from only for a directory, and the
+      # plan reads that commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install --global npm@12
+      - if: needs.plan.outputs.publish == 'true'
         run: npm ci
-      - if: steps.plan.outputs.publish == 'true'
-        uses: ./.github/actions/installed-package
       # Trusted publishing gives the run its npm token, and npm attests the provenance of
       # a public package published from a public repository.
-      - if: steps.plan.outputs.publish == 'true'
+      - if: needs.plan.outputs.publish == 'true'
         run: npm publish --access public
 
       - name: Create the GitHub release
-        if: steps.plan.outputs.release == 'true'
+        if: needs.plan.outputs.release == 'true'
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-          TAG: v${{ steps.plan.outputs.version }}
-          PREVIOUS: ${{ steps.plan.outputs.previous }}
-          LATEST: ${{ steps.plan.outputs.latest }}
+          TAG: v${{ needs.plan.outputs.version }}
+          PREVIOUS: ${{ needs.plan.outputs.previous }}
+          LATEST: ${{ needs.plan.outputs.latest }}
         run: gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --notes-start-tag "$PREVIOUS" --latest="$LATEST"
