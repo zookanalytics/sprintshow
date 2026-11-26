@@ -180,7 +180,10 @@ test('a proof that the app does not bear fails, and a press with a key an iOS ap
 test("a page captured once each step has settled shows the device's screenshot taken after the step, though the frames of its screen show it as it was before", { skip }, async () => {
   const { red, green } = await screens();
   // The frames lag behind the app for good: each shows the board as it was before the step.
-  const { appium, conn } = await board({ frame: () => red.jpeg });
+  // Once the page has settled, so do the device's screenshots, so a still taken afresh
+  // would not be the one the page shows.
+  let settled = false;
+  const { appium, conn } = await board({ frame: () => red.jpeg, screenshot: (b) => (b.tasks.length && !settled ? green : red).png });
   const page = await browser!.newPage({ viewport: VIEWPORT });
   const { dir, cleanup } = scratchDir();
   try {
@@ -189,10 +192,11 @@ test("a page captured once each step has settled shows the device's screenshot t
     const proof = await runStep(page, '', SCRIPT.steps[1], SCRIPT.steps.length, false, quiet);
     assert.equal(proof.proved, true, 'the app took the task');
     await surface.settle();
+    settled = true;
     assert.equal(await screenCentre(page), 'green', 'once settled, the page shows the screenshot taken after the step');
     const file = path.join(dir, 'still.png');
     await surface.still?.(file);
-    assert.deepEqual(readFileSync(file), green.png, "the step's still is the screenshot the page shows");
+    assert.deepEqual(readFileSync(file), green.png, "the step's still is the screenshot the page shows, not one taken since");
     await surface.close();
     assert.equal(hasIosApp(page), false);
   } finally {
