@@ -40,7 +40,8 @@ import { existsSync, mkdirSync, readdirSync, readlinkSync, realpathSync, rmdirSy
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { parseDemoScript, slugify, surfaceOf, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { slugify, surfaceOf, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { loadDemo } from './script-file.ts';
 import { runStep, openSurface, contextOptions, ACTION_TIMEOUT, POINTER_CHROME, type Surface } from './browser.ts';
 import { expandToSession, TERMINAL_WINDOW, TERMINAL_STILL_CSS } from './terminal.ts';
 import { OVERLAY_CHROME } from './overlay.ts';
@@ -133,7 +134,7 @@ export interface CaptureScreenshotOptions {
    * names them. A page or terminal script's driver starts no server, and reads none.
    */
   port?: number | readonly number[];
-  /** The parsed demo, or a markdown string to parse. */
+  /** The path of the demo script's file, or the parsed demo, such as `parseDemoScript` makes of a script's markdown. */
   demo: Demo | string;
   /** The PNG path. */
   outputPath: string;
@@ -179,7 +180,7 @@ export const IOS_AREA = "screenshot: an iOS app script captures the device's who
 export async function captureScreenshot(opts: CaptureScreenshotOptions): Promise<ScreenshotResult> {
   if (opts.fullPage && opts.selector) throw new Error(AREA_CONFLICT);
   const log = opts.log ?? ((m: string) => console.log(m));
-  const demo = typeof opts.demo === 'string' ? parseDemoScript(opts.demo) : opts.demo;
+  const demo = loadDemo(opts.demo);
   if (demo.terminal && opts.selector) throw new Error(TERMINAL_SELECTOR);
   if (surfaceOf(demo) === 'ios' && (opts.fullPage || opts.selector || opts.transparent)) throw new Error(IOS_AREA);
   const start = contextOptions(demo).viewport as ViewportSize;
@@ -505,7 +506,7 @@ export interface CaptureScreenshotsOptions {
    * names them. A page or terminal script's driver starts no server, and reads none.
    */
   port?: number | readonly number[];
-  /** The parsed demo, or a markdown string to parse. */
+  /** The path of the demo script's file, or the parsed demo, such as `parseDemoScript` makes of a script's markdown. */
   demo: Demo | string;
   /** The directory each step's screenshot goes into: a new or empty one. */
   screenshotDir: string;
@@ -527,7 +528,7 @@ export interface ScreenshotsResult {
  */
 export async function captureScreenshots(opts: CaptureScreenshotsOptions): Promise<ScreenshotsResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
-  const demo = typeof opts.demo === 'string' ? parseDemoScript(opts.demo) : opts.demo;
+  const demo = loadDemo(opts.demo);
   // Read before anything is written: a device the registry does not hold throws here.
   const start = contextOptions(demo).viewport as ViewportSize;
   const shots = stepScreenshots(demo, opts.screenshotDir, log);

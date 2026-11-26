@@ -71,7 +71,7 @@ leaves an MP4, PNGs or both at the paths the caller names, for the caller to pub
 
 | Domain | Responsibility | Data it owns | Must not |
 |---|---|---|---|
-| [Demo script](../src/demo-script.ts) | Read a markdown demo script into a parsed demo. | The grammar, and a script's parsed header, steps, actions, proofs and scrutiny items. | Run anything: other parts run what it parses. |
+| Demo script ([demo-script.ts](../src/demo-script.ts), [script-file.ts](../src/script-file.ts)) | Read a markdown demo script, or the file a path names, into a parsed demo. | The grammar, and a script's parsed header, steps, actions, proofs and scrutiny items. | Run anything: other parts run what it parses. |
 | [Lint findings](../src/lint.ts) | Report what a capture would ignore or get wrong in a script, before one runs. | The lint rules, and their findings on one script. | Start a browser, a server or a shell. |
 | [App origin](../src/server.ts) | Give a page script an origin: a server already running, a dev server it starts and stops, or a static directory it serves. Give an iOS app script its app's simulator URL: an app already running, or one a start command it starts and stops brings up. | The origin or the simulator URL, and any server process or start command a run started. | Start anything for a terminal script, which runs with no server. |
 | Page ([browser.ts](../src/browser.ts), [vercel.ts](../src/vercel.ts)) | Open a page script's app in Chromium as the script's device, past Vercel's sign-in when the app is behind it. | The browser context: its device, its viewport, and the cookie that passes Vercel's sign-in. | Send the bypass key beyond the app's origin. |
@@ -119,8 +119,10 @@ What a user runs, and the domains each draws on:
 
 - **One reading of a script.** Every part that reads a demo script reads it through the
   parser in Demo script, so the linter, each capture and a library caller see the same
-  steps. A caller of the command-line interface learns what a script drives from
-  `sprintshow surface`, not from the script's lines.
+  steps. A library call that takes a script takes the path of its file or the parsed
+  demo, so a string names the script's file wherever a script is passed. A caller of the
+  command-line interface learns what a script drives from `sprintshow surface`, not from
+  the script's lines.
 - **One step runner.** Every capture, a library caller's own driver included, runs its
   steps through Step proof, so a proof means the same thing in a video and in a
   screenshot.
