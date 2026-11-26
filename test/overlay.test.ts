@@ -145,6 +145,8 @@ const WHITE = 200;
 const BAR = 100;
 /** Luma below it is the page's grey, with no fog over it. */
 const UNFOGGED = 115;
+/** Luma below it at the drawer and at the page beside it is a card's dark background, which covers the whole page. */
+const CARD = 60;
 
 test("a walkthrough's caption shows above the popover and the modal dialog a step opens, and its closing card above the dialog, and the caption bar lets a click through", { skip: skip || needsFfmpeg, timeout: 300_000 }, async () => {
   const site = await serveSite({ 'index.html': TOP_LAYER_APP });
@@ -156,8 +158,12 @@ test("a walkthrough's caption shows above the popover and the modal dialog a ste
 
     const [toast, drawer, page, barUnder, barBeside] = [AT.toast, AT.drawer, AT.page, AT.barUnder, AT.barBeside].map(({ x, y }) => patchLuma(video, x, y));
     const frames = toast.map((_, i) => i);
-    const toastOpen = frames.filter((i) => toast[i].luma >= WHITE);
-    const drawerOpen = frames.filter((i) => drawer[i].luma >= WHITE);
+    // The recording can start with the blank page, white at every point, before the app
+    // draws (walkthrough.test.ts). The steps start once the cover card has shown.
+    const cover = frames.find((i) => drawer[i].luma < CARD && page[i].luma < CARD);
+    assert.ok(cover !== undefined, 'a frame shows the cover card');
+    const toastOpen = frames.filter((i) => i > cover && toast[i].luma >= WHITE);
+    const drawerOpen = frames.filter((i) => i > cover && drawer[i].luma >= WHITE);
     assert.ok(toastOpen.length > 0, 'a frame shows the toast');
     assert.ok(drawerOpen.length > 0, 'a frame shows the drawer');
     const covered = [...toastOpen, ...drawerOpen].filter((i) => barUnder[i].luma >= BAR || barBeside[i].luma >= BAR).map((i) => toast[i].t);
@@ -170,7 +176,7 @@ test("a walkthrough's caption shows above the popover and the modal dialog a ste
     assert.deepEqual(fogged, [], 'with nothing of the app\'s open, the page shows unfogged under the caption bar');
 
     // The drawer stays open to the end, and the closing card, which is dark, shows once the last step is done.
-    const closing = frames.find((i) => i > drawerOpen[0] && drawer[i].luma < 60 && page[i].luma < 60);
+    const closing = frames.find((i) => i > drawerOpen[0] && drawer[i].luma < CARD && page[i].luma < CARD);
     assert.ok(closing !== undefined, 'the closing card shows over the drawer and its backdrop');
   } finally {
     await site.close();
