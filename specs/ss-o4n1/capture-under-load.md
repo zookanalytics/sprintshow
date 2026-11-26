@@ -21,7 +21,7 @@ Until that day every process the city started ran in one launchd job that set no
 27 percent of a core, and the same loop alone in a job of its own got 93 percent. The
 city's sessions waited 22 to 30 times as long as they ran, while about half the host's CPU
 sat idle. The test suites ran inside that job (tk-mnsm05s). The operator ruled that day
-that the throttle is lifted outside the city (tk-56yjgxg), and on 2026-11-26 the
+that the throttle is lifted outside the city (tk-56yjgxg). When read on 2026-11-26, the
 supervisor's launchd plist set `ProcessType` to Interactive and `Nice` to 5. The captures
 timed out before the ruling, and the tracker has no confirmation from any gate since.
 
