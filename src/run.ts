@@ -11,11 +11,11 @@
 // saves each step's screenshot as it drives the steps, and a run with no video drives
 // them with the screenshots' own driver (captureScreenshots).
 
-import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { chromium, type BrowserContextOptions, type Page } from 'playwright';
 
-import { parseDemoScript, outputSlug, surfaceOf, type Demo } from './demo-script.ts';
+import { outputSlug, surfaceOf, type Demo } from './demo-script.ts';
+import { loadDemo } from './script-file.ts';
 import { ensureServer, ensureIosApp, type ServeOptions, type ServerHandle } from './server.ts';
 import { captureProof, capturesRoot, type CaptureResult } from './capture.ts';
 import { captureWalkthrough } from './walkthrough.ts';
@@ -72,12 +72,11 @@ function checkOutputs(opts: RunDemoOptions): void {
   if (given.length) throw new Error(`run: a run with no video takes none of the video's options; drop ${given.join(', ')}`);
 }
 
-function loadDemo(script: string | Demo): { demo: Demo; name: string } {
-  if (typeof script !== 'string') return { demo: script, name: outputSlug(slugName(script.title)) };
+/** The name a run's video takes when its caller names no path for it: the script file's, or the demo's title. */
+function videoName(script: string | Demo, demo: Demo): string {
+  if (typeof script !== 'string') return outputSlug(slugName(demo.title));
   const scriptPath = path.resolve(script);
-  if (!existsSync(scriptPath)) throw new Error(`demo script not found: ${scriptPath}`);
-  const demo = parseDemoScript(readFileSync(scriptPath, 'utf8'));
-  return { demo, name: outputSlug(path.basename(scriptPath, path.extname(scriptPath))) };
+  return outputSlug(path.basename(scriptPath, path.extname(scriptPath)));
 }
 
 function slugName(title: string): string {
@@ -121,9 +120,9 @@ async function withHeadlessPage<T>(pageOpts: BrowserContextOptions, use: (page: 
 export async function runDemo(opts: RunDemoOptions): Promise<RunResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
   checkOutputs(opts);
-  const { demo, name } = loadDemo(opts.script);
+  const demo = loadDemo(opts.script);
   const mode: CaptureMode = opts.mode ?? 'walkthrough';
-  const outputPath = opts.outputPath ?? path.join(process.cwd(), 'demos', `${name}.mp4`);
+  const outputPath = opts.outputPath ?? path.join(process.cwd(), 'demos', `${videoName(opts.script, demo)}.mp4`);
   const outputs = opts.noVideo ? 'screenshots alone' : `${mode} mode${opts.screenshotDir ? ' and screenshots' : ''}`;
   log(`demo: "${demo.title}" — ${demo.steps.length} steps · ${outputs}`);
   // Checked before a server or a browser is spent: a device the registry does not hold
@@ -200,7 +199,7 @@ export async function runScreenshot(opts: RunScreenshotOptions): Promise<Screens
   // Checked before a server or a browser is spent on a capture that cannot happen.
   if (scale !== undefined && !(Number.isFinite(scale) && scale > 0)) throw new Error(`screenshot: the scale must be a positive number (got ${scale})`);
   if (opts.fullPage && opts.selector) throw new Error(AREA_CONFLICT);
-  const { demo } = loadDemo(opts.script);
+  const demo = loadDemo(opts.script);
   if (demo.terminal && opts.selector) throw new Error(TERMINAL_SELECTOR);
   if (surfaceOf(demo) === 'ios' && (opts.fullPage || opts.selector || opts.transparent || scale !== undefined)) throw new Error(IOS_AREA);
   const device = contextOptions(demo);

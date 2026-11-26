@@ -32,6 +32,7 @@ import type { AddressInfo } from 'node:net';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
+import { parseDemoScript } from '../src/demo-script.ts';
 import { captureWalkthrough, narrationSlots, watchRecording } from '../src/walkthrough.ts';
 import { ffmpegBin, probeDuration } from '../src/ffmpeg.ts';
 import { VIEWPORT } from '../src/browser.ts';
@@ -190,7 +191,7 @@ test('a narrated walkthrough voices each segment when it shows in the recording,
 
   try {
     const outputPath = path.join(dir, 'walk.mp4');
-    const result = await captureWalkthrough({ browser: browser!, baseUrl, demo: SCRIPT, outputPath, keep: true, captureRoot: dir, log: () => {} });
+    const result = await captureWalkthrough({ browser: browser!, baseUrl, demo: parseDemoScript(SCRIPT), outputPath, keep: true, captureRoot: dir, log: () => {} });
     assert.equal(result.failures, 0);
     assert.equal(result.narrated, true, 'the walkthrough is narrated');
     assert.deepEqual(asked, ['Narration timing', 'The page is up', 'A step that ends at once', 'What to check critically'], 'each segment was voiced, and the lead-in was not');

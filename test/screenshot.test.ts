@@ -20,6 +20,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
+import { parseDemoScript } from '../src/demo-script.ts';
 import { captureHeightLimit, captureScreenshot, AREA_CONFLICT } from '../src/screenshot.ts';
 import { ensureServer } from '../src/server.ts';
 import { launchBrowser, serveSite, scratchDir, writeFiles, runCli, stepLines, pngSize, pngPixels, pixelsApart, alphaAt, HIGH_DPI_ARGS, REPO } from './browser-fixture.ts';
@@ -39,7 +40,7 @@ async function captureSample(opts: { selector?: string }, inspect: (page: Page, 
   try {
     const png = path.join(dir, 'sample.png');
     const lines: string[] = [];
-    const res = await captureScreenshot({ page, baseUrl: server.baseUrl, demo: readFileSync(SAMPLE, 'utf8'), outputPath: png, selector: opts.selector, log: (m) => lines.push(m) });
+    const res = await captureScreenshot({ page, baseUrl: server.baseUrl, demo: SAMPLE, outputPath: png, selector: opts.selector, log: (m) => lines.push(m) });
     assert.equal(res.outputPath, png);
     await inspect(page, png, lines, res.failures);
   } finally {
@@ -191,9 +192,9 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
     try {
       const full = path.join(site.dir, 'full.png');
       const view = path.join(site.dir, 'view.png');
-      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: TALL, outputPath: full, fullPage: true, log: quiet });
+      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: parseDemoScript(TALL), outputPath: full, fullPage: true, log: quiet });
       const fullHeight = await page.evaluate(() => document.documentElement.scrollHeight);
-      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: TALL, outputPath: view, log: quiet });
+      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: parseDemoScript(TALL), outputPath: view, log: quiet });
       assert.ok(fullHeight > 2000);
       assert.deepEqual(pngSize(full), { width: 1280, height: fullHeight });
       assert.deepEqual(pngSize(view), { width: 1280, height: 900 });
@@ -209,7 +210,7 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
     try {
       const png = path.join(site.dir, 'wide.png');
       assert.equal(captureHeightLimit(250000, 1), 0);
-      await assert.rejects(captureScreenshot({ page, baseUrl: site.baseUrl, demo: WIDE, outputPath: png, fullPage: true, log: quiet }), {
+      await assert.rejects(captureScreenshot({ page, baseUrl: site.baseUrl, demo: parseDemoScript(WIDE), outputPath: png, fullPage: true, log: quiet }), {
         message: 'screenshot: could not capture the full page: scale 1 is too large for one capture of a page 250000 CSS pixels wide',
       });
       assert.equal(existsSync(png), false);
@@ -225,8 +226,8 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
     try {
       const clear = path.join(site.dir, 'clear.png');
       const opaque = path.join(site.dir, 'opaque.png');
-      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: CARD, outputPath: clear, selector: '.card', transparent: true, log: quiet });
-      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: CARD, outputPath: opaque, selector: '.card', log: quiet });
+      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: parseDemoScript(CARD), outputPath: clear, selector: '.card', transparent: true, log: quiet });
+      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: parseDemoScript(CARD), outputPath: opaque, selector: '.card', log: quiet });
       assert.deepEqual(pngSize(clear), { width: 160, height: 80 });
       assert.equal(await alphaAt(page, clear, 0, 0), 0, 'the corner is transparent');
       assert.equal(await alphaAt(page, clear, 80, 40), 255, 'the card itself stays opaque');
@@ -242,7 +243,7 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
     const { dir, cleanup } = scratchDir();
     try {
       const png = path.join(dir, 'x.png');
-      await assert.rejects(captureScreenshot({ page, baseUrl: 'http://localhost:1', demo: CARD, outputPath: png, fullPage: true, selector: '.card', log: quiet }), { message: AREA_CONFLICT });
+      await assert.rejects(captureScreenshot({ page, baseUrl: 'http://localhost:1', demo: parseDemoScript(CARD), outputPath: png, fullPage: true, selector: '.card', log: quiet }), { message: AREA_CONFLICT });
       assert.equal(page.url(), 'about:blank');
       assert.equal(existsSync(png), false);
     } finally {
@@ -256,7 +257,7 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
     const page = await browser!.newPage();
     try {
       const png = path.join(site.dir, 'x.png');
-      await assert.rejects(captureScreenshot({ page, baseUrl: site.baseUrl, demo: CARD, outputPath: png, selector: '#missing', log: quiet }), { message: /^screenshot: no visible `#missing` to capture: / });
+      await assert.rejects(captureScreenshot({ page, baseUrl: site.baseUrl, demo: parseDemoScript(CARD), outputPath: png, selector: '#missing', log: quiet }), { message: /^screenshot: no visible `#missing` to capture: / });
       assert.equal(existsSync(png), false);
     } finally {
       await page.close();
@@ -365,7 +366,7 @@ for (const tiles of [256, 512]) {
       try {
         const out = path.join(site.dir, 'bands.png');
         const lines: string[] = [];
-        await captureScreenshot({ page, baseUrl: site.baseUrl, demo: BANDS, outputPath: out, fullPage: true, log: (m) => lines.push(m) });
+        await captureScreenshot({ page, baseUrl: site.baseUrl, demo: parseDemoScript(BANDS), outputPath: out, fullPage: true, log: (m) => lines.push(m) });
         const limit = captureHeightLimit(1280, 2);
         assert.equal(lines.at(-1), `screenshot: capturing the page's top ${limit} of its 30000 CSS pixels, the most one capture holds at scale 2 → bands.png`);
         assert.deepEqual(pngSize(out), { width: 2560, height: limit * 2 });

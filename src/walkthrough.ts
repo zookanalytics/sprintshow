@@ -38,7 +38,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from 'playwright';
 
-import { parseDemoScript, outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { loadDemo } from './script-file.ts';
 import { requireFfmpeg, run, probeDuration, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
 import { installPointer, runStep, connectSurface, chromiumLaunchArgs, contextOptions, videoFrame, type Surface, type SurfaceConnection } from './browser.ts';
 import { keepCaption, markFrame, removeMarker, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
@@ -64,6 +65,7 @@ export interface CaptureWalkthroughOptions {
    * names them. A page or terminal script's driver starts no server, and reads none.
    */
   port?: number | readonly number[];
+  /** The path of the demo script's file, or the parsed demo, such as `parseDemoScript` makes of a script's markdown. */
   demo: Demo | string;
   outputPath: string;
   noNarrate?: boolean;
@@ -261,7 +263,7 @@ export async function screenshotStep(page: Page, surface: Surface, shots: StepSc
 export async function captureWalkthrough(opts: CaptureWalkthroughOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
   requireFfmpeg(); // fail early with the provisioning hint
-  const demo = typeof opts.demo === 'string' ? parseDemoScript(opts.demo) : opts.demo;
+  const demo = loadDemo(opts.demo);
   // Read before anything is written or launched: a device the registry does not hold throws here.
   const device = contextOptions(demo);
   const frameSize = videoFrame(demo);

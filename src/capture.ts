@@ -19,7 +19,8 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { parseDemoScript, outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
+import { loadDemo } from './script-file.ts';
 import { assembleVideo, type Frame, type Manifest } from './assemble.ts';
 import { runStep, openSurface, contextOptions, videoFrame, type Surface } from './browser.ts';
 import { showCaption, removeCaption, coverInnerHtml, scrutinyInnerHtml, cardDocument } from './overlay.ts';
@@ -46,7 +47,7 @@ export interface CaptureProofOptions {
    * names them. A page or terminal script's driver starts no server, and reads none.
    */
   port?: number | readonly number[];
-  /** The parsed demo, or a markdown string to parse. */
+  /** The path of the demo script's file, or the parsed demo, such as `parseDemoScript` makes of a script's markdown. */
   demo: Demo | string;
   /** Final mp4 path. */
   outputPath: string;
@@ -128,7 +129,7 @@ async function captureScrutiny(page: Page, items: string[], capturesDir: string)
  */
 export async function captureProof(opts: CaptureProofOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((m: string) => console.log(m));
-  const demo = typeof opts.demo === 'string' ? parseDemoScript(opts.demo) : opts.demo;
+  const demo = loadDemo(opts.demo);
   // Read before anything is written: a device the registry does not hold throws here.
   const start = contextOptions(demo).viewport as ViewportSize;
   const frameSize = videoFrame(demo);

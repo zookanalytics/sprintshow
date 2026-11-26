@@ -373,7 +373,7 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     try {
       const shot = async (fullPage: boolean): Promise<{ rows: number; first: string | null; height: number }> => {
         const out = path.join(dir, fullPage ? 'full.png' : 'screen.png');
-        await captureScreenshot({ page, demo: md, cwd: dir, outputPath: out, fullPage, log: quiet });
+        await captureScreenshot({ page, demo: parseDemoScript(md), cwd: dir, outputPath: out, fullPage, log: quiet });
         const { rows, first } = await page.evaluate(() => {
           const t = (window as unknown as { __ss_term: { cursor(): { rows: number }; row(n: number): string | null } }).__ss_term;
           return { rows: t.cursor().rows, first: t.row(1) };
@@ -400,7 +400,7 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     const { dir, cleanup } = scratchDir();
     const page = await browser!.newPage();
     try {
-      const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: path.join(dir, 'cleared.png'), fullPage: true, log: quiet });
+      const res = await captureScreenshot({ page, demo: parseDemoScript(md), cwd: dir, outputPath: path.join(dir, 'cleared.png'), fullPage: true, log: quiet });
       assert.equal(res.failures, 0);
       const { drawn, slider } = await page.evaluate(() => ({
         drawn: [...document.querySelectorAll('.xterm-rows > div')].map((row) => (row.textContent ?? '').trimEnd()),
@@ -453,7 +453,7 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
         } as typeof find;
       }, TERMINAL_WINDOW);
       const png = path.join(dir, 'gone.png');
-      await assert.rejects(captureScreenshot({ page, demo: md, cwd: dir, outputPath: png, fullPage: true, log: quiet }), {
+      await assert.rejects(captureScreenshot({ page, demo: parseDemoScript(md), cwd: dir, outputPath: png, fullPage: true, log: quiet }), {
         message: 'screenshot: could not measure the terminal window (1 step(s) failed their proof): this page has no terminal window',
       });
       assert.equal(existsSync(png), false);
@@ -470,7 +470,7 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     const page = await browser!.newPage({ deviceScaleFactor: scale });
     try {
       const png = path.join(dir, 'x.png');
-      await assert.rejects(captureScreenshot({ page, demo: md, cwd: dir, outputPath: png, fullPage: true, log: quiet }), {
+      await assert.rejects(captureScreenshot({ page, demo: parseDemoScript(md), cwd: dir, outputPath: png, fullPage: true, log: quiet }), {
         message: new RegExp(`^screenshot: could not capture the terminal session: scale ${scale} is too large for one capture of a window \\d+ CSS pixels wide$`),
       });
       assert.equal(existsSync(png), false);
@@ -504,7 +504,7 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     const pidOf = (name: string): number => Number(existsSync(path.join(dir, `${name}.pid`)) ? readFileSync(path.join(dir, `${name}.pid`), 'utf8') : 0);
     try {
       writeFiles(dir, { 'hold.mjs': HOLD });
-      const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: path.join(dir, 'held.png'), log: quiet });
+      const res = await captureScreenshot({ page, demo: parseDemoScript(md), cwd: dir, outputPath: path.join(dir, 'held.png'), log: quiet });
       assert.equal(res.failures, 0);
       for (const name of names) {
         const pid = pidOf(name);
@@ -700,7 +700,7 @@ for (const tiles of [256, 512]) {
       try {
         const out = path.join(dir, 'bars.png');
         const lines: string[] = [];
-        const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: out, fullPage: true, log: (m) => lines.push(m) });
+        const res = await captureScreenshot({ page, demo: parseDemoScript(md), cwd: dir, outputPath: out, fullPage: true, log: (m) => lines.push(m) });
         assert.equal(res.failures, 0, lines.join('\n'));
         const held = await page.evaluate((win) => {
           const w = (document.querySelector(win) as HTMLElement).getBoundingClientRect();

@@ -559,6 +559,10 @@ const result = await captureProof({
 });
 ```
 
+A driver takes a demo script as the path of its file, resolved against the working
+directory, or as the `Demo` that `parseDemoScript` makes of its markdown, as `runDemo` and
+`runScreenshot` do.
+
 `captureScreenshot` takes the same kind of page and saves one PNG in place of the MP4.
 `runDemo` and `runScreenshot` bring up the server and the browser themselves, as the CLI
 does. Given `screenshotDir`, `runDemo` and each video driver also save a PNG of each step,

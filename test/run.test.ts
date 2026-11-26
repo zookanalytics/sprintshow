@@ -296,8 +296,9 @@ const TERMINAL_WALK = `# Demo: Screenshots of a terminal walkthrough
    _Prove:_ it printed — \`screen ~ /^hello$/\`
 `;
 
-/** Walk `demo` with a screenshot directory, take its screenshots again with no video, and check the two sets match before handing the video to `inspect`. */
-async function walkWithScreenshots(demo: string, at: { baseUrl?: string; cwd?: string }, inspect: (video: string, capturesDir: string) => void): Promise<void> {
+/** Walk the script `md` with a screenshot directory, take its screenshots again with no video, and check the two sets match before handing the video to `inspect`. */
+async function walkWithScreenshots(md: string, at: { baseUrl?: string; cwd?: string }, inspect: (video: string, capturesDir: string) => void): Promise<void> {
+  const demo = parseDemoScript(md);
   const { dir, cleanup } = scratchDir();
   const page = await browser!.newPage({ viewport: VIEWPORT });
   try {
@@ -305,7 +306,7 @@ async function walkWithScreenshots(demo: string, at: { baseUrl?: string; cwd?: s
     const walked = await captureWalkthrough({ browser: browser!, ...at, demo, outputPath: video, noNarrate: true, keep: true, captureRoot: dir, screenshotDir: path.join(dir, 'walk'), log: quiet });
     assert.equal(walked.failures, 0);
     const alone = await captureScreenshots({ page, ...at, demo, screenshotDir: path.join(dir, 'alone'), log: quiet });
-    const { steps } = parseDemoScript(demo);
+    const { steps } = demo;
     const names = steps.map((s) => stepFileName(s, steps.length));
     assert.deepEqual(walked.screenshots.map((f) => path.basename(f)), names);
     assert.deepEqual(alone.screenshots.map((f) => path.basename(f)), names);
