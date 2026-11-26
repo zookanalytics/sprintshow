@@ -36,11 +36,11 @@
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContextOptions, type Page } from 'playwright';
 
 import { parseDemoScript, outputSlug, type Demo, type DemoStep, type ViewportSize } from './demo-script.ts';
 import { requireFfmpeg, run, probeDuration, buildNarration, mixMusicBed, muxOrCopy } from './ffmpeg.ts';
-import { installPointer, runStep, connectSurface, chromiumLaunchArgs, contextOptions, videoFrame, type Surface, type SurfaceConnection } from './browser.ts';
+import { installPointer, runStep, connectSurface, chromiumLaunchArgs, contextOptions, videoFrame, type Surface } from './browser.ts';
 import { keepCaption, markFrame, removeMarker, coverInnerHtml, scrutinyInnerHtml, showCardOverlay } from './overlay.ts';
 import { stepScreenshots, type StepScreenshots } from './screenshot.ts';
 import { capturesRoot, type CaptureResult } from './capture.ts';
@@ -280,82 +280,8 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
   mkdirSync(capturesDir, { recursive: true });
   mkdirSync(path.dirname(path.resolve(opts.outputPath)), { recursive: true });
 
-  const launched = !opts.browser;
-  const browser = opts.browser ?? (await chromium.launch({ headless: !opts.headed, args: chromiumLaunchArgs() }));
-  let connection: SurfaceConnection | null = null;
-  let context: BrowserContext | null = null;
-  let page: Page;
-  let recording: RecordingFrames;
-  let openedAt: number;
-  try {
-    connection = await connectSurface(demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, port: opts.port, log });
-    context = await browser.newContext({ ...device, recordVideo: { dir: capturesDir, size: frameSize } });
-    page = await context.newPage();
-    recording = await watchRecording(page);
-    openedAt = Date.now();
-    await installPointer(page);
-  } catch (e) {
-    await context?.close().catch(() => {});
-    await connection?.close();
-    if (launched) await browser.close();
-    throw e;
-  }
-
-  // Each segment, with a wall-clock time: for a step, when the browser first showed its
-  // caption; for the cover and the closing card, when the page added the card; for a tail
-  // with no card, which draws nothing, when it began.
-  const segments: { narration: string; wall: number; card: boolean }[] = [];
-  const stills: Still[] = [];
-  let failures = 0;
-  let webmPath: string | null = null;
-  let flushedAt = 0;
-  let surface: Surface | null = null;
-
-  try {
-    surface = await connection.show(page, true);
-    const cover = await showCardOverlay(page, coverInnerHtml(BRAND, demo.title, demo.description, `${demo.steps.length} steps`), COVER_MS);
-    segments.push({ narration: demo.title, wall: cover, card: true });
-
-    for (const step of demo.steps) {
-      const { proved, shownAt } = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
-      segments.push({ narration: step.narration, wall: shownAt, card: false });
-      if (!proved) failures++;
-      // The surface settles before the next step starts, so the video films where the step
-      // ends, and a capture fails here, instead of filming on, once the frames of an iOS
-      // app's screen stop reaching the page. Taking a still settles it first.
-      if (shots) {
-        const still = await screenshotStep(page, surface, shots, recording, step, log);
-        if (still) stills.push(still);
-      } else {
-        await surface.settle();
-      }
-    }
-
-    if (demo.scrutiny.length) {
-      const card = await showCardOverlay(page, scrutinyInnerHtml(demo.scrutiny), Math.min(14000, Math.max(6000, demo.scrutiny.length * 2500)));
-      segments.push({ narration: 'What to check critically', wall: card, card: true });
-    } else {
-      segments.push({ narration: '', wall: Date.now(), card: false });
-      await page.waitForTimeout(TAIL_MS);
-    }
-  } finally {
-    try {
-      // Closing the context is what flushes the .webm; the path resolves after.
-      const video = page.video();
-      await context.close();
-      flushedAt = Date.now();
-      webmPath = video ? await video.path() : null;
-    } finally {
-      // The surface ends once the recording is flushed, so a program slow to end, or a
-      // device put back as it was given, is not filmed.
-      try {
-        await surface?.close();
-      } finally {
-        await connection?.close();
-        if (launched) await browser.close();
-      }
-    }
-  }
+  const recorded = { ...device, recordVideo: { dir: capturesDir, size: frameSize } };
+  const { segments, stills, failures, webmPath, flushedAt, recording, openedAt } = await withBrowser(opts, (browser) => film(browser, opts, demo, recorded, shots, log));
 
   if (!webmPath) throw new Error('walkthrough: recording produced no video (recordVideo did not write a file)');
 
@@ -415,5 +341,101 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
     return { outputPath: opts.outputPath, narrated: muxed && narrated, music: muxed && music, failures, capturesDir: keep ? capturesDir : null, screenshots: shots ? [...shots.saved] : [] };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/** Hand `use` the browser `opts` gives, and leave it open, or else launch one for `use` and close it once `use` settles. */
+async function withBrowser<T>(opts: Pick<CaptureWalkthroughOptions, 'browser' | 'headed'>, use: (browser: Browser) => Promise<T>): Promise<T> {
+  if (opts.browser) return use(opts.browser);
+  const browser = await chromium.launch({ headless: !opts.headed, args: chromiumLaunchArgs() });
+  try {
+    return await use(browser);
+  } finally {
+    await browser.close();
+  }
+}
+
+/** What a walkthrough's recording leaves to make its video from, each time in wall-clock ms. */
+interface Take {
+  /** The recording, or null when its context wrote none. */
+  webmPath: string | null;
+  recording: RecordingFrames;
+  /** When the recorded page opened. */
+  openedAt: number;
+  /** When closing the context had flushed the recording. */
+  flushedAt: number;
+  segments: { narration: string; wall: number; card: boolean }[];
+  stills: Still[];
+  failures: number;
+}
+
+/**
+ * Walk `demo` on the surface it drives, in a new context of `browser` made with `recorded`,
+ * which records its page. Each thing it opens is released in a finally that covers it, so
+ * a throw at any point leaves none of them open.
+ */
+async function film(browser: Browser, opts: CaptureWalkthroughOptions, demo: Demo, recorded: BrowserContextOptions, shots: StepScreenshots | null, log: (m: string) => void): Promise<Take> {
+  const connection = await connectSurface(demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, port: opts.port, log });
+  try {
+    const context = await browser.newContext(recorded);
+    // Each segment, with a wall-clock time: for a step, when the browser first showed its
+    // caption; for the cover and the closing card, when the page added the card; for a tail
+    // with no card, which draws nothing, when it began.
+    const segments: Take['segments'] = [];
+    const stills: Still[] = [];
+    let failures = 0;
+    let page: Page | null = null;
+    let recording: RecordingFrames | null = null;
+    let openedAt = 0;
+    let surface: Surface | null = null;
+    let webmPath: string | null = null;
+    let flushedAt = 0;
+    try {
+      page = await context.newPage();
+      recording = await watchRecording(page);
+      openedAt = Date.now();
+      await installPointer(page);
+      surface = await connection.show(page, true);
+      const cover = await showCardOverlay(page, coverInnerHtml(BRAND, demo.title, demo.description, `${demo.steps.length} steps`), COVER_MS);
+      segments.push({ narration: demo.title, wall: cover, card: true });
+
+      for (const step of demo.steps) {
+        const { proved, shownAt } = await walkStep(page, opts.baseUrl ?? '', step, demo.steps.length, log);
+        segments.push({ narration: step.narration, wall: shownAt, card: false });
+        if (!proved) failures++;
+        // The surface settles before the next step starts, so the video films where the step
+        // ends, and a capture fails here, instead of filming on, once the frames of an iOS
+        // app's screen stop reaching the page. Taking a still settles it first.
+        if (shots) {
+          const still = await screenshotStep(page, surface, shots, recording, step, log);
+          if (still) stills.push(still);
+        } else {
+          await surface.settle();
+        }
+      }
+
+      if (demo.scrutiny.length) {
+        const card = await showCardOverlay(page, scrutinyInnerHtml(demo.scrutiny), Math.min(14000, Math.max(6000, demo.scrutiny.length * 2500)));
+        segments.push({ narration: 'What to check critically', wall: card, card: true });
+      } else {
+        segments.push({ narration: '', wall: Date.now(), card: false });
+        await page.waitForTimeout(TAIL_MS);
+      }
+    } finally {
+      try {
+        // Closing the context is what flushes the .webm; the path resolves after.
+        const video = page?.video();
+        await context.close();
+        flushedAt = Date.now();
+        webmPath = video ? await video.path() : null;
+      } finally {
+        // The surface ends once the recording is flushed, so a program slow to end, or a
+        // device put back as it was given, is not filmed.
+        await surface?.close();
+      }
+    }
+    return { webmPath, recording, openedAt, flushedAt, segments, stills, failures };
+  } finally {
+    await connection.close();
   }
 }
