@@ -98,10 +98,12 @@ sprintshow run demo.md --base-url http://localhost:3000
 sprintshow run demo.md --serve-dir ./public --mode proof
 ```
 
-`--serve-dir` listens on a free port unless `--port` names one, so captures can run side
-by side on one host. `--serve` waits on port 5173 unless `--port` names the port its
-command binds. An iOS app script's run takes a port for each of its servers
-([below](#ios-app-demos)).
+`--serve-dir` serves the directory at `http://127.0.0.1:<port>`, on the loopback interface
+only, so no other host can fetch its files. It listens on a free port unless `--port` names
+one, so captures can run side by side on one host. A port `--port` names that something
+already answers on is refused, so a capture never takes another server's connections.
+`--serve` waits on port 5173 unless `--port` names the port its command binds. An iOS app
+script's run takes a port for each of its servers ([below](#ios-app-demos)).
 
 The MP4 lands at `demos/<script-name>.mp4` by default (`-o` to override). Useful flags:
 `--no-narrate`, `--music <file.mp3>` (a background bed under the narration), `--keep` (keep
