@@ -10,6 +10,7 @@
 //
 // The pointer is a DOM element the engine moves, so a click or a keystroke reads on
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
+// It is drawn in the chrome's layer (overlay.ts), so it shows above a dialog it clicks in.
 // The still-frame and screenshot paths skip it and drive the page directly, for speed and
 // determinism. A terminal needs no pointer: what is typed shows where the shell echoes it.
 // Nor does a page's `press`: its keys go wherever the page's focus is, and where keys
@@ -22,6 +23,7 @@ import { pressKeys } from './keyboard.ts';
 import { openTerminal, hasTerminalSession, terminalRun, terminalPress, terminalWaitForScreen, checkTerminalAssertion } from './terminal.ts';
 import { connectIosApp, showIosApp, hasIosApp, runIosAction, checkIosAssertion } from './ios.ts';
 import { passVercelSignIn } from './vercel.ts';
+import { chromeLayer, raiseChrome } from './overlay.ts';
 
 /** The viewport a script that names no device is driven at, and every terminal or iOS app script's frame. */
 export const VIEWPORT = { width: 1280, height: 900 };
@@ -90,6 +92,7 @@ export function videoFrame(demo: Demo): ViewportSize {
 /** Init script (re-run on every navigation) that installs the pointer and its `window.__ss` API. */
 const POINTER_INIT = `(() => {
   if (window.__ss_installed) return; window.__ss_installed = true;
+  const chrome = ${chromeLayer};
   const build = () => {
     if (!document.body || document.getElementById('__ss_pointer__')) return;
     const style = document.createElement('style');
@@ -105,11 +108,11 @@ const POINTER_INIT = `(() => {
     p.id = '__ss_pointer__';
     p.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none">' +
       '<path d="M3 2l7 18 2.9-7.4L20 9.7 3 2z" fill="#fff" stroke="#111" stroke-width="1.3" stroke-linejoin="round"/></svg>';
-    document.body.appendChild(p);
+    chrome().appendChild(p);
   };
   window.__ss = {
     moveTo(x, y) { build(); const el = document.getElementById('__ss_pointer__'); if (el) { el.style.left = x + 'px'; el.style.top = y + 'px'; } },
-    ripple(x, y) { build(); const r = document.createElement('div'); r.className = '__ss_ripple__'; r.style.left = x + 'px'; r.style.top = y + 'px'; document.body.appendChild(r); setTimeout(() => r.remove(), 560); },
+    ripple(x, y) { build(); const r = document.createElement('div'); r.className = '__ss_ripple__'; r.style.left = x + 'px'; r.style.top = y + 'px'; chrome().appendChild(r); setTimeout(() => r.remove(), 560); },
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build); else build();
 })()`;
@@ -309,7 +312,12 @@ export interface StepProof {
 export async function runStep(page: Page, base: string, step: DemoStep, total: number, humanize: boolean, log: (m: string) => void, beforeActions?: () => Promise<void>): Promise<StepProof> {
   log(`step ${step.index}/${total}: ${step.narration}`);
   await beforeActions?.();
-  for (const act of step.actions) await runAction(page, base, act, humanize, log);
+  for (const act of step.actions) {
+    await runAction(page, base, act, humanize, log);
+    // A humanized step is filmed with the pointer and the caption up, and a dialog or a
+    // popover the action opened in a shadow root covers them until they are raised.
+    if (humanize) await raiseChrome(page);
+  }
 
   // A prove-assertion must become true; a failIf-assertion becoming true overrides it.
   let proved = true;
@@ -331,7 +339,10 @@ export async function runStep(page: Page, base: string, step: DemoStep, total: n
 
 /** What a capture drives a demo's steps against, once it is up in a page. */
 export interface Surface {
-  /** Wait until the surface shows everything it has been sent, so a frame taken now shows it. */
+  /**
+   * Wait until the surface shows everything it has been sent, so a frame taken now shows
+   * it. A recorded iOS app's can fall short of that under load on the host (ios.ts).
+   */
   settle(): Promise<void>;
   /**
    * Save the state the surface shows now as the PNG `file`, for a surface that takes its
@@ -339,7 +350,7 @@ export interface Surface {
    * screenshot. Absent on a page or a terminal, whose stills the page gives.
    */
   still?(file: string): Promise<void>;
-  /** Release what the surface holds: a terminal's shell is ended, a shown iOS app's frames stop, and a page holds nothing. */
+  /** Release what the surface holds: a terminal's shell is ended, a shown iOS app's screen is no longer drawn, and a page holds nothing. */
   close(): Promise<void>;
 }
 
@@ -365,6 +376,13 @@ export interface OpenSurfaceOptions {
   port?: number | readonly number[];
   /** Frame a terminal or an iOS app on a backdrop above the caption band, as the videos show it. A still leaves it off. */
   backdrop?: boolean;
+  /**
+   * Whether the page is recorded as it changes, as a walkthrough records it, rather than
+   * captured only once a step has settled. An iOS app's screen is then drawn from the
+   * frames WebDriverAgent streams of it, and otherwise from the device's own screenshot
+   * that each settle takes (ios.ts). A page or a terminal is shown the same either way.
+   */
+  recorded?: boolean;
   log?: (m: string) => void;
 }
 
@@ -380,7 +398,7 @@ export async function connectSurface(demo: Demo, opts: Omit<OpenSurfaceOptions, 
   if (surfaceOf(demo) === 'ios') {
     const conn = await connectIosApp(opts.baseUrl, log, opts.port);
     const show = async (page: Page): Promise<Surface> => {
-      const surface = await showIosApp(page, conn, { title: demo.title, log });
+      const surface = await showIosApp(page, conn, { title: demo.title, log, stream: Boolean(opts.recorded) });
       // The device page is written in place, which runs no init script, so a page that
       // shows the pointer gets it here.
       try {

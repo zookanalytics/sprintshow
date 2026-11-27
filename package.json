@@ -1,6 +1,6 @@
 {
   "name": "@zookanalytics/sprintshow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Auto-generate a quick, unpolished demo video of what an AI agent just did — the agent equivalent of a sprint demo. A demo-script DSL + linter, on-screen captions, TTS voiceover and ffmpeg assembly, over a Playwright browser drive, a terminal session, or an iOS app on a simulator through Appium.",
   "keywords": [
     "demo",

@@ -7,6 +7,10 @@
 // path keeps the caption up, updates it in place and draws it again in each page a step
 // loads, and shows the cards as full-screen overlays for a few seconds while recording
 // continues.
+//
+// The chrome, the walkthrough's pointer included (browser.ts), is drawn in a layer of the
+// engine's own (chromeLayer), which the browser draws above every element of the page,
+// the app's open dialogs, popovers and fullscreen element among them.
 
 import type { Disposable, Page } from 'playwright';
 
@@ -18,12 +22,102 @@ export const FG = '#e7e9ee';
 export const MUTED = '#9aa3b2';
 export const FONT = "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 
-/** The elements this module draws in a page: the caption bar and a card. */
+/** The elements this module draws in a page that a viewer sees: the caption bar and a card. The layer that holds them (chromeLayer) shows nothing of its own. */
 export const OVERLAY_CHROME = '#__ss_caption__,#__ss_card__';
 
 /** HTML-escape text bound for `innerHTML` / `setContent`. */
 export function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Runs in the page: the layer the engine draws its chrome in, made the first time a document
+ * asks for it, and shown in the page's top layer above all else there.
+ *
+ * The browser draws its top layer above every z-index. The top layer holds what the page
+ * shows there, such as an open modal dialog and its backdrop, a popover or a fullscreen
+ * element, and draws each above the ones added before it. So the layer is a popover of its
+ * own, and a raise, which hides it and shows it again, puts it above the rest. Each call
+ * raises it, and so does the frame after the page adds anything else to the top layer. The
+ * browser announces a dialog or a popover about to open with `beforetoggle`, and a change of
+ * fullscreen with `fullscreenchange`. The raise waits for the next frame because a popover
+ * that a `popovertarget` button opens announces itself while it is still being shown, and
+ * showing another popover then fails. A dialog or a popover in a shadow root announces
+ * itself only inside that root, where no listener of the document's hears it, so the layer
+ * goes above one there at the next call, such as the next caption's or raiseChrome's.
+ *
+ * The layer is a manual popover: no click or key closes it, and showing it closes none of
+ * the page's popovers. It has no size and shows nothing of its own. What it holds takes no
+ * pointer events, so a click under the caption bar lands on the page. A page's rule for
+ * its popovers, such as one that gives each a transform, would make the layer, and not the
+ * viewport, the box the chrome is laid out in. So the layer's inline style unsets every
+ * property (`all: unset`, so what it holds inherits from the body as if the layer were not
+ * there) and sets the few it needs, each important, which outranks every rule of a page's
+ * stylesheet. Its backdrop and its ::before and ::after, which no inline style reaches,
+ * are hidden by a stylesheet the engine adopts into the document, which a page's Content
+ * Security Policy does not refuse.
+ */
+export function chromeLayer(): HTMLElement {
+  const id = '__ss_chrome__';
+  const w = window as unknown as { __ss_chrome_sheet?: CSSStyleSheet };
+  const raise = (layer: HTMLElement): void => {
+    if (layer.matches(':popover-open')) layer.hidePopover();
+    layer.showPopover();
+  };
+  let layer = document.getElementById(id);
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.id = id;
+    layer.popover = 'manual';
+    const style = { all: 'unset', position: 'fixed', top: '0', left: '0', width: '0', height: '0', 'pointer-events': 'none' };
+    for (const [name, value] of Object.entries(style)) layer.style.setProperty(name, value, 'important');
+    document.body.appendChild(layer);
+  }
+  if (!w.__ss_chrome_sheet) {
+    w.__ss_chrome_sheet = new CSSStyleSheet();
+    w.__ss_chrome_sheet.replaceSync(`#${id}::backdrop,#${id}::before,#${id}::after{display:none!important}`);
+    let queued = false;
+    const raiseNextFrame = (): void => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        const shown = document.getElementById(id);
+        if (shown) raise(shown);
+      });
+    };
+    addEventListener(
+      'beforetoggle',
+      (e) => {
+        if ((e as ToggleEvent).newState === 'open' && (e.target as Element).id !== id) raiseNextFrame();
+      },
+      true,
+    );
+    addEventListener('fullscreenchange', raiseNextFrame, true);
+  }
+  // A page can replace the sheets the document has adopted, and hide a popover it did not show.
+  if (!document.adoptedStyleSheets.includes(w.__ss_chrome_sheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, w.__ss_chrome_sheet];
+  raise(layer);
+  return layer;
+}
+
+/**
+ * The script that runs the page function `fn` with the chrome's layer (chromeLayer) and
+ * `arg`, for `page.evaluate` or `page.addInitScript`: Playwright hands the function it runs
+ * one argument, which cannot be a function.
+ */
+export function withChromeLayer<A>(fn: (chrome: () => HTMLElement, arg: A) => unknown, arg: A): string {
+  return `(${fn})(${chromeLayer}, ${JSON.stringify(arg)})`;
+}
+
+/**
+ * Raise the chrome's layer (chromeLayer) above all the page shows in its top layer now.
+ * That takes in a dialog or a popover the page has opened in a shadow root, which the
+ * layer's listeners never hear open. Does nothing in a page with no body yet, or in one
+ * that goes away first.
+ */
+export async function raiseChrome(page: Page): Promise<void> {
+  await page.evaluate(withChromeLayer((chrome) => void chrome(), null)).catch(() => {});
 }
 
 /** How long a caption waits for the browser to report that it has shown it. */
@@ -44,16 +138,18 @@ interface CaptionBar {
 }
 
 /**
- * Runs in the page: draw the step caption bar at the bottom of the document, or retitle the
- * one it holds. A document with no body yet, such as a new one an init script runs in,
- * gets the bar once the parser has added the body. An init script runs in each child frame
- * too, and a child frame gets no bar. Returns the wall-clock time in ms at which it ran.
+ * Runs in the page: draw the step caption bar at the bottom of the document, in the
+ * chrome's layer, or retitle the one it holds. A document with no body yet, such as a new
+ * one an init script runs in, gets the bar once the parser has added the body. An init
+ * script runs in each child frame too, and a child frame gets no bar. Returns the
+ * wall-clock time in ms at which it ran.
  */
-function drawCaption({ idx, total, text, failed, timing, ACCENT, ACCENT_FAIL, FONT }: CaptionBar): number {
+function drawCaption(chrome: () => HTMLElement, { idx, total, text, failed, timing, ACCENT, ACCENT_FAIL, FONT }: CaptionBar): number {
   if (window.top === window) {
     const draw = (): void => {
       const ID = '__ss_caption__';
       const accent = failed ? ACCENT_FAIL : ACCENT;
+      const layer = chrome();
       let bar = document.getElementById(ID);
       if (!bar) {
         bar = document.createElement('div');
@@ -89,7 +185,7 @@ function drawCaption({ idx, total, text, failed, timing, ACCENT, ACCENT_FAIL, FO
         });
         badge.textContent = 'PROOF FAILED';
         bar.append(badge);
-        document.body.appendChild(bar);
+        layer.appendChild(bar);
       }
       bar.style.borderTop = `3px solid ${accent}`;
       const counter = document.createElement('span');
@@ -139,7 +235,7 @@ function drawCaption({ idx, total, text, failed, timing, ACCENT, ACCENT_FAIL, FO
  */
 export async function showCaption(page: Page, idx: number, total: number, text: string, failed: boolean): Promise<number> {
   const timing = `__ss_caption_${++captions}`;
-  const handedAt = await page.evaluate(drawCaption, { idx, total, text, failed, timing, ACCENT, ACCENT_FAIL, FONT });
+  const handedAt = await page.evaluate<number>(withChromeLayer(drawCaption, { idx, total, text, failed, timing, ACCENT, ACCENT_FAIL, FONT }));
   return (await shownAt(page, timing)) ?? handedAt;
 }
 
@@ -157,7 +253,7 @@ const kept = new WeakMap<Page, Disposable>();
  * that loads in between still gets a bar, and showCaption then retitles it.
  */
 export async function keepCaption(page: Page, idx: number, total: number, text: string, failed: boolean): Promise<number> {
-  const script = await page.addInitScript(drawCaption, { idx, total, text, failed, timing: null, ACCENT, ACCENT_FAIL, FONT });
+  const script = await page.addInitScript(withChromeLayer(drawCaption, { idx, total, text, failed, timing: null, ACCENT, ACCENT_FAIL, FONT }));
   await kept.get(page)?.dispose();
   kept.set(page, script);
   return showCaption(page, idx, total, text, failed);
@@ -166,8 +262,14 @@ export async function keepCaption(page: Page, idx: number, total: number, text: 
 /**
  * The wall-clock time, in ms, of the frame in which the browser first showed the text of
  * the element marked `id`, as the page's Element Timing reports it. Null when the browser
- * reports none within SHOWN_TIMEOUT_MS, or the page goes away first. Element Timing
- * reports an element once, for the first frame that shows its text.
+ * reports none within SHOWN_TIMEOUT_MS, or the page goes away first.
+ *
+ * Element Timing reports a marked element for the first frame that shows its text, and
+ * again each time the element is laid out anew, as raising the chrome's layer lays out
+ * all it holds (chromeLayer). A page keeps only its first 150 such reports for an
+ * observer that starts later, and this one starts once the element is in the page. So
+ * the mark is taken off the element once its report is read, or none came, and nothing
+ * that lays it out again reports it.
  */
 async function shownAt(page: Page, id: string): Promise<number | null> {
   return page
@@ -175,17 +277,17 @@ async function shownAt(page: Page, id: string): Promise<number | null> {
       ({ id, timeout }) =>
         new Promise<number | null>((resolve) => {
           if (!PerformanceObserver.supportedEntryTypes.includes('element')) return resolve(null);
+          const done = (at: number | null): void => {
+            observer.disconnect();
+            document.querySelectorAll(`[elementtiming="${id}"]`).forEach((el) => el.removeAttribute('elementtiming'));
+            resolve(at);
+          };
           const observer = new PerformanceObserver((list) => {
             const entry = (list.getEntries() as unknown as { identifier: string; renderTime: number }[]).find((e) => e.identifier === id && e.renderTime > 0);
-            if (!entry) return;
-            observer.disconnect();
-            resolve(performance.timeOrigin + entry.renderTime);
+            if (entry) done(performance.timeOrigin + entry.renderTime);
           });
           observer.observe({ type: 'element', buffered: true });
-          setTimeout(() => {
-            observer.disconnect();
-            resolve(null);
-          }, timeout);
+          setTimeout(() => done(null), timeout);
         }),
       { id, timeout: SHOWN_TIMEOUT_MS },
     )
@@ -273,42 +375,42 @@ export function cardDocument(inner: string): string {
   );
 }
 
+/** Runs in the page: add a full-screen card, holding `inner`, to the chrome's layer and fade it in. Returns the wall-clock time in ms at which it added the card. */
+function drawCard(chrome: () => HTMLElement, { inner, BG, FG, FONT }: { inner: string; BG: string; FG: string; FONT: string }): number {
+  const el = document.createElement('div');
+  el.id = '__ss_card__';
+  Object.assign(el.style, {
+    position: 'fixed',
+    inset: '0',
+    zIndex: '2147483647',
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    gap: '20px',
+    padding: '0 8vw',
+    background: BG,
+    color: FG,
+    fontFamily: FONT,
+    opacity: '0',
+    transition: 'opacity .35s ease',
+  });
+  el.innerHTML = inner;
+  chrome().appendChild(el);
+  // A transition runs from the style the browser last computed for the element, and a
+  // page need not compute one for the card before the frame that draws it. Reading its
+  // opacity computes it at 0 here, so setting 1 fades the card in.
+  void getComputedStyle(el).opacity;
+  el.style.opacity = '1';
+  return performance.timeOrigin + performance.now();
+}
+
 /**
  * Show a full-screen card over the live page for `ms`, then remove it (the walkthrough
  * path, where the recording keeps rolling and the page must not be navigated away).
  * Resolves with the wall-clock time, in ms, at which the page added the card.
  */
 export async function showCardOverlay(page: Page, inner: string, ms: number): Promise<number> {
-  const addedAt = await page.evaluate(
-    ({ inner, BG, FG, FONT }) => {
-      const el = document.createElement('div');
-      el.id = '__ss_card__';
-      Object.assign(el.style, {
-        position: 'fixed',
-        inset: '0',
-        zIndex: '2147483647',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        gap: '20px',
-        padding: '0 8vw',
-        background: BG,
-        color: FG,
-        fontFamily: FONT,
-        opacity: '0',
-        transition: 'opacity .35s ease',
-      });
-      el.innerHTML = inner;
-      document.body.appendChild(el);
-      // A transition runs from the style the browser last computed for the element, and a
-      // page need not compute one for the card before the frame that draws it. Reading its
-      // opacity computes it at 0 here, so setting 1 fades the card in.
-      void getComputedStyle(el).opacity;
-      el.style.opacity = '1';
-      return performance.timeOrigin + performance.now();
-    },
-    { inner, BG, FG, FONT },
-  );
+  const addedAt = await page.evaluate<number>(withChromeLayer(drawCard, { inner, BG, FG, FONT }));
   await page.waitForTimeout(ms);
   await page.evaluate(() => {
     const el = document.getElementById('__ss_card__');

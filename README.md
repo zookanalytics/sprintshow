@@ -98,10 +98,12 @@ sprintshow run demo.md --base-url http://localhost:3000
 sprintshow run demo.md --serve-dir ./public --mode proof
 ```
 
-`--serve-dir` listens on a free port unless `--port` names one, so captures can run side
-by side on one host. `--serve` waits on port 5173 unless `--port` names the port its
-command binds. An iOS app script's run takes a port for each of its servers
-([below](#ios-app-demos)).
+`--serve-dir` serves the directory at `http://127.0.0.1:<port>`, on the loopback interface
+only, so no other host can fetch its files. It listens on a free port unless `--port` names
+one, so captures can run side by side on one host. A port `--port` names that something
+already answers on is refused, so a capture never takes another server's connections.
+`--serve` waits on port 5173 unless `--port` names the port its command binds. An iOS app
+script's run takes a port for each of its servers ([below](#ios-app-demos)).
 
 The MP4 lands at `demos/<script-name>.mp4` by default (`-o` to override). Useful flags:
 `--no-narrate`, `--music <file.mp3>` (a background bed under the narration), `--keep` (keep
@@ -211,10 +213,11 @@ the only thing on its stdout:
 sprintshow surface demos/terminal.md    # prints {"surface":"terminal"}
 ```
 
-`"surface"` is `"page"` for a script that drives an app in a browser page, and
-`"terminal"` for one that declares `**Terminal:**`. Every surface the engine drives is a
-value of this one field. The command exits 0 when the script parses, and 1 when the file
-is missing or does not parse, with the reason on stderr and nothing on stdout.
+`"surface"` is `"page"` for a script that drives an app in a browser page, `"terminal"`
+for one that declares `**Terminal:**`, and `"ios"` for one that declares
+`**Platform:** iOS`. Every surface the engine drives is a value of this one field. The
+command exits 0 when the script parses, and 1 when the file is missing or does not parse,
+with the reason on stderr and nothing on stdout.
 
 ## Capture a screenshot
 
@@ -314,8 +317,8 @@ program holds the alternate screen, that screen.
 - `exit <op> <n>`: the exit status of the last command the shell finished compares with
   `n` (`>= > == <= <`). While a command runs, no `exit` assertion holds.
 
-A matcher is as in a page script's `text` assertion, and a `/regex/` is tested with the
-`m` flag, so `^` and `$` match at each row's start and end.
+A matcher is as in a page script's `text` assertion, and a regex is tested with the `m`
+flag added to its own, so `^` and `$` match at each row's start and end.
 
 **Captures.** `sprintshow screenshot` saves the terminal window, title bar included, with
 its rounded corners transparent, and so does each step's PNG of a run with `--screenshots`.
@@ -388,7 +391,7 @@ Appium, the tools it runs, `simctl`, `xcodebuild`, or the command `--serve` star
 
 **Ports.** A run drives the app through servers on the loopback interface: Appium's server,
 WebDriverAgent's server, which Appium launches on the device to take its commands, and
-WebDriverAgent's stream of the screen's frames, which the videos are drawn from. Each listens
+WebDriverAgent's stream of the screen's frames, which a walkthrough is drawn from. Each listens
 on a free port the system assigns, unless `--port` names a port for each, in that order:
 
 ```bash
@@ -428,14 +431,19 @@ button's label is its title, and its value is any state the app gives it, as the
 tasks give `done` or `to do`. A text field's value is what it holds. `focused` and `eval`
 are a page's.
 
-**Captures.** The videos show the device's screen, drawn from the frames Appium streams of
-it, on a dark backdrop above the caption bar, and a touch glides to where each step taps.
-Each step's PNG, and `sprintshow screenshot`'s, is the device's own screenshot: its whole
-screen at its own scale, status bar included, with nothing of the engine's on it. So
-`--full-page`, `--selector`, `--scale` and `--transparent` are refused for one. A
-walkthrough connects to the app before it starts recording, which takes Appium a few seconds
-to tens of seconds, so the video opens on the cover.
-`specs/ss-rmvnx/design.md` records why the surface is built this way.
+**Captures.** The videos show the device's screen on a dark backdrop above the caption bar.
+A proof video's frame of each step is the device's own screenshot, taken once the step's
+proof is checked, so it shows the screen as the proof found it, or later. A walkthrough is
+drawn from the frames Appium streams of the screen, and a touch glides to where each step
+taps. Under load on the host a frame can reach sprintshow seconds after it was taken, so a
+walkthrough can show a step's end late. Each step's PNG, and `sprintshow screenshot`'s, is
+the device's own screenshot, in a proof run the one the step's frame shows: its whole screen
+at its own scale, status bar included, with nothing of the engine's on it. So `--full-page`,
+`--selector`, `--scale` and `--transparent` are refused for one. A walkthrough connects to
+the app before it starts recording, which takes Appium a few seconds to tens of seconds, so
+the video opens on the cover.
+`specs/ss-rmvnx/design.md` records why the surface is built this way, and
+`specs/ss-f5wor/stale-proof-frame.md` why a proof's frames are the device's screenshots.
 
 ## Exit codes
 
@@ -493,9 +501,13 @@ browser draws where keys move focus, unless the page's style hides it.
 
 **Assertions** (in `_Prove:_` / `_Fail if:_`): `visible <sel>` · `hidden <sel>` ·
 `focused <sel>` (an element the selector matches has focus) · `count <sel> <op> <n>`
-(`>= > == <= <`) · `text <sel> ~ <matcher>` · `eval <js>`. A matcher is `/regex/`,
-`"substring"`, or a bare substring. `_Prove:_` must hold (polled); `_Fail if:_` fails the
-step if it matches.
+(`>= > == <= <`) · `text <sel> ~ <matcher>` · `eval <js>`. A matcher is `/regex/flags`,
+`"substring"`, or a bare substring. The regex is JavaScript's, and the flags after it are
+any of `dgimsuvy`, or none. `/3 tasks/i` matches in any letter case. A bare matcher reads
+as a regex whenever it can, so a substring that opens with `/` is written quoted. The
+linter reports a bare matcher that opens with `/` but is not a regex, which a capture
+matches as the substring it spells, and a regex that does not compile, which matches
+nothing. `_Prove:_` must hold (polled); `_Fail if:_` fails the step if it matches.
 
 A draft in the generic `demo:capture` dialect — an `**Auth:**` line, a `## Scrutiny`
 section, and prose-only `_Prove:_`/`_Fail if:_` — parses and runs unedited (its steps record
@@ -574,7 +586,9 @@ each of its servers as its `port`, as `--port` names them.
 `openSurface` brings up what any script drives: the app at its start path, the engine's
 terminal and its shell, or an iOS app, connected through Appium and shown in the page.
 `connectSurface` connects first and shows the surface later, as the walkthrough does to
-connect to an iOS app before it starts recording.
+connect to an iOS app before it starts recording. A driver that records the page as it
+changes, as the walkthrough does, passes `recorded`, so an iOS app's screen is drawn from
+the frames Appium streams of it. Otherwise each `settle` draws the device's own screenshot.
 
 ## The agent / MCP path
 
@@ -591,6 +605,12 @@ See [`examples/agent-mcp`](examples/agent-mcp) for the MCP wiring and the manife
 ## The sample video
 
 `demos/sample.mp4` is in git-LFS, so a clone without git-lfs has a pointer file in its place.
+
+## Releases
+
+Each version from 0.1.0 on has a [GitHub release](https://github.com/zookanalytics/sprintshow/releases)
+with notes on the changes it brings. [docs/releasing.md](docs/releasing.md) says how a release
+is cut.
 
 ## License
 

@@ -17,7 +17,8 @@
 // recording films from the page's first frame and connecting takes seconds. The surface is
 // settled once each step is done, so the video films where the step ends, and the capture
 // fails, instead of filming on, once the frames of an iOS app's screen stop reaching the
-// page.
+// page. Under load on the host, an iOS app's settle can draw a frame of its screen taken
+// before the step ended (ios.ts).
 //
 // Given a screenshot directory, it saves a PNG of the state each step leaves
 // (screenshot.ts) in the page it films. That page alone holds the app's state, since
@@ -288,7 +289,7 @@ async function walkthroughVideo(opts: CaptureWalkthroughOptions, demo: Demo, dev
   let recording: RecordingFrames;
   let openedAt: number;
   try {
-    connection = await connectSurface(demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, port: opts.port, log });
+    connection = await connectSurface(demo, { baseUrl: opts.baseUrl, cwd: opts.cwd, port: opts.port, recorded: true, log });
     context = await browser.newContext({ ...device, recordVideo: { dir: capturesDir, size: frameSize } });
     page = await context.newPage();
     recording = await watchRecording(page);

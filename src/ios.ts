@@ -19,14 +19,22 @@
 // ends the app.
 //
 // Like the terminal, the surface is a page the engine writes into the capture's browser
-// page (showIosApp): the device's screen, drawn from the frames WebDriverAgent streams of
-// it, on a backdrop above the caption band. So the videos film it as they film a page,
-// with the engine's captions and cards, and its pointer shows a touch where a step taps.
-// A capture that makes a video settles the surface once each step is done, until a frame
-// taken after the step is drawn, and fails once the frames stop reaching the page, so its
-// video never shows a screen the app has moved past. A step's PNG is the device's own
-// screenshot instead, at the device's scale, with nothing of the engine's on it
-// (Surface.still).
+// page (showIosApp): the device's screen on a backdrop above the caption band. So the
+// videos show it as they show a page, with the engine's captions and cards.
+//
+// A page captured only once each step has settled, as a proof video's frames are, shows
+// the device's own screenshot, which each settle takes once the step's proof is checked.
+// A screenshot is taken once it is asked for, so the page shows the screen as the proof
+// found it, or later. A page recorded as it changes, as a walkthrough records it, shows
+// the frames WebDriverAgent streams of the screen instead, and the pointer shows a touch
+// where a step taps. Its settle waits until a frame that reached the engine after the
+// step is drawn, and fails once the frames stop reaching the page. A frame carries no time
+// it was taken, and under load on the host one can reach the engine seconds after, so the
+// frame a recording settles on can show the screen as it was before the step.
+//
+// A step's PNG is the device's own screenshot, at the device's scale, with nothing of the
+// engine's on it (Surface.still): in a page that shows the device's screenshots, the one
+// the page shows.
 //
 // A step's actions go to the app through Appium, as gestures and keys, and its proof reads
 // the app's elements through Appium. A selector names an element by its accessibility
@@ -52,13 +60,17 @@ const SESSION_START_MS = 180_000;
 const IDLE_SESSION_S = 600;
 /** The frames WebDriverAgent streams: the rate a recording films a page at, at half the screen's pixels, which is more than a video frame shows of it. */
 const STREAM = { mjpegServerFramerate: 25, mjpegScalingFactor: 50, mjpegServerScreenshotQuality: 75 };
-/** How long after a frame is taken it may reach the engine. A frame that reaches it later than this past a moment was taken after it. */
+/**
+ * How long past a moment a frame of the stream must reach the engine for a recording's
+ * settle to take it as taken after that moment. Under load on the host a frame can reach
+ * the engine seconds after it was taken, and the settle then draws one taken before.
+ */
 const FRAME_LAG_MS = 120;
 /**
- * How long the page waits for a frame of the screen: the first, or one taken after
- * `settle` began. WebDriverAgent sends a frame at every tick, and backs off for up to ten
- * seconds after a screenshot it fails to take, so a screen with no frame for this long is
- * lost.
+ * How long a recording's page waits for a frame of the screen: the first, or one that
+ * reaches the engine after `settle` began. WebDriverAgent sends a frame at every tick, and
+ * backs off for up to ten seconds after a screenshot it fails to take, so a screen with no
+ * frame for this long is lost.
  */
 const FRAME_WAIT_MS = 30_000;
 /** The stage the screen is fitted to: the viewport less a margin all round and the caption bar's band at the bottom, as the terminal's. */
@@ -250,8 +262,8 @@ export async function connectIosApp(baseUrl: string | undefined, log: (m: string
 
 /** The device page's API, `window.__ss_device`. */
 interface PageDevice {
-  /** Draw a JPEG, given in base64, on the screen; resolves once the browser has drawn it. */
-  draw(jpeg: string): Promise<void>;
+  /** Draw an image of the screen, given in base64 with its media type, on the screen; resolves once the browser has drawn it. */
+  draw(image: string, type: string): Promise<void>;
   /** Where the screen is in the page, in CSS pixels. */
   box(): { x: number; y: number; width: number; height: number };
 }
@@ -282,13 +294,13 @@ function deviceDocument(title: string, screen: { width: number; height: number }
   );
 }
 
-/** Runs in the page: expose `window.__ss_device`, which draws the frames on the screen's canvas. */
+/** Runs in the page: expose `window.__ss_device`, which draws images of the screen on its canvas. */
 function installDevice(): void {
   const canvas = document.getElementById('ss-screen') as HTMLCanvasElement;
   const api: PageDevice = {
-    async draw(jpeg) {
-      const bytes = Uint8Array.from(atob(jpeg), (c) => c.charCodeAt(0));
-      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
+    async draw(image, type) {
+      const bytes = Uint8Array.from(atob(image), (c) => c.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type }));
       const w = Math.round(canvas.clientWidth * devicePixelRatio);
       const h = Math.round(canvas.clientHeight * devicePixelRatio);
       if (canvas.width !== w || canvas.height !== h) Object.assign(canvas, { width: w, height: h });
@@ -321,22 +333,82 @@ export function hasIosApp(page: Page): boolean {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** Draw `image`, of media type `type`, on the screen of the device page `page` shows; resolves once the browser has drawn it. */
+async function drawScreen(page: Page, image: Buffer, type: 'image/jpeg' | 'image/png'): Promise<void> {
+  await page.evaluate(([b64, t]) => (window as unknown as DeviceWindow).__ss_device.draw(b64, t), [image.toString('base64'), type]);
+}
+
 /**
- * Show the app `conn` connects to in `page`: write the device page, and draw the frames
- * WebDriverAgent streams of the screen as they arrive, the newest each time the page is
- * ready for one. Resolves once the page shows the first frame. The surface's `still` saves
- * the device's own screenshot. Closing it stops the frames; the connection stays open.
- *
- * The screen stops reaching the page when the stream ends or the page cannot draw a
- * frame, and `settle` throws from then on, as it does when no frame taken after it began
- * reaches the page within `frameWait` ms (default FRAME_WAIT_MS). So a capture that
- * settles the surface fails, rather than saving a screen the app has moved past.
+ * Show the app `conn` connects to in `page`: write the device page, and draw the device's
+ * screen on it. Given `stream`, as a page recorded as it changes needs, the screen is drawn
+ * from the frames WebDriverAgent streams of it (streamScreen); otherwise from the device's
+ * own screenshots, one taken now and one at each settle (screenshotScreen). Resolves once
+ * the page shows the screen. Closing the surface stops drawing the screen; the connection
+ * stays open.
  */
-export async function showIosApp(page: Page, conn: IosConnection, o: { title: string; log: (m: string) => void; frameWait?: number }): Promise<Surface> {
-  const frameWait = o.frameWait ?? FRAME_WAIT_MS;
+export async function showIosApp(page: Page, conn: IosConnection, o: { title: string; log: (m: string) => void; stream?: boolean; frameWait?: number }): Promise<Surface> {
   await page.setContent(deviceDocument(o.title, conn.screen));
   await page.evaluate(installDevice);
+  shown.set(page, { conn });
+  try {
+    return o.stream ? await streamScreen(page, conn, o.log, o.frameWait ?? FRAME_WAIT_MS) : await screenshotScreen(page, conn);
+  } catch (e) {
+    shown.delete(page);
+    throw e;
+  }
+}
 
+/**
+ * Draw the device's screen in `page` from its own screenshots: one taken now, and one at
+ * each settle, once the app has gone idle. A screenshot is taken once it is asked for, so
+ * once a step's proof is checked, a settle draws the screen as the proof found it, or
+ * later. `still` saves the screenshot the page shows. A screenshot that cannot be taken or
+ * drawn throws.
+ */
+async function screenshotScreen(page: Page, conn: IosConnection): Promise<Surface> {
+  /** Take the device's screenshot and draw it; resolves with the screenshot once it is drawn. */
+  const draw = async (): Promise<Buffer> => {
+    let png: Buffer;
+    try {
+      png = await conn.session.screenshot();
+    } catch (e) {
+      throw new Error(`ios: could not take ${conn.device}'s screenshot: ${(e as Error).message.split('\n')[0]}`);
+    }
+    try {
+      await drawScreen(page, png, 'image/png');
+    } catch (e) {
+      throw new Error(`ios: the page could not draw ${conn.device}'s screenshot: ${(e as Error).message.split('\n')[0]}`);
+    }
+    return png;
+  };
+  let drawn = await draw();
+  return {
+    async settle() {
+      // An element query waits for the app to go idle, its animations included, so the
+      // screenshot taken next shows where they end.
+      await conn.session.find('__sprintshow_settle__').catch(() => null);
+      drawn = await draw();
+    },
+    async still(file: string) {
+      writeFileSync(file, drawn);
+    },
+    async close() {
+      shown.delete(page);
+    },
+  };
+}
+
+/**
+ * Draw the device's screen in `page` from the frames WebDriverAgent streams of it, as they
+ * arrive, the newest each time the page is ready for one. Resolves once the page shows the
+ * first frame. `still` saves the device's own screenshot.
+ *
+ * The screen stops reaching the page when the stream ends or the page cannot draw a
+ * frame, and `settle` throws from then on, as it does when no frame that reaches the
+ * engine after it began is drawn within `frameWait` ms. So a recording that settles the
+ * surface fails, rather than filming on once the screen is lost.
+ */
+async function streamScreen(page: Page, conn: IosConnection, log: (m: string) => void, frameWait: number): Promise<Surface> {
   let latest: { jpeg: Buffer; at: number } | null = null;
   let shownAt = 0;
   let pumping: Promise<void> | null = null;
@@ -346,7 +418,7 @@ export async function showIosApp(page: Page, conn: IosConnection, o: { title: st
   const lose = (why: string): void => {
     if (closed || lost) return;
     lost = why;
-    o.log(`ios: ${conn.device}'s screen stopped reaching the page: ${why}`);
+    log(`ios: ${conn.device}'s screen stopped reaching the page: ${why}`);
   };
   const pump = (): void => {
     if (pumping || closed || lost) return;
@@ -354,7 +426,7 @@ export async function showIosApp(page: Page, conn: IosConnection, o: { title: st
       while (latest && !closed && !lost) {
         const frame = latest;
         latest = null;
-        await page.evaluate((b64) => (window as unknown as DeviceWindow).__ss_device.draw(b64), frame.jpeg.toString('base64'));
+        await drawScreen(page, frame.jpeg, 'image/jpeg');
         shownAt = frame.at;
       }
     })()
@@ -376,7 +448,6 @@ export async function showIosApp(page: Page, conn: IosConnection, o: { title: st
     },
     (e) => lose(e?.message ?? 'the stream ended'),
   );
-  shown.set(page, { conn });
 
   const close = async (): Promise<void> => {
     closed = true;
