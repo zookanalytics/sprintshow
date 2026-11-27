@@ -211,10 +211,11 @@ the only thing on its stdout:
 sprintshow surface demos/terminal.md    # prints {"surface":"terminal"}
 ```
 
-`"surface"` is `"page"` for a script that drives an app in a browser page, and
-`"terminal"` for one that declares `**Terminal:**`. Every surface the engine drives is a
-value of this one field. The command exits 0 when the script parses, and 1 when the file
-is missing or does not parse, with the reason on stderr and nothing on stdout.
+`"surface"` is `"page"` for a script that drives an app in a browser page, `"terminal"`
+for one that declares `**Terminal:**`, and `"ios"` for one that declares
+`**Platform:** iOS`. Every surface the engine drives is a value of this one field. The
+command exits 0 when the script parses, and 1 when the file is missing or does not parse,
+with the reason on stderr and nothing on stdout.
 
 ## Capture a screenshot
 
@@ -314,8 +315,8 @@ program holds the alternate screen, that screen.
 - `exit <op> <n>`: the exit status of the last command the shell finished compares with
   `n` (`>= > == <= <`). While a command runs, no `exit` assertion holds.
 
-A matcher is as in a page script's `text` assertion, and a `/regex/` is tested with the
-`m` flag, so `^` and `$` match at each row's start and end.
+A matcher is as in a page script's `text` assertion, and a regex is tested with the `m`
+flag added to its own, so `^` and `$` match at each row's start and end.
 
 **Captures.** `sprintshow screenshot` saves the terminal window, title bar included, with
 its rounded corners transparent, and so does each step's PNG of a run with `--screenshots`.
@@ -493,9 +494,13 @@ browser draws where keys move focus, unless the page's style hides it.
 
 **Assertions** (in `_Prove:_` / `_Fail if:_`): `visible <sel>` · `hidden <sel>` ·
 `focused <sel>` (an element the selector matches has focus) · `count <sel> <op> <n>`
-(`>= > == <= <`) · `text <sel> ~ <matcher>` · `eval <js>`. A matcher is `/regex/`,
-`"substring"`, or a bare substring. `_Prove:_` must hold (polled); `_Fail if:_` fails the
-step if it matches.
+(`>= > == <= <`) · `text <sel> ~ <matcher>` · `eval <js>`. A matcher is `/regex/flags`,
+`"substring"`, or a bare substring. The regex is JavaScript's, and the flags after it are
+any of `dgimsuvy`, or none. `/3 tasks/i` matches in any letter case. A bare matcher reads
+as a regex whenever it can, so a substring that opens with `/` is written quoted. The
+linter reports a bare matcher that opens with `/` but is not a regex, which a capture
+matches as the substring it spells, and a regex that does not compile, which matches
+nothing. `_Prove:_` must hold (polled); `_Fail if:_` fails the step if it matches.
 
 A draft in the generic `demo:capture` dialect — an `**Auth:**` line, a `## Scrutiny`
 section, and prose-only `_Prove:_`/`_Fail if:_` — parses and runs unedited (its steps record
@@ -591,6 +596,12 @@ See [`examples/agent-mcp`](examples/agent-mcp) for the MCP wiring and the manife
 ## The sample video
 
 `demos/sample.mp4` is in git-LFS, so a clone without git-lfs has a pointer file in its place.
+
+## Releases
+
+Each version from 0.1.0 on has a [GitHub release](https://github.com/zookanalytics/sprintshow/releases)
+with notes on the changes it brings. [docs/releasing.md](docs/releasing.md) says how a release
+is cut.
 
 ## License
 

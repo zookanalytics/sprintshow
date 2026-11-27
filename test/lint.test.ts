@@ -283,6 +283,49 @@ test('a terminal proof of a row or column past the screen is flagged', () => {
   assert.equal(warns.filter((f) => /names row -3/.test(f.message)).length, 0);
 });
 
+test('a matcher that opens with / is flagged when it does not read as a regex, or its regex does not compile, in a proof, a guard or a wait', () => {
+  const notRegex = (code: string, value: string): string =>
+    `\`${code}\` has a matcher that opens with \`/\` but is not a \`/regex/\` followed by flags among \`dgimsuvy\` — it is matched as the substring "${value}". Quote a substring that opens with \`/\`.`;
+  // The reason in the parentheses is the SyntaxError's, which is the JavaScript engine's wording.
+  const notCompiled = (message: string, code: string): void =>
+    assert.ok(message.startsWith(`\`${code}\` has a regex that does not compile (`) && message.endsWith(') — it never matches.'), message);
+
+  const page = messagesFor(`# Demo: X
+
+**Start:** \`/?seed=board\`
+
+## Steps
+
+1. **A regex with a flag, and a quoted substring that opens with a slash**
+   \`click #add\`
+   _Prove:_ the summary counts it — \`text #summary ~ /\\d+ DONE/i\`
+   _Fail if:_ the path shows — \`text #path ~ "/done/I"\`
+
+2. **A letter that is no flag, and a regex that does not compile**
+   \`click #add\`
+   _Prove:_ the summary counts it — \`text #summary ~ /done/I\`
+   _Fail if:_ an error shows — \`text #error ~ /(/\`
+
+3. **A flag written twice**
+   \`click #add\`
+   _Prove:_ the summary counts it — \`text #summary ~ /done/ii\`
+`);
+  const warns = (step: number): string[] => page.filter((f) => f.step === step && f.severity === 'warn').map((f) => f.message);
+  assert.deepEqual(warns(1), []);
+  assert.equal(warns(2).length, 2, warns(2).join('\n'));
+  assert.equal(warns(2)[0], notRegex('text #summary ~ /done/I', '/done/I'));
+  notCompiled(warns(2)[1], 'text #error ~ /(/');
+  assert.equal(warns(3).length, 1, warns(3).join('\n'));
+  notCompiled(warns(3)[0], 'text #summary ~ /done/ii');
+
+  const terminal = messagesFor(`# Demo: X\n\n**Terminal:**\n\n## Steps\n\n1. **A wait and a row**\n   \`run ls\`\n   \`waitForScreen /^ready$/mm\`\n   _Prove:_ the path shows — \`row 1 ~ /usr/bin\`\n   _Fail if:_ an error shows — \`screen ~ /^error/im\`\n`)
+    .filter((f) => f.step === 1)
+    .map((f) => f.message);
+  assert.equal(terminal.length, 2, terminal.join('\n'));
+  notCompiled(terminal[0], 'waitForScreen /^ready$/mm');
+  assert.equal(terminal[1], notRegex('row 1 ~ /usr/bin', '/usr/bin'));
+});
+
 test('looksLikeAssertion knows both surfaces', () => {
   assert.equal(looksLikeAssertion('screen x'), true);
   assert.equal(looksLikeAssertion('exit 0'), true);

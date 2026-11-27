@@ -302,12 +302,6 @@ const CHROME = `${OVERLAY_CHROME},${POINTER_CHROME}`;
  * visibility. The chrome's transitions are off, so neither its own, such as a card's
  * fade, nor one a page's rule forces on it, such as
  * `* { transition: all 1s !important }`, eases it out over the capture.
- *
- * The chrome stays laid out. Taken out of the layout with `display: none`, it would be
- * laid out anew once the still is done, and the browser would report the caption's text
- * as shown again. A page keeps only its first 150 such reports for an observer that
- * starts later, and the caption's and the frame marker's times are read from them
- * (overlay.ts).
  */
 const STILL_STYLE = `${CHROME}{opacity:0!important;transition:none!important}${TERMINAL_STILL_CSS}`;
 
