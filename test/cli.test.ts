@@ -2,7 +2,8 @@
 // `screenshot` read their server flags through one mapping, `--port` among them as one
 // port or a comma-separated list, and both exit 0 when the output is saved and every
 // step's proof held, 3 when it is saved but a proof failed, and 1 when nothing is saved.
-// Also, what `surface` prints and how it exits, and what `provision` takes.
+// Also, what `surface` prints and how it exits, that the help and the README name every
+// value it prints, and what `provision` takes.
 //
 // The tests that save an output need a headless Chromium and skip without one (see
 // browser-fixture.ts). `run` captures in proof mode over a stand-in ffmpeg, so no host
@@ -10,9 +11,10 @@
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { SURFACE_VOCABULARY } from '../src/demo-script.ts';
 import { launchBrowser, runCli, scratchDir, stubFfmpeg, writeFiles, REPO, type CliRun } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
@@ -121,9 +123,10 @@ describe('surface prints the surface a script drives, and nothing else, on stdou
     ['a terminal script with no size', '**Terminal:**', 'terminal'],
     ['a terminal script with a size', '**Terminal:** 80x24', 'terminal'],
     ['a script with **Terminal:** below a ## heading', '**Start:** `/`\n\n## About\n\n**Terminal:** 80x24', 'page'],
+    ['an iOS app script', '**Platform:** iOS', 'ios'],
   ] as const;
   for (const [name, head, surface] of cases) {
-    test(`${name} drives a ${surface}`, async () => {
+    test(`${name} prints ${JSON.stringify({ surface })}`, async () => {
       const { dir, cleanup } = scratchDir();
       try {
         writeFiles(dir, { 'demo.md': scriptWith(head) });
@@ -135,6 +138,20 @@ describe('surface prints the surface a script drives, and nothing else, on stdou
         cleanup();
       }
     });
+  }
+});
+
+test('the help and the README name every value surface prints', async () => {
+  const help = (await runCli(['--help'])).stdout;
+  const usage = help.slice(help.indexOf('  sprintshow surface '), help.indexOf('  sprintshow provision '));
+  const output = help.slice(help.indexOf('surface output:')).split('\n\n')[0];
+  const readme = readFileSync(path.join(REPO, 'README.md'), 'utf8');
+  const section = readme.slice(readme.indexOf('### Ask which surface a script drives')).split(/\n##+ /)[0];
+  // SURFACE_VOCABULARY's type gives it an entry for each kind surfaceOf returns.
+  for (const surface of Object.keys(SURFACE_VOCABULARY)) {
+    assert.match(usage, new RegExp(`\\b${surface}\\b`), `the help's usage line for surface names ${surface}`);
+    assert.ok(output.includes(JSON.stringify({ surface })), `the help's surface output names ${JSON.stringify({ surface })}`);
+    assert.ok(section.includes(`\`"${surface}"\``), `the README's surface section names "${surface}"`);
   }
 });
 
