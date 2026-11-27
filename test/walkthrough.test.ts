@@ -1,4 +1,5 @@
-// Tests for the walkthrough's narration timing (src/walkthrough.ts).
+// Tests for the walkthrough (src/walkthrough.ts): its narration timing, and what it closes
+// when it throws.
 //
 // The narration track is laid on the recording's own timeline. The recording starts with
 // the first frame the page sends, which can come well after the page opens. A segment
@@ -21,24 +22,41 @@
 // at once comes before the closing card, so a slot held longer than its step would show
 // as a late closing clip.
 //
-// The browser-backed tests need a headless Chromium and a real ffmpeg, and skip without
-// them (see browser-fixture.ts and assemble.test.ts).
+// A walkthrough that throws once its browser is up closes what it opened, and rejects:
+// when its recorded context or that context's page cannot be made, when its pointer cannot
+// be installed, and when its start page fails to load. One given no browser closes the one
+// it launched, and one given a browser closes the context it opened there and leaves the
+// browser open. `sprintshow run` then exits 1 and saves no video.
+//
+// The browser-backed tests need a headless Chromium, and skip without one. Those that run
+// in this process need a real ffmpeg as well, and skip without it, while `sprintshow run`
+// is given a stand-in (see browser-fixture.ts and assemble.test.ts).
 
-import { test, after } from 'node:test';
+import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { chromium, type Browser } from 'playwright';
 
+import { parseDemoScript } from '../src/demo-script.ts';
 import { captureWalkthrough, narrationSlots, watchRecording } from '../src/walkthrough.ts';
 import { ffmpegBin, probeDuration } from '../src/ffmpeg.ts';
-import { VIEWPORT } from '../src/browser.ts';
-import { launchBrowser, scratchDir, patchLuma, firstFrame } from './browser-fixture.ts';
+import { VIEWPORT, chromiumLaunchArgs } from '../src/browser.ts';
+import { launchBrowser, scratchDir, patchLuma, firstFrame, runCli, stubFfmpeg, writeFiles } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
 after(() => browser?.close());
+
+// An origin whose server drops each connection it takes, so a page asked for there fails
+// to load. It starts before any test is declared, as the browser does, since with a name
+// pattern and --test-force-exit the runner cancels a test declared after a top-level await.
+const dropper = createServer().on('connection', (socket) => socket.destroy());
+await new Promise<void>((resolve) => dropper.listen(0, '127.0.0.1', resolve));
+after(() => dropper.close());
+const DROPPED = `http://127.0.0.1:${(dropper.address() as AddressInfo).port}`;
 
 const needsFfmpeg = ffmpegBin() ? false : "ffmpeg un-provisioned (npm ≥12 blocks ffmpeg-static's install script) — `npm run provision:ffmpeg`";
 
@@ -237,6 +255,103 @@ test('a narrated walkthrough voices each segment when it shows in the recording,
     else process.env.OPENAI_API_KEY = realKey;
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    cleanup();
+  }
+});
+
+const ONE_STEP = `# Demo: Teardown
+
+**Start:** \`/\`
+
+## Steps
+
+1. **The page is up**
+   _Prove:_ the page shows — \`visible body\`
+`;
+
+/** A call of a walkthrough's setup: making its recorded context, that context's page, or the init script that installs its pointer. */
+type SetupCall = 'newContext' | 'newPage' | 'addInitScript';
+
+/** Make `browser` reject `call` when a walkthrough's setup makes it, with an error named for the call. */
+function failSetup(browser: Browser, call: SetupCall): void {
+  const refused = (): never => {
+    throw new Error(`${call} refused by the test`);
+  };
+  const newContext = browser.newContext.bind(browser);
+  browser.newContext = async (options) => {
+    if (call === 'newContext') refused();
+    const context = await newContext(options);
+    const newPage = context.newPage.bind(context);
+    context.newPage = async () => {
+      if (call === 'newPage') refused();
+      const page = await newPage();
+      page.addInitScript = async () => refused();
+      return page;
+    };
+    return context;
+  };
+}
+
+// Each point past its browser's launch at which a walkthrough is made to throw, and the
+// message of the error it throws there.
+const THROWS: { what: string; call: SetupCall | null; error: RegExp }[] = [
+  { what: 'its recorded context cannot be made', call: 'newContext', error: /^newContext refused by the test$/ },
+  { what: "that context's page cannot be made", call: 'newPage', error: /^newPage refused by the test$/ },
+  { what: 'its pointer cannot be installed', call: 'addInitScript', error: /^addInitScript refused by the test$/ },
+  { what: 'its start page fails to load', call: null, error: /page\.goto: net::ERR_/ },
+];
+
+describe('a walkthrough that throws once its browser is up closes what it opened', { skip: skip || needsFfmpeg }, () => {
+  for (const { what, call, error } of THROWS) {
+    test(`given no browser, it closes the one it launched, and rejects, when ${what}`, async () => {
+      const { dir, cleanup } = scratchDir();
+      const launch = chromium.launch;
+      let launched: Browser | undefined;
+      chromium.launch = async (options) => {
+        launched = await launch.call(chromium, options);
+        if (call) failSetup(launched, call);
+        return launched;
+      };
+      try {
+        const walk = captureWalkthrough({ baseUrl: DROPPED, demo: parseDemoScript(ONE_STEP), outputPath: path.join(dir, 'walk.mp4'), noNarrate: true, captureRoot: dir, log: () => {} });
+        await assert.rejects(walk, { message: error });
+        assert.ok(launched, 'the walkthrough launched a browser');
+        assert.equal(launched.isConnected(), false, 'the walkthrough closed the browser it launched');
+      } finally {
+        chromium.launch = launch;
+        await launched?.close();
+        cleanup();
+      }
+    });
+
+    test(`given a browser, it closes the context it opened there, leaves the browser open, and rejects, when ${what}`, async () => {
+      const { dir, cleanup } = scratchDir();
+      const given = await chromium.launch({ headless: true, args: chromiumLaunchArgs() });
+      try {
+        if (call) failSetup(given, call);
+        const walk = captureWalkthrough({ browser: given, baseUrl: DROPPED, demo: parseDemoScript(ONE_STEP), outputPath: path.join(dir, 'walk.mp4'), noNarrate: true, captureRoot: dir, log: () => {} });
+        await assert.rejects(walk, { message: error });
+        assert.equal(given.isConnected(), true, 'the walkthrough leaves open the browser it was given');
+        // A count, since a failing deepEqual would inspect each context Playwright still holds, which takes minutes.
+        assert.equal(given.contexts().length, 0, 'the walkthrough closed the context it opened');
+      } finally {
+        await given.close();
+        cleanup();
+      }
+    });
+  }
+});
+
+test('`sprintshow run` exits 1, and saves no video, when its walkthrough throws once its browser is up', { skip, timeout: 120_000 }, async () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    writeFiles(dir, { 'demo.md': ONE_STEP });
+    const env = { ...process.env, FFMPEG_BIN: stubFfmpeg(dir), OPENAI_API_KEY: '' };
+    const res = await runCli(['run', 'demo.md', '--base-url', DROPPED, '--no-narrate', '-o', 'walk.mp4'], { cwd: dir, env, timeout: 90_000 });
+    assert.equal(res.code, 1, res.code === null ? 'the run was still going 90 s after it started' : `${res.stdout}${res.stderr}`);
+    assert.match(res.stderr, /page\.goto: net::ERR_/);
+    assert.equal(existsSync(path.join(dir, 'walk.mp4')), false, 'the run saved no video');
+  } finally {
     cleanup();
   }
 });

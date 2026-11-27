@@ -96,11 +96,14 @@ export interface CliRun {
 /**
  * Run `sprintshow <args>` from the source tree, the way `node src/cli.ts` runs it, or as
  * the last arguments of the command `prefix` names, such as `sandbox-exec -p <profile>`.
+ * A run still going `timeout` ms after it started is killed, and resolves with a null code.
  */
-export function runCli(args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; prefix?: string[] } = {}): Promise<CliRun> {
+export function runCli(args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; prefix?: string[]; timeout?: number } = {}): Promise<CliRun> {
   return new Promise((resolve, reject) => {
     const [command, ...rest] = [...(opts.prefix ?? []), process.execPath, CLI, ...args];
-    const child = spawn(command, rest, { cwd: opts.cwd ?? REPO, env: opts.env ?? process.env });
+    // SIGKILL, since on SIGTERM Playwright closes the run's browsers, and a run held open by
+    // one would then exit with the code it had set, as if it had ended on its own.
+    const child = spawn(command, rest, { cwd: opts.cwd ?? REPO, env: opts.env ?? process.env, timeout: opts.timeout, killSignal: 'SIGKILL' });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => (stdout += d));
