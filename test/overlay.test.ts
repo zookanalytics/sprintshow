@@ -6,6 +6,11 @@
 // caption replaces it, its failed state included. What a walkthrough's video shows of a
 // step that moves to another page is pinned in run.test.ts.
 //
+// A card fades in and out over the transition it declares, on a page that does nothing
+// to compute the card's style before the browser draws it. The recording of such a page
+// holds a frame of the card partly faded before the first frame that shows it whole, and
+// another after the last.
+//
 // The chrome shows above what the app opens in the browser's top layer, which is drawn
 // above every z-index. A walkthrough's video shows its caption, uncovered and unfogged, in
 // every frame in which a step has left a popover or a modal dialog open, and its closing
@@ -29,14 +34,14 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { keepCaption, showCaption, removeCaption } from '../src/overlay.ts';
+import { coverInnerHtml, keepCaption, markFrame, showCaption, removeCaption, showCardOverlay } from '../src/overlay.ts';
 import { VIEWPORT, glideTo, installPointer, runStep } from '../src/browser.ts';
 import { parseDemoScript } from '../src/demo-script.ts';
-import { captureWalkthrough } from '../src/walkthrough.ts';
+import { captureWalkthrough, watchRecording } from '../src/walkthrough.ts';
 import { captureProof } from '../src/capture.ts';
 import { stepFileName } from '../src/screenshot.ts';
 import { ffmpegBin } from '../src/ffmpeg.ts';
-import { launchBrowser, serveSite, scratchDir, patchLuma, pngPixels, rgba } from './browser-fixture.ts';
+import { launchBrowser, serveSite, scratchDir, patchLuma, firstFrame, pngPixels, rgba } from './browser-fixture.ts';
 
 const { browser, skip } = await launchBrowser();
 after(() => browser?.close());
@@ -75,6 +80,47 @@ test('a kept caption is drawn again in each document the page loads, in its top 
   } finally {
     await page.close();
     await site.close();
+  }
+});
+
+test('a card fades in and out over the transition it declares, so the recording shows it partly faded as it comes and as it goes', { skip: skip || needsFfmpeg }, async () => {
+  const { dir, cleanup } = scratchDir();
+  const context = await browser!.newContext({ viewport: VIEWPORT, recordVideo: { dir, size: VIEWPORT } });
+  try {
+    const page = await context.newPage();
+    const recording = await watchRecording(page);
+    await page.setContent('<!doctype html><body style="margin:0;background:#fff"></body>');
+    // The card goes over a page the browser has drawn, as a walkthrough's cover does.
+    await page.waitForTimeout(600);
+    await showCardOverlay(page, coverInnerHtml('SprintShow', 'A card', '', '1 step'), 1000);
+    // The page draws nothing once the card has gone, and the frames that show it again can
+    // reach the recording after the context closes, or never. So frames that show nothing
+    // new are drawn until one drawn after the first reaches it, as screenshotStep does
+    // after a still (src/walkthrough.ts).
+    const shown = (await markFrame(page)) ?? Date.now();
+    for (let tries = 0; tries < 8 && recording.firstFrom(shown) === null; tries++) {
+      await markFrame(page);
+      await page.waitForTimeout(250);
+    }
+    assert.ok(recording.firstFrom(shown) !== null, 'a frame drawn after the card has gone reaches the recording');
+    const video = page.video();
+    assert.ok(video, 'the context records the page');
+    await context.close();
+
+    // The page is white and the card is the engine's dark background. The patch sits in the
+    // card's margin, where its text does not reach, so it shows the page, the card, or the
+    // card part of the way through a fade over the page. A page that draws nothing new
+    // before the card can send the recording no frame, which then opens as the card fades in.
+    const frames = patchLuma(await video.path(), 40, 40);
+    const seen = frames.map((f) => `${f.t}s ${f.luma}`).join(', ');
+    const whole = firstFrame(frames, 0, (l) => l < 45, `the card whole (${seen})`);
+    const gone = firstFrame(frames, whole, (l) => l > 220, `the page once the card has gone (${seen})`);
+    const partly = (l: number): boolean => l > 60 && l < 200;
+    assert.ok(frames.some((f) => f.t < whole && partly(f.luma)), `a frame before the card shows whole, at ${whole}s, shows it partly faded in (${seen})`);
+    assert.ok(frames.some((f) => f.t > whole && f.t < gone && partly(f.luma)), `a frame before the page shows again, at ${gone}s, shows the card partly faded out (${seen})`);
+  } finally {
+    await context.close();
+    cleanup();
   }
 });
 
