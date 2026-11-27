@@ -391,7 +391,7 @@ Appium, the tools it runs, `simctl`, `xcodebuild`, or the command `--serve` star
 
 **Ports.** A run drives the app through servers on the loopback interface: Appium's server,
 WebDriverAgent's server, which Appium launches on the device to take its commands, and
-WebDriverAgent's stream of the screen's frames, which the videos are drawn from. Each listens
+WebDriverAgent's stream of the screen's frames, which a walkthrough is drawn from. Each listens
 on a free port the system assigns, unless `--port` names a port for each, in that order:
 
 ```bash
@@ -431,14 +431,19 @@ button's label is its title, and its value is any state the app gives it, as the
 tasks give `done` or `to do`. A text field's value is what it holds. `focused` and `eval`
 are a page's.
 
-**Captures.** The videos show the device's screen, drawn from the frames Appium streams of
-it, on a dark backdrop above the caption bar, and a touch glides to where each step taps.
-Each step's PNG, and `sprintshow screenshot`'s, is the device's own screenshot: its whole
-screen at its own scale, status bar included, with nothing of the engine's on it. So
-`--full-page`, `--selector`, `--scale` and `--transparent` are refused for one. A
-walkthrough connects to the app before it starts recording, which takes Appium a few seconds
-to tens of seconds, so the video opens on the cover.
-`specs/ss-rmvnx/design.md` records why the surface is built this way.
+**Captures.** The videos show the device's screen on a dark backdrop above the caption bar.
+A proof video's frame of each step is the device's own screenshot, taken once the step's
+proof is checked, so it shows the screen as the proof found it, or later. A walkthrough is
+drawn from the frames Appium streams of the screen, and a touch glides to where each step
+taps. Under load on the host a frame can reach sprintshow seconds after it was taken, so a
+walkthrough can show a step's end late. Each step's PNG, and `sprintshow screenshot`'s, is
+the device's own screenshot, in a proof run the one the step's frame shows: its whole screen
+at its own scale, status bar included, with nothing of the engine's on it. So `--full-page`,
+`--selector`, `--scale` and `--transparent` are refused for one. A walkthrough connects to
+the app before it starts recording, which takes Appium a few seconds to tens of seconds, so
+the video opens on the cover.
+`specs/ss-rmvnx/design.md` records why the surface is built this way, and
+`specs/ss-f5wor/stale-proof-frame.md` why a proof's frames are the device's screenshots.
 
 ## Exit codes
 
@@ -581,7 +586,9 @@ each of its servers as its `port`, as `--port` names them.
 `openSurface` brings up what any script drives: the app at its start path, the engine's
 terminal and its shell, or an iOS app, connected through Appium and shown in the page.
 `connectSurface` connects first and shows the surface later, as the walkthrough does to
-connect to an iOS app before it starts recording.
+connect to an iOS app before it starts recording. A driver that records the page as it
+changes, as the walkthrough does, passes `recorded`, so an iOS app's screen is drawn from
+the frames Appium streams of it. Otherwise each `settle` draws the device's own screenshot.
 
 ## The agent / MCP path
 
