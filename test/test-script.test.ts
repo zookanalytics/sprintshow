@@ -4,10 +4,10 @@
 // --test-force-exit ends the file but not the child, so this test kills the children its
 // fixtures start.
 //
-// Node 22 holds each test file to the limit, so a test's own longer `timeout` does not
-// lift it there. Node 24 and 26 hold each test and each hook to it, and count no time a
-// test spends blocked in a synchronous call such as execFileSync. So the limit has to
-// clear the slowest test file on a busy host, not only the slowest test.
+// Node 22 holds each test file to the limit, and a test's own longer `timeout` does not
+// lift it there, so the limit has to clear the slowest test file on a busy host, not only
+// the slowest test. Node 24 and 26 hold each test and each hook to it instead, and cannot
+// end a test while it is blocked in a synchronous call such as execFileSync.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -90,8 +90,12 @@ test('the test script fails a test that never settles at its --test-timeout, and
   t.after(() => {
     for (const file of pidFiles) {
       if (!existsSync(file)) continue;
+      // A file whose write was cut off reads as pid 0, and killing pid 0 signals this
+      // test's whole process group.
+      const pid = Number(readFileSync(file, 'utf8'));
+      if (!(pid > 0)) continue;
       try {
-        process.kill(Number(readFileSync(file, 'utf8')));
+        process.kill(pid);
       } catch {
         // The child has already exited.
       }
