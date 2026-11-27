@@ -153,7 +153,7 @@ test("a walkthrough's caption shows above the popover and the modal dialog a ste
   const { dir, cleanup } = scratchDir();
   try {
     const video = path.join(dir, 'walk.mp4');
-    const result = await captureWalkthrough({ browser: browser!, baseUrl: site.baseUrl, demo: TOP_LAYER_SCRIPT, outputPath: video, noNarrate: true, captureRoot: dir, log: () => {} });
+    const result = await captureWalkthrough({ browser: browser!, baseUrl: site.baseUrl, demo: parseDemoScript(TOP_LAYER_SCRIPT), outputPath: video, noNarrate: true, captureRoot: dir, log: () => {} });
     assert.equal(result.failures, 0, 'every step held, Undo under the caption bar among them');
 
     const [toast, drawer, page, barUnder, barBeside] = [AT.toast, AT.drawer, AT.page, AT.barUnder, AT.barBeside].map(({ x, y }) => patchLuma(video, x, y));
@@ -189,9 +189,10 @@ test("a proof video's frame of a step shows the caption above the popover or the
   const { dir, cleanup } = scratchDir();
   const tab = await browser!.newPage({ viewport: VIEWPORT });
   try {
-    const result = await captureProof({ page: tab, baseUrl: site.baseUrl, demo: TOP_LAYER_SCRIPT, outputPath: path.join(dir, 'proof.mp4'), noNarrate: true, keep: true, captureRoot: dir, log: () => {} });
+    const demo = parseDemoScript(TOP_LAYER_SCRIPT);
+    const result = await captureProof({ page: tab, baseUrl: site.baseUrl, demo, outputPath: path.join(dir, 'proof.mp4'), noNarrate: true, keep: true, captureRoot: dir, log: () => {} });
     assert.equal(result.failures, 0);
-    const { steps } = parseDemoScript(TOP_LAYER_SCRIPT);
+    const { steps } = demo;
     const points = [AT.toast, AT.drawer, AT.page, AT.barUnder, AT.barBeside];
     const frame = async (i: number): Promise<Record<keyof typeof AT, number>> => {
       const px = await pngPixels(path.join(result.capturesDir as string, stepFileName(steps[i], steps.length)), points);
