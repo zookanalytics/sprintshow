@@ -14,6 +14,9 @@ permissions:
 
 jobs:
   check:
+    # Long enough for the job and a test that runs to the test script's --test-timeout,
+    # so npm test reports a test that never settles before this ends the job.
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -45,6 +48,7 @@ jobs:
   # Every step after the install runs in that project, where npx reaches the installed
   # copy's bin.
   installed-package:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     env:
       # npx installs nothing the project lacks, so each npx command below runs the copy
