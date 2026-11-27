@@ -45,7 +45,8 @@ run options:
   --serve-dir <dir>           Serve a static directory with the built-in file server.
   --port <n>[,<n>...]         The loopback port of each server the run starts. A page
                               script's run starts one: --serve's (default 5173) or
-                              --serve-dir's (default: a free port the system assigns).
+                              --serve-dir's (default: a free port the system assigns),
+                              which refuses a port something already answers on.
                               For an iOS app script, a port for each of Appium's
                               server, WebDriverAgent's and its stream of the screen's
                               frames, in that order (default: free ports the system

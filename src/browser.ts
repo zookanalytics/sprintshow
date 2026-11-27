@@ -339,7 +339,10 @@ export async function runStep(page: Page, base: string, step: DemoStep, total: n
 
 /** What a capture drives a demo's steps against, once it is up in a page. */
 export interface Surface {
-  /** Wait until the surface shows everything it has been sent, so a frame taken now shows it. */
+  /**
+   * Wait until the surface shows everything it has been sent, so a frame taken now shows
+   * it. A recorded iOS app's can fall short of that under load on the host (ios.ts).
+   */
   settle(): Promise<void>;
   /**
    * Save the state the surface shows now as the PNG `file`, for a surface that takes its
@@ -347,7 +350,7 @@ export interface Surface {
    * screenshot. Absent on a page or a terminal, whose stills the page gives.
    */
   still?(file: string): Promise<void>;
-  /** Release what the surface holds: a terminal's shell is ended, a shown iOS app's frames stop, and a page holds nothing. */
+  /** Release what the surface holds: a terminal's shell is ended, a shown iOS app's screen is no longer drawn, and a page holds nothing. */
   close(): Promise<void>;
 }
 
@@ -373,6 +376,13 @@ export interface OpenSurfaceOptions {
   port?: number | readonly number[];
   /** Frame a terminal or an iOS app on a backdrop above the caption band, as the videos show it. A still leaves it off. */
   backdrop?: boolean;
+  /**
+   * Whether the page is recorded as it changes, as a walkthrough records it, rather than
+   * captured only once a step has settled. An iOS app's screen is then drawn from the
+   * frames WebDriverAgent streams of it, and otherwise from the device's own screenshot
+   * that each settle takes (ios.ts). A page or a terminal is shown the same either way.
+   */
+  recorded?: boolean;
   log?: (m: string) => void;
 }
 
@@ -388,7 +398,7 @@ export async function connectSurface(demo: Demo, opts: Omit<OpenSurfaceOptions, 
   if (surfaceOf(demo) === 'ios') {
     const conn = await connectIosApp(opts.baseUrl, log, opts.port);
     const show = async (page: Page): Promise<Surface> => {
-      const surface = await showIosApp(page, conn, { title: demo.title, log });
+      const surface = await showIosApp(page, conn, { title: demo.title, log, stream: Boolean(opts.recorded) });
       // The device page is written in place, which runs no init script, so a page that
       // shows the pointer gets it here.
       try {

@@ -6,8 +6,11 @@
 //                tear it down on exit (the generalization of a pinned `npm run dev`);
 //   • serve-dir  serve a static directory with a built-in file server, so a demo of a
 //                plain static app — and this package's own sample — runs with no external
-//                process at all. It listens on a free port unless one is named, so
-//                captures running side by side on one host each get their own server.
+//                process at all. It listens on the loopback interface only, so no other
+//                host can fetch what it serves. It listens on a free port unless one is
+//                named, so captures running side by side on one host each get their own
+//                server. It refuses a named port that something already answers on,
+//                whose loopback connections it would otherwise take.
 //
 // The start URL in the demo script is always just a path (+ query); the origin comes
 // from whichever of these is in effect.
@@ -36,11 +39,19 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
 
+import { portAnswers } from './appium.ts';
 import { iosPorts } from './ios.ts';
 import { findSimulatorUrl, isSimulatorUrl, parseSimulatorUrl, simulatorUrl, toolEnv, SIMULATOR_URL_FORM } from './simulator.ts';
 
 /** The port a `serve` command is polled on when no port is named. */
 export const DEFAULT_PORT = 5173;
+
+/**
+ * The address the built-in static server listens on, and the host its base URL names.
+ * `localhost` can name ::1 first, where another process can listen on the same port, so
+ * the URL names this address and the browser reaches this server.
+ */
+const LOOPBACK = '127.0.0.1';
 
 export interface ServeOptions {
   /** Reuse a running server at this origin, or an iOS app at this simulator URL; nothing is spawned or torn down. */
@@ -159,7 +170,8 @@ function pagePort(port: ServeOptions['port']): number | undefined {
 /**
  * Bring up the server the demo runs against and return a handle. Throws when none of
  * base-url / serve / serve-dir is given, since the driver has nowhere to point, and
- * when the port named is not one a server can listen on, or is more than one.
+ * when the port named is not one a server can listen on, or is more than one, or is one
+ * that something already answers on for serve-dir.
  */
 export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -178,18 +190,31 @@ export async function ensureServer(opts: ServeOptions): Promise<ServerHandle> {
   }
 
   if (opts.serveDir) {
+    if (port !== undefined) {
+      // On macOS a listen on the loopback address succeeds beside a server on every
+      // interface of the same port, and takes that server's loopback connections, so only
+      // a connection shows that the port is taken. The system assigns no port that such a
+      // server holds.
+      let answers: boolean;
+      try {
+        answers = await portAnswers(port);
+      } catch (e) {
+        throw new Error(`server: cannot serve ${opts.serveDir}: port ${port}, which --port names, cannot be reached: ${(e as Error).message}`);
+      }
+      if (answers) throw new Error(`server: cannot serve ${opts.serveDir}: something already answers on port ${port}, which --port names; name a port nothing listens on`);
+    }
     const server = staticServer(opts.serveDir);
-    // Port 0 asks the system for a free one. A named port that is taken rejects the
-    // start, instead of raising an 'error' event nothing handles.
+    // Port 0 asks the system for a free one. A listen that fails rejects the start,
+    // instead of raising an 'error' event nothing handles.
     await new Promise<void>((resolve, reject) => {
       const fail = (e: Error): void => reject(new Error(`server: cannot serve ${opts.serveDir}: ${e.message}`));
       server.once('error', fail);
-      server.listen(port ?? 0, () => {
+      server.listen(port ?? 0, LOOPBACK, () => {
         server.off('error', fail);
         resolve();
       });
     });
-    const baseUrl = `http://localhost:${(server.address() as AddressInfo).port}`;
+    const baseUrl = `http://${LOOPBACK}:${(server.address() as AddressInfo).port}`;
     log(`server: serving ${path.resolve(opts.serveDir)} at ${baseUrl}`);
     return { baseUrl, stop: () => new Promise<void>((resolve) => server.close(() => resolve())) };
   }
