@@ -104,13 +104,19 @@ export function lastViewport(demo: Demo): ViewportSize {
   return viewportSizes(demo).at(-1) as ViewportSize;
 }
 
-/** Init script (re-run on every navigation) that installs the pointer and its `window.__ss` API. */
+/**
+ * Init script (re-run on every navigation) that installs the pointer's `window.__ss` API in
+ * the top frame. The pointer is drawn by its first move, so a page that no step points at
+ * shows none. An init script runs in each child frame too, where nothing moves a pointer,
+ * so a child frame gets neither the API nor a pointer.
+ */
 const POINTER_INIT = `(() => {
-  if (window.__ss_installed) return; window.__ss_installed = true;
+  if (window.top !== window || window.__ss_installed) return; window.__ss_installed = true;
   const chrome = ${chromeLayer};
-  const build = () => {
-    if (!document.body || document.getElementById('__ss_pointer__')) return;
+  const sheet = () => {
+    if (document.getElementById('__ss_pointer_style__')) return;
     const style = document.createElement('style');
+    style.id = '__ss_pointer_style__';
     style.textContent =
       '#__ss_pointer__{position:fixed;z-index:2147483646;width:24px;height:24px;margin:-3px 0 0 -3px;' +
       'pointer-events:none;left:50%;top:45%;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45));' +
@@ -119,17 +125,22 @@ const POINTER_INIT = `(() => {
       'pointer-events:none;background:rgba(106,208,138,.55);animation:__ss_r .55s ease-out forwards}' +
       '@keyframes __ss_r{from{transform:scale(.3);opacity:.9}to{transform:scale(3.6);opacity:0}}';
     document.head.appendChild(style);
+  };
+  const build = () => {
+    if (document.getElementById('__ss_pointer__')) return;
+    sheet();
     const p = document.createElement('div');
     p.id = '__ss_pointer__';
     p.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none">' +
       '<path d="M3 2l7 18 2.9-7.4L20 9.7 3 2z" fill="#fff" stroke="#111" stroke-width="1.3" stroke-linejoin="round"/></svg>';
     chrome().appendChild(p);
+    // Its style is computed here, at its start, so that its first move glides from there.
+    getComputedStyle(p).left;
   };
   window.__ss = {
-    moveTo(x, y) { build(); const el = document.getElementById('__ss_pointer__'); if (el) { el.style.left = x + 'px'; el.style.top = y + 'px'; } },
-    ripple(x, y) { build(); const r = document.createElement('div'); r.className = '__ss_ripple__'; r.style.left = x + 'px'; r.style.top = y + 'px'; chrome().appendChild(r); setTimeout(() => r.remove(), 560); },
+    moveTo(x, y) { if (!document.body) return; build(); const el = document.getElementById('__ss_pointer__'); el.style.left = x + 'px'; el.style.top = y + 'px'; },
+    ripple(x, y) { if (!document.body) return; sheet(); const r = document.createElement('div'); r.className = '__ss_ripple__'; r.style.left = x + 'px'; r.style.top = y + 'px'; chrome().appendChild(r); setTimeout(() => r.remove(), 560); },
   };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build); else build();
 })()`;
 
 /** The elements the pointer draws in a page: the pointer and its ripples. */
@@ -415,7 +426,7 @@ export async function connectSurface(demo: Demo, opts: Omit<OpenSurfaceOptions, 
     const show = async (page: Page): Promise<Surface> => {
       const surface = await showIosApp(page, conn, { title: demo.title, log, stream: Boolean(opts.recorded) });
       // The device page is written in place, which runs no init script, so a page that
-      // shows the pointer gets it here.
+      // shows the pointer gets its API here.
       try {
         if (pointed.has(page)) await page.evaluate(POINTER_INIT);
       } catch (e) {

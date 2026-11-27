@@ -40,6 +40,6 @@ focus is, and each step checks it against the live page.
 
 ## Scrutiny
 
-- The focus ring is the page's own, and the pointer never moves: every step is a key press.
+- The focus ring is the page's own, and no pointer is drawn: every step is a key press.
 - Escape hands focus back to the button that opened the dialog, so the keyboard user is not stranded.
 - Each proof reads focus or the board from the live page, not from the captions.

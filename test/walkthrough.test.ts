@@ -124,8 +124,9 @@ test('the recording starts at its first frame and holds a frame every 40 ms, and
 // The page answers DRAW_MS after it is asked for, and its image LOAD_MS after that. Once it
 // has loaded, the first two things added anywhere in it, the cover and the caption bar,
 // each keep it busy for BUSY_MS, so the browser draws each that long after the page added
-// it. The engine adds both to its chrome's layer (chromeLayer in src/overlay.ts), which the
-// walkthrough's pointer has put in the page before it loads.
+// it. The engine adds both to its chrome's layer (chromeLayer in src/overlay.ts), so the
+// page watches its whole body. The cover's draw adds that layer to the body in the same
+// task, so the page's observer hears of the two in one call.
 const DRAW_MS = 1000;
 const LOAD_MS = 1500;
 const BUSY_MS = 1000;
