@@ -3,8 +3,9 @@
 // step runner the page captures use.
 //
 // They pin what a proof reads: `run` waits for its command and reports its exit status,
-// no `exit` assertion holds while a command runs, the screen joins a row the terminal
-// wrapped, and rows and the cursor count from the top or the bottom. A `run` whose wait
+// no `exit` assertion holds while a command runs, marks that a command's output carries
+// neither end its `run` nor set its status, the screen joins a row the terminal wrapped,
+// and rows and the cursor count from the top or the bottom. A `run` whose wait
 // runs out names `press` and `waitForScreen`, which drive a program that waits for input
 // on the normal screen. They pin that xterm
 // encodes each key for the terminal's cursor-key mode, that a full-screen program's
@@ -227,6 +228,27 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
         await runAction(page, '', { verb: 'press', target: '"sleep 1" Enter', keys: [{ text: 'sleep 1' }, { key: 'Enter' }], raw: 'press "sleep 1" Enter' }, false, quiet);
         assert.equal(await checkAssertion(page, exitZero), false, 'the sleep is still running');
         assert.equal(await awaitAssertion(page, exitZero, ACTION_TIMEOUT), true, 'the sleep finished with status 0');
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("marks that a command's output carries, a saved session's or another session's, neither end its run nor set its status", async () => {
+    const md = `# Demo: Saved session\n\n**Terminal:** 60x12\n\n## Steps\n\n1. **s**\n   \`run true\`\n`;
+    const { dir, cleanup } = scratchDir();
+    try {
+      // A finished command and the prompt after it, as a shell that writes semantic-prompt
+      // marks writes them, and as another session of the engine's writes them.
+      const marks = (end: string): string => `\x1b]133;D;0${end}\x07\x1b]133;A${end}\x07\x1b]133;B${end}\x07`;
+      writeFiles(dir, { 'saved.txt': `early\n${marks('')}${marks(';ss=0123456789abcdef')}\n` });
+      await withTerminal(md, dir, async (page) => {
+        const command = 'cat saved.txt; sleep 1; echo late; false';
+        const lines: string[] = [];
+        await terminalRun(page, command, { typeDelay: 0, promptTimeout: ACTION_TIMEOUT, commandTimeout: COMMAND_TIMEOUT, pause: 0 }, (m) => lines.push(m));
+        assert.deepEqual(lines, [`  · \`${command}\` exited 1`]);
+        assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^late$/')), true, 'the run waited for the command to finish');
+        assert.equal(await checkAssertion(page, parseAssertionFor('exit == 1')), true);
       });
     } finally {
       cleanup();
@@ -777,7 +799,7 @@ test('a capture whose shell cannot start fails with a reason and saves nothing',
 });
 
 test("the shell inherits the engine's environment less the Vercel bypass key and what describes another terminal, and keeps OPENAI_API_KEY", () => {
-  const env = shellEnv({ PATH: '/usr/bin:/bin', HOME: '/home/demo', OPENAI_API_KEY: 'openai-key', [VERCEL_BYPASS_VAR]: 'bypass-key', TMUX: '/tmp/tmux-1/default,1,0', COLUMNS: '200' });
+  const env = shellEnv('0123456789abcdef', { PATH: '/usr/bin:/bin', HOME: '/home/demo', OPENAI_API_KEY: 'openai-key', [VERCEL_BYPASS_VAR]: 'bypass-key', TMUX: '/tmp/tmux-1/default,1,0', COLUMNS: '200' });
   assert.equal(VERCEL_BYPASS_VAR in env, false);
   assert.equal(Object.values(env).includes('bypass-key'), false, 'no variable carries the bypass key');
   assert.equal(env.OPENAI_API_KEY, 'openai-key');

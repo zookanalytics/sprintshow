@@ -12,11 +12,14 @@
 // The shell's prompt carries semantic-prompt marks (OSC 133). xterm hands each one to a
 // handler registered here, so the page knows when a prompt shows and the exit status of
 // the command that finished before it. `run` waits on the prompt, and an `exit`
-// assertion reads the status.
+// assertion reads the status. Each mark the prompt writes ends with a token drawn for the
+// session, and the handler counts no other mark, so marks that the commands' output
+// carries, such as a saved session's, change nothing.
 //
 // specs/ss-71qt/design.md records why the surface is built this way.
 
 import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -34,10 +37,13 @@ export const TERMINAL_WINDOW = '#ss-window';
 
 /**
  * The shell's prompt: `$ `, behind the marks that report the last command's exit status
- * (D), and where the prompt starts (A) and ends (B). `\[ \]` tells bash the marks take no
- * room on the line.
+ * (D), and where the prompt starts (A) and ends (B), each ending with the session's
+ * `token`. `\[ \]` tells bash the marks take no room on the line.
  */
-const PROMPT = '\\[\\e]133;D;$?\\a\\e]133;A\\a\\]$ \\[\\e]133;B\\a\\]';
+function prompt(token: string): string {
+  const mark = (fields: string): string => `\\e]133;${fields};ss=${token}\\a`;
+  return `\\[${mark('D;$?')}${mark('A')}\\]$ \\[${mark('B')}\\]`;
+}
 
 /** Variables that describe the terminal the engine runs in, which the shell's programs must not take for theirs. */
 const FOREIGN_TERMINAL_VARS = [
@@ -222,13 +228,16 @@ interface InstallOptions {
   scrollback: number;
   theme: Record<string, string>;
   inputBinding: string;
+  /** The session's token, which ends each mark the prompt writes. */
+  token: string;
 }
 
 /**
  * Runs in the page: create the terminal, fit its font to the stage, keep the state the
- * prompt's marks report, and expose `window.__ss_term`. Returns whether the window fits
- * the stage, which it does at some font size for every size the parser accepts at the
- * drivers' viewport.
+ * prompt's marks report, and expose `window.__ss_term`. A mark that does not end with the
+ * session's token is not the prompt's, and changes nothing. Returns whether the window
+ * fits the stage, which it does at some font size for every size the parser accepts at
+ * the drivers' viewport.
  *
  * A screen is what the terminal displays now: the last `rows` lines of the buffer on the
  * normal screen, or the alternate screen while a full-screen program holds it.
@@ -254,7 +263,9 @@ function installTerminal(o: InstallOptions): boolean {
 
   const st = { prompts: 0, submitted: false, status: null as number | null, ended: false };
   term.parser.registerOscHandler(133, (data: string) => {
-    const [mark, arg] = data.split(';');
+    const fields = data.split(';');
+    if (fields.pop() !== `ss=${o.token}`) return true;
+    const [mark, arg] = fields;
     if (mark === 'D' && st.submitted && /^\d+$/.test(arg ?? '')) st.status = Number(arg);
     if (mark === 'A') {
       st.prompts += 1;
@@ -353,17 +364,17 @@ export function shellDir(cwd?: string): string {
 /**
  * The shell's environment: the engine's own, less the keys only the engine uses and what
  * describes another terminal or would change the prompt and line editing, plus the
- * terminal's type, the marked prompt, no history file, no inputrc, and a UTF-8 locale when
- * none is named.
+ * terminal's type, the prompt marked with the session's `token`, no history file, no
+ * inputrc, and a UTF-8 locale when none is named.
  */
-export function shellEnv(base: NodeJS.ProcessEnv = process.env): Record<string, string> {
+export function shellEnv(token: string, base: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) if (v !== undefined) env[k] = v;
   for (const k of [...ENGINE_KEY_VARS, ...FOREIGN_TERMINAL_VARS, ...SHELL_STATE_VARS]) delete env[k];
   Object.assign(env, {
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
-    PS1: PROMPT,
+    PS1: prompt(token),
     HISTFILE: '/dev/null',
     INPUTRC: '/dev/null',
     BASH_SILENCE_DEPRECATION_WARNING: '1',
@@ -528,6 +539,9 @@ export async function openTerminal(page: Page, o: TerminalOptions): Promise<Term
   await page.setContent(terminalDocument(o.title, o.backdrop));
   await page.addStyleTag({ content: css });
   await page.addScriptTag({ content: js });
+  // Drawn for this session alone, so that no output written before it, another session's
+  // included, carries it.
+  const token = randomBytes(8).toString('hex');
   const install: InstallOptions = {
     cols: o.spec.cols,
     rows: o.spec.rows,
@@ -538,6 +552,7 @@ export async function openTerminal(page: Page, o: TerminalOptions): Promise<Term
     scrollback: SCROLLBACK,
     theme: THEME,
     inputBinding: INPUT_BINDING,
+    token,
   };
   if (!(await page.evaluate(installTerminal, install))) {
     const [width, height] = await page.evaluate(() => [innerWidth, innerHeight]);
@@ -546,7 +561,7 @@ export async function openTerminal(page: Page, o: TerminalOptions): Promise<Term
 
   let child: IPty;
   try {
-    child = pty.spawn('bash', ['--noprofile', '--norc'], { name: 'xterm-256color', cols: o.spec.cols, rows: o.spec.rows, cwd, env: shellEnv() });
+    child = pty.spawn('bash', ['--noprofile', '--norc'], { name: 'xterm-256color', cols: o.spec.cols, rows: o.spec.rows, cwd, env: shellEnv(token) });
   } catch (e) {
     throw new Error(`terminal: cannot start bash: ${(e as Error).message}`);
   }
