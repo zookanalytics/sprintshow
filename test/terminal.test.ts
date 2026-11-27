@@ -4,7 +4,8 @@
 //
 // They pin what a proof reads: `run` waits for its command and reports its exit status,
 // no `exit` assertion holds while a command runs, the screen joins a row the terminal
-// wrapped, and rows and the cursor count from the top or the bottom. A `run` whose wait
+// wrapped, rows and the cursor count from the top or the bottom, and a regex keeps its
+// own flags beside the `m` the terminal adds. A `run` whose wait
 // runs out names `press` and `waitForScreen`, which drive a program that waits for input
 // on the normal screen. They pin that xterm
 // encodes each key for the terminal's cursor-key mode, that a full-screen program's
@@ -289,6 +290,37 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
           ['cursor 5 3', true],
           ['cursor -2 3', true],
           ['cursor 5 2', false],
+        ] as const) {
+          assert.equal(await checkAssertion(page, parseAssertionFor(a)), holds, a);
+        }
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a regex's own flags reach the screen, its rows and a wait, with the terminal's m flag added to them", async () => {
+    const md = `# Demo: Flags
+
+**Terminal:** 60x12
+
+## Steps
+
+1. **A line in capitals**
+   \`run echo READY\`
+   _Prove:_ it is a row of its own, in any letter case — \`screen ~ /^ready$/i\`
+`;
+    const { dir, cleanup } = scratchDir();
+    try {
+      await withTerminal(md, dir, async (page, demo, lines) => {
+        assert.deepEqual(await runSteps(page, demo, lines), [{ proved: true, manual: false, reason: '' }], lines.join('\n'));
+        await terminalWaitForScreen(page, parseMatcher('/^ready$/i'), ACTION_TIMEOUT);
+        // `$ echo READY` is row 1 and its output row 2. An m of the script's own is not added twice.
+        for (const [a, holds] of [
+          ['screen ~ /^ready$/', false],
+          ['screen ~ /^ready$/im', true],
+          ['row 2 ~ /^ready$/i', true],
+          ['row 2 ~ /^ready$/', false],
         ] as const) {
           assert.equal(await checkAssertion(page, parseAssertionFor(a)), holds, a);
         }
