@@ -34,10 +34,10 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { coverInnerHtml, keepCaption, showCaption, removeCaption, showCardOverlay } from '../src/overlay.ts';
+import { coverInnerHtml, keepCaption, markFrame, showCaption, removeCaption, showCardOverlay } from '../src/overlay.ts';
 import { VIEWPORT, glideTo, installPointer, runStep } from '../src/browser.ts';
 import { parseDemoScript } from '../src/demo-script.ts';
-import { captureWalkthrough } from '../src/walkthrough.ts';
+import { captureWalkthrough, watchRecording } from '../src/walkthrough.ts';
 import { captureProof } from '../src/capture.ts';
 import { stepFileName } from '../src/screenshot.ts';
 import { ffmpegBin } from '../src/ffmpeg.ts';
@@ -88,10 +88,21 @@ test('a card fades in and out over the transition it declares, so the recording 
   const context = await browser!.newContext({ viewport: VIEWPORT, recordVideo: { dir, size: VIEWPORT } });
   try {
     const page = await context.newPage();
+    const recording = await watchRecording(page);
     await page.setContent('<!doctype html><body style="margin:0;background:#fff"></body>');
     // The card goes over a page the browser has drawn, as a walkthrough's cover does.
     await page.waitForTimeout(600);
     await showCardOverlay(page, coverInnerHtml('SprintShow', 'A card', '', '1 step'), 1000);
+    // The page draws nothing once the card has gone, and the frames that show it again can
+    // reach the recording after the context closes, or never. So frames that show nothing
+    // new are drawn until one drawn after the first reaches it, as screenshotStep does
+    // after a still (src/walkthrough.ts).
+    const shown = (await markFrame(page)) ?? Date.now();
+    for (let tries = 0; tries < 8 && recording.firstFrom(shown) === null; tries++) {
+      await markFrame(page);
+      await page.waitForTimeout(250);
+    }
+    assert.ok(recording.firstFrom(shown) !== null, 'a frame drawn after the card has gone reaches the recording');
     const video = page.video();
     assert.ok(video, 'the context records the page');
     await context.close();
@@ -102,8 +113,8 @@ test('a card fades in and out over the transition it declares, so the recording 
     // before the card can send the recording no frame, which then opens as the card fades in.
     const frames = patchLuma(await video.path(), 40, 40);
     const seen = frames.map((f) => `${f.t}s ${f.luma}`).join(', ');
-    const whole = firstFrame(frames, 0, (l) => l < 45, 'the card whole');
-    const gone = firstFrame(frames, whole, (l) => l > 220, 'the page once the card has gone');
+    const whole = firstFrame(frames, 0, (l) => l < 45, `the card whole (${seen})`);
+    const gone = firstFrame(frames, whole, (l) => l > 220, `the page once the card has gone (${seen})`);
     const partly = (l: number): boolean => l > 60 && l < 200;
     assert.ok(frames.some((f) => f.t < whole && partly(f.luma)), `a frame before the card shows whole, at ${whole}s, shows it partly faded in (${seen})`);
     assert.ok(frames.some((f) => f.t > whole && f.t < gone && partly(f.luma)), `a frame before the page shows again, at ${gone}s, shows the card partly faded out (${seen})`);
