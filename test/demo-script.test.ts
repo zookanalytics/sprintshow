@@ -98,20 +98,31 @@ test('parseAssertion: text matcher (regex vs substring) and eval', () => {
   const re = parseAssertion('text #summary ~ /\\d+ done/');
   assert.equal(re?.kind, 'text');
   assert.equal(re?.selector, '#summary');
-  assert.deepEqual(re?.matcher, { type: 'regex', value: '\\d+ done' });
+  assert.deepEqual(re?.matcher, { type: 'regex', value: '\\d+ done', flags: '', raw: '/\\d+ done/' });
+  assert.deepEqual(parseAssertion('text #summary ~ /\\d+ DONE/i')?.matcher, { type: 'regex', value: '\\d+ DONE', flags: 'i', raw: '/\\d+ DONE/i' });
 
   const sub = parseAssertion('text #badge ~ "COMPLETE"');
-  assert.deepEqual(sub?.matcher, { type: 'substr', value: 'COMPLETE' });
+  assert.deepEqual(sub?.matcher, { type: 'substr', value: 'COMPLETE', flags: '', raw: '"COMPLETE"' });
 
   const ev = parseAssertion('eval document.querySelectorAll(".task").length === 3');
   assert.equal(ev?.kind, 'eval');
   assert.equal(ev?.expr, 'document.querySelectorAll(".task").length === 3');
 });
 
-test('parseMatcher: regex, quoted substring, bare substring', () => {
-  assert.deepEqual(parseMatcher('/a.b/'), { type: 'regex', value: 'a.b' });
-  assert.deepEqual(parseMatcher('"hi"'), { type: 'substr', value: 'hi' });
-  assert.deepEqual(parseMatcher('plain words'), { type: 'substr', value: 'plain words' });
+test('parseMatcher: regex with or without flags, quoted substring, bare substring', () => {
+  assert.deepEqual(parseMatcher('/a.b/'), { type: 'regex', value: 'a.b', flags: '', raw: '/a.b/' });
+  assert.deepEqual(parseMatcher('/a.b/i'), { type: 'regex', value: 'a.b', flags: 'i', raw: '/a.b/i' });
+  assert.deepEqual(parseMatcher('/a/b/gim'), { type: 'regex', value: 'a/b', flags: 'gim', raw: '/a/b/gim' }, 'the last slash closes the regex');
+  assert.deepEqual(parseMatcher('"hi"'), { type: 'substr', value: 'hi', flags: '', raw: '"hi"' });
+  assert.deepEqual(parseMatcher('plain words'), { type: 'substr', value: 'plain words', flags: '', raw: 'plain words' });
+});
+
+test('parseMatcher: a bare matcher that opens with / but does not read as a regex is a substring, and so is a quoted regex', () => {
+  // No closing slash, or a letter after it that is no flag.
+  for (const bare of ['/', '/i', '/usr/local/bin', '/done/I', '/done/ i']) {
+    assert.deepEqual(parseMatcher(bare), { type: 'substr', value: bare, flags: '', raw: bare }, bare);
+  }
+  assert.deepEqual(parseMatcher('"/done/i"'), { type: 'substr', value: '/done/i', flags: '', raw: '"/done/i"' });
 });
 
 test('visible/hidden/focused keep the whole remainder as the selector (spaces allowed)', () => {
@@ -276,7 +287,7 @@ test('terminal: run, press, waitForScreen and wait parse; a page directive stays
     ['press', 'waitForScreen', 'wait'],
   );
   assert.deepEqual(two.actions[0].keys, [{ key: 'ArrowDown' }, { text: 'two words' }, { key: 'Control+C' }]);
-  assert.deepEqual(two.actions[1].matcher, { type: 'regex', value: '^done$' });
+  assert.deepEqual(two.actions[1].matcher, { type: 'regex', value: '^done$', flags: '', raw: '/^done$/' });
   assert.deepEqual(two.droppedCodes, ['click #ignored']);
 });
 
@@ -295,10 +306,10 @@ test('terminal: a page script keeps the verbs only a terminal has as prose', () 
 
 test('terminal: screen, row, cursor and exit assertions parse; a page assertion does not', () => {
   const [one, two, three] = parseDemoScript(TERMINAL).steps;
-  assert.deepEqual(one.prove?.assertion, { kind: 'screen', matcher: { type: 'substr', value: 'tasks.md' }, raw: 'screen ~ "tasks.md"' });
+  assert.deepEqual(one.prove?.assertion, { kind: 'screen', matcher: { type: 'substr', value: 'tasks.md', flags: '', raw: '"tasks.md"' }, raw: 'screen ~ "tasks.md"' });
   assert.deepEqual(one.failIf?.assertion, { kind: 'exit', op: '>', n: 0, raw: 'exit > 0' });
   assert.deepEqual(two.prove?.assertion, { kind: 'cursor', row: -1, col: 3, raw: 'cursor -1 3' });
-  assert.deepEqual(three.prove?.assertion, { kind: 'row', row: -1, matcher: { type: 'regex', value: '2 of 3 done' }, raw: 'row -1 ~ /2 of 3 done/' });
+  assert.deepEqual(three.prove?.assertion, { kind: 'row', row: -1, matcher: { type: 'regex', value: '2 of 3 done', flags: '', raw: '/2 of 3 done/' }, raw: 'row -1 ~ /2 of 3 done/' });
 
   assert.equal(parseAssertion('visible #board', 'terminal'), null);
   assert.equal(parseAssertion('focused #board', 'terminal'), null);
@@ -319,9 +330,12 @@ test("the keys a press in an iOS app lacks are those it types no character for, 
   assert.deepEqual(keysIosLacks(parseKeys('"a" Escape Enter ArrowDown enter constructor') ?? []), ['Escape', 'ArrowDown', 'enter', 'constructor']);
 });
 
-test("a text matcher holds when its regex finds a match in the text, or when the text holds its substring", () => {
+test("a text matcher holds when its regex, read with its flags, finds a match in the text, or when the text holds its substring", () => {
   assert.equal(matchText('2 tasks · 0 done', parseMatcher('/^2 tasks/')), true);
   assert.equal(matchText('12 tasks · 0 done', parseMatcher('/^2 tasks/')), false);
+  assert.equal(matchText('2 Tasks · 0 Done', parseMatcher('/0 done/i')), true, 'the i flag ignores letter case');
+  assert.equal(matchText('2 Tasks · 0 Done', parseMatcher('/0 done/')), false);
+  assert.equal(matchText('2 tasks\n0 done', parseMatcher('/^0 done$/m')), true, 'the m flag matches ^ and $ at each line');
   assert.equal(matchText('2 tasks · 0 done', parseMatcher('"0 done"')), true);
   assert.equal(matchText('2 tasks · 0 done', parseMatcher('1 done')), false);
   assert.equal(matchText('anything', undefined), true, 'no matcher holds, as an empty substring does');
@@ -406,7 +420,7 @@ test("platform: **Platform:** iOS makes an iOS app script, which needs no **Star
   assert.deepEqual(d.steps[0].droppedCodes, ['goto /board', 'resize 400x800']);
   assert.deepEqual(d.steps[0].prove?.assertion, { kind: 'count', selector: 'task', op: '==', n: 1, raw: 'count task == 1' });
   assert.equal(d.steps[0].failIf?.assertion?.kind, 'visible');
-  assert.deepEqual(d.steps[1].prove?.assertion?.matcher, { type: 'regex', value: '1 tasks' });
+  assert.deepEqual(d.steps[1].prove?.assertion?.matcher, { type: 'regex', value: '1 tasks', flags: '', raw: '/1 tasks/' });
   assert.equal(d.steps[1].failIf?.assertion, undefined);
   for (const code of ['focused new-task', 'eval 1', 'screen ~ x', 'exit == 0']) assert.equal(parseAssertion(code, 'ios'), null, code);
   for (const code of ['goto /x', 'resize 400x800', 'run ls', 'waitForScreen /x/']) assert.equal(parseAction(code, 'ios'), null, code);

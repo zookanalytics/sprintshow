@@ -143,14 +143,22 @@ export function compareCount(actual: number, op: string, n: number): boolean {
   }
 }
 
+/** The flags a regex matcher may carry after its closing `/`: those JavaScript's RegExp takes. */
+export const REGEX_FLAGS = 'dgimsuvy';
+
 export interface Matcher {
   type: 'regex' | 'substr';
+  /** A regex's pattern, or the substring. */
   value: string;
+  /** A regex's flags, as written after its closing `/`; empty for a substring. */
+  flags: string;
+  /** The matcher as the script writes it. */
+  raw: string;
 }
 
-/** Whether `text` matches `m`, as a `text` assertion reads it: the regex finds a match in it, or it holds the substring. */
+/** Whether `text` matches `m`, as a `text` assertion reads it: the regex, with its flags, finds a match in it, or it holds the substring. */
 export function matchText(text: string, m: Matcher | undefined): boolean {
-  return m?.type === 'regex' ? new RegExp(m.value).test(text) : text.includes(m?.value ?? '');
+  return m?.type === 'regex' ? new RegExp(m.value, m.flags).test(text) : text.includes(m?.value ?? '');
 }
 
 export interface Assertion {
@@ -503,15 +511,20 @@ export function unknownDevice(written: string, names: readonly string[]): string
   return `**Device:** "${written}" is not a device Playwright describes${near.length ? `; the nearest it describes are ${near.join(', ')}` : ''}`;
 }
 
-/** `/re/` → regex; `"str"` → substring; bare → substring. */
+/**
+ * `/re/flags` → regex, closed by its last `/` and followed by any of REGEX_FLAGS; `"str"` →
+ * substring; bare → substring, one that opens with `/` but does not read as a regex included.
+ */
 export function parseMatcher(rhs: string): Matcher {
-  if (rhs.length >= 2 && rhs.startsWith('/') && rhs.endsWith('/')) {
-    return { type: 'regex', value: rhs.slice(1, -1) };
+  const close = rhs.lastIndexOf('/');
+  const flags = rhs.slice(close + 1);
+  if (rhs.startsWith('/') && close > 0 && [...flags].every((f) => REGEX_FLAGS.includes(f))) {
+    return { type: 'regex', value: rhs.slice(1, close), flags, raw: rhs };
   }
   if (rhs.length >= 2 && rhs.startsWith('"') && rhs.endsWith('"')) {
-    return { type: 'substr', value: rhs.slice(1, -1) };
+    return { type: 'substr', value: rhs.slice(1, -1), flags: '', raw: rhs };
   }
-  return { type: 'substr', value: rhs };
+  return { type: 'substr', value: rhs, flags: '', raw: rhs };
 }
 
 /** Parse a `_Prove:_` / `_Fail if:_` line into prose + (optional) machine assertion. */

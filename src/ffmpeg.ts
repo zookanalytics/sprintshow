@@ -157,8 +157,9 @@ export interface NarrationTrack {
  *             it. Used by the walkthrough path, where the video length is already set
  *             by the recording and the audio must fit it.
  *
- * Returns null — keeping the caller on the silent path — with no key, or the moment any
- * clip fails to synthesize.
+ * Returns null — keeping the caller on the silent path — with no key, the moment any clip
+ * fails to synthesize, or when ffmpeg fails to build the track, such as on a clip it
+ * cannot decode.
  */
 export async function buildNarration(
   segments: NarrationSegment[],
@@ -193,22 +194,35 @@ export async function buildNarration(
   // Pad each clip up to its slot (or generate silence for an empty slot), then concat.
   // `apad=whole_dur` extends a short clip; `-t` trims a long one — so one command both
   // pads and trims to the exact slot length whether stretching or not.
-  const padded: string[] = [];
-  for (let i = 0; i < segments.length; i++) {
-    const dur = durations[i].toFixed(3);
-    const out = path.join(tmp, `seg-${String(i).padStart(3, '0')}.m4a`);
-    if (clips[i]) {
-      run(['-y', '-i', clips[i] as string, '-af', `apad=whole_dur=${dur}`, '-t', dur, '-c:a', 'aac', out]);
-    } else {
-      run(['-y', '-f', 'lavfi', '-i', 'anullsrc=r=24000:cl=mono', '-t', dur, '-c:a', 'aac', out]);
+  //
+  // ttsClip keeps any 200 response with a body, and probeDuration answers 0 for a file it
+  // cannot decode, so a body that is not audio, such as a proxy's page, first fails at its
+  // pad. A failure anywhere in building the track is a synthesis failure, so the builder
+  // returns null and logs the part that failed.
+  let part = '';
+  try {
+    const padded: string[] = [];
+    for (let i = 0; i < segments.length; i++) {
+      part = clips[i] ? `clip ${i}` : `the silence of slot ${i}`;
+      const dur = durations[i].toFixed(3);
+      const out = path.join(tmp, `seg-${String(i).padStart(3, '0')}.m4a`);
+      if (clips[i]) {
+        run(['-y', '-i', clips[i] as string, '-af', `apad=whole_dur=${dur}`, '-t', dur, '-c:a', 'aac', out]);
+      } else {
+        run(['-y', '-f', 'lavfi', '-i', 'anullsrc=r=24000:cl=mono', '-t', dur, '-c:a', 'aac', out]);
+      }
+      padded.push(out);
     }
-    padded.push(out);
+    part = 'joining the clips';
+    const listPath = path.join(tmp, 'audio-concat.txt');
+    writeFileSync(listPath, padded.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n') + '\n');
+    const audioPath = path.join(tmp, 'narration.m4a');
+    run(['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c:a', 'aac', audioPath]);
+    return { audioPath, durations };
+  } catch (e) {
+    log(`narration: ${part} failed (${(e as Error).message.split('\n')[0]}) — reverting to a silent video`);
+    return null;
   }
-  const listPath = path.join(tmp, 'audio-concat.txt');
-  writeFileSync(listPath, padded.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n') + '\n');
-  const audioPath = path.join(tmp, 'narration.m4a');
-  run(['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c:a', 'aac', audioPath]);
-  return { audioPath, durations };
 }
 
 /** Stream-copy a video into a clean container at `to`. */
