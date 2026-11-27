@@ -140,8 +140,14 @@ export type CaptureShot = Pick<PageScreenshotOptions, 'path' | 'type' | 'omitBac
 export interface Capture {
   /** The area: its place on the page, its size and its scale. */
   readonly extent: Extent;
-  /** The CSS pixels of the area's height, from its top, that the capture holds: all of them, or as many as one capture holds. */
+  /**
+   * The CSS pixels of the area's height, from its top, that the capture holds: all of them,
+   * as many as one capture holds, or, for an element that reaches past the page's end, as
+   * many as lie above it.
+   */
   readonly height: number;
+  /** The page ends above the most of the area one capture holds, so the capture holds what lies above the end. */
+  readonly pageEnds: boolean;
   /** Save the capture as a PNG, given the time the tiles it spans take. */
   save(shot: CaptureShot): Promise<void>;
 }
@@ -165,32 +171,51 @@ function tooLarge(what: string, { width, height, scale }: Extent, whole: boolean
   return `scale ${scale} is too large for one capture of ${what} ${size}`;
 }
 
+/** `box` in the whole pixels it touches, as Playwright captures an element. */
+function inPixels(box: Extent): Extent {
+  const x = Math.floor(box.x);
+  const y = Math.floor(box.y);
+  return { x, y, width: Math.ceil(box.x + box.width) - x, height: Math.ceil(box.y + box.height) - y, scale: box.scale };
+}
+
 /**
  * The capture of `area` as it lies on `page` now, in the whole pixels it touches, as
  * Playwright captures an element. It holds the whole area, or, given `keepTop`, as much of
  * its top as Chromium draws whole (captureHeightLimit). Throws, saying the scale is too
  * large for one capture of `what`, such as "a viewport", when one capture cannot hold the
  * whole area, or, given `keepTop`, one row of it.
+ *
+ * The top of an element taller than one capture holds is scrolled to the top of each box it
+ * scrolls in, so that each shows it, and measured there. A capture of the page reaches no
+ * further than the page's end, so that capture stops there at the latest.
  */
 export async function captureOf(page: Page, area: CaptureArea, what: string, { keepTop = false } = {}): Promise<Capture> {
-  const box = await areaExtent(page, area);
-  const x = Math.floor(box.x);
-  const y = Math.floor(box.y);
-  const extent = { x, y, width: Math.ceil(box.x + box.width) - x, height: Math.ceil(box.y + box.height) - y, scale: box.scale };
-  const height = Math.min(extent.height, captureHeightLimit(extent.width, extent.scale, extent));
+  let extent = inPixels(await areaExtent(page, area));
+  let height = Math.min(extent.height, captureHeightLimit(extent.width, extent.scale, extent));
   if (height < (keepTop ? 1 : extent.height)) throw new Error(tooLarge(what, extent, !keepTop));
+  let pageEnds = false;
+  if (typeof area === 'object' && height < extent.height) {
+    await area.evaluate((el) => el.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' }));
+    extent = inPixels(await areaExtent(page, area));
+    const most = Math.min(extent.height, captureHeightLimit(extent.width, extent.scale, extent));
+    const above = (await pageExtent(page)).height - extent.y;
+    pageEnds = above < most;
+    height = Math.min(most, above);
+  }
+  const { x, y, width } = extent;
   return {
     extent,
     height,
+    pageEnds,
     async save(shot) {
       const timeout = captureTimeout({ ...extent, height });
       if (area === 'viewport') await page.screenshot({ ...shot, timeout });
-      else if (area === 'page') await page.screenshot({ ...shot, timeout, fullPage: true, clip: height < extent.height ? { x: 0, y: 0, width: extent.width, height } : undefined });
+      else if (area === 'page') await page.screenshot({ ...shot, timeout, fullPage: true, clip: height < extent.height ? { x: 0, y: 0, width, height } : undefined });
       // An element held whole is captured as Playwright captures one, once it scrolls it
       // into view. The top of a taller one is a clip of the page over that part of its box,
       // as Playwright captures an element larger than the viewport as a clip of its box.
       else if (height === extent.height) await area.screenshot({ ...shot, timeout });
-      else await page.screenshot({ ...shot, timeout, fullPage: true, clip: { x, y, width: extent.width, height } });
+      else await page.screenshot({ ...shot, timeout, fullPage: true, clip: { x, y, width, height } });
     },
   };
 }
@@ -306,7 +331,9 @@ async function saveArea(opts: CaptureScreenshotOptions, demo: Demo, surface: Sur
   const limited = (scale: number): string => `, the most one capture holds at scale ${scale}`;
   // The area a capture holds, and what is said after it: `whole` when it holds all of it, else the top it keeps of what `whose` names.
   const areaHeld = (capture: Capture, whole: string, whose: string): [string, string] =>
-    capture.height < capture.extent.height ? [`${whose} top ${capture.height} of its ${capture.extent.height} CSS pixels`, limited(capture.extent.scale)] : [whole, ''];
+    capture.height < capture.extent.height
+      ? [`${whose} top ${capture.height} of its ${capture.extent.height} CSS pixels`, capture.pageEnds ? ', where the page ends' : limited(capture.extent.scale)]
+      : [whole, ''];
 
   const shot = { path: opts.outputPath, type: 'png' as const, omitBackground: Boolean(opts.transparent) };
   if (surface.still) {

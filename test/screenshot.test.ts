@@ -9,10 +9,11 @@
 // or a capture of an element, larger than one capture holds keeps its top, each row of it
 // drawn in tiles of either size Chromium draws in, and says so, and the limit it stops at
 // ends inside what Chromium drew of captures that asked for more, wherever on the page
-// they start. One of a page too wide at its scale for one capture to hold a row of it
-// saves nothing, and says the scale is too large. So does a viewport one capture cannot
-// hold whole, before the page is driven, while an element at that scale is captured
-// whole.
+// they start. Such an element in a box that scrolls is scrolled to its top there, and its
+// capture stops where the page ends. One of a page too wide at its scale for one capture
+// to hold a row of it saves nothing, and says the scale is too large. So does a viewport
+// one capture cannot hold whole, before the page is driven, while an element at that
+// scale is captured whole.
 //
 // The tests that drive a page need a headless Chromium and skip without one (see
 // browser-fixture.ts).
@@ -84,6 +85,23 @@ const FEED = `# Demo: A feed of bands
 ## Steps
 
 1. **An element of bands, 30000 px tall, 5000 px down the page**
+   \`waitFor #end\`
+   _Prove:_ the last band is on the page — \`count #end == 1\`
+`;
+
+/**
+ * The bands again, 1000 px down the content of a box 800 px tall that scrolls, on a page
+ * as tall as the viewport. Until the box scrolls, the page shows none of them.
+ */
+const PANE_HTML = `<!doctype html><body style="margin:0"><div style="height:800px;overflow:auto"><div style="height:1000px"></div><div id="feed">${BAND_ROWS}</div></div></body>`;
+
+const PANE = `# Demo: A feed of bands in a box that scrolls
+
+**Start:** \`/pane.html\`
+
+## Steps
+
+1. **An element of bands, 30000 px tall, 1000 px down a box that scrolls**
    \`waitFor #end\`
    _Prove:_ the last band is on the page — \`count #end == 1\`
 `;
@@ -289,6 +307,23 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
       const [[red, green, blue, alpha]] = await pngPixels(card, [{ x: 80 * 11, y: 80 * 11 - 1 }]);
       const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
       assert.ok(near(red, 31) && near(green, 111) && near(blue, 235) && alpha === 255, `the card's bottom row is drawn, not rgba(${red}, ${green}, ${blue}, ${alpha})`);
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
+
+  test('--selector scrolls the top of an element taller than one capture holds into the box it scrolls in, and keeps it down to where the page ends', async () => {
+    const site = await serveSite({ 'pane.html': PANE_HTML });
+    const page = await browser!.newPage({ deviceScaleFactor: 2 });
+    try {
+      const out = path.join(site.dir, 'pane.png');
+      const lines: string[] = [];
+      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: PANE, outputPath: out, selector: '#feed', log: (m) => lines.push(m) });
+      assert.equal(lines.at(-1), "screenshot: capturing `#feed`'s top 900 of its 30000 CSS pixels, where the page ends → pane.png");
+      assert.deepEqual(pngSize(out), { width: 2560, height: 1800 });
+      // The box, the page's top 800 px, shows the bands from their top.
+      assert.deepEqual(await bandsMissing(out, 800, 2550), []);
     } finally {
       await page.close();
       await site.close();
