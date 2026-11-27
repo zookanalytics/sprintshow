@@ -23,7 +23,7 @@ import { parseDemoScript, outputSlug, type Demo, type DemoStep, type ViewportSiz
 import { assembleVideo, type Frame, type Manifest } from './assemble.ts';
 import { runStep, openSurface, contextOptions, videoFrame, type Surface } from './browser.ts';
 import { showCaption, removeCaption, coverInnerHtml, scrutinyInnerHtml, cardDocument } from './overlay.ts';
-import { stepFileName, stepScreenshots, type StepScreenshots } from './screenshot.ts';
+import { captureOf, stepFileName, stepScreenshots, type StepScreenshots } from './screenshot.ts';
 
 const BRAND = 'sprintshow · proof';
 
@@ -78,6 +78,11 @@ interface StepResult {
   issue: { severity: 'error'; step: number; description: string; screenshot: string } | null;
 }
 
+/** Save what `page` shows now, the whole viewport, as the frame `file` in `capturesDir`. Throws when one capture cannot hold it whole (captureOf). */
+async function saveFrame(page: Page, capturesDir: string, file: string): Promise<void> {
+  await (await captureOf(page, 'viewport', 'a viewport')).save({ path: path.join(capturesDir, file) });
+}
+
 async function proofStep(page: Page, base: string, step: DemoStep, total: number, capturesDir: string, surface: Surface, shots: StepScreenshots | null, log: (m: string) => void): Promise<StepResult> {
   const { proved, manual, reason } = await runStep(page, base, step, total, false, log);
   await surface.settle();
@@ -85,7 +90,7 @@ async function proofStep(page: Page, base: string, step: DemoStep, total: number
 
   const file = stepFileName(step, total);
   await showCaption(page, step.index, total, step.narration, !proved);
-  await page.screenshot({ path: path.join(capturesDir, file) });
+  await saveFrame(page, capturesDir, file);
   await removeCaption(page);
 
   const frame: Frame = {
@@ -106,7 +111,7 @@ async function captureCover(page: Page, demo: Demo, capturesDir: string): Promis
   await page.setContent(cardDocument(coverInnerHtml(BRAND, demo.title, demo.description, meta)));
   await page.waitForTimeout(150);
   const file = '00-cover.png';
-  await page.screenshot({ path: path.join(capturesDir, file) });
+  await saveFrame(page, capturesDir, file);
   return { file, narration: demo.title, duration: 5, observation: null, proof: 'passed', severity: null };
 }
 
@@ -115,7 +120,7 @@ async function captureScrutiny(page: Page, items: string[], capturesDir: string)
   await page.setContent(cardDocument(scrutinyInnerHtml(items)));
   await page.waitForTimeout(150);
   const file = '99-scrutiny.png';
-  await page.screenshot({ path: path.join(capturesDir, file) });
+  await saveFrame(page, capturesDir, file);
   const duration = Math.min(14, Math.max(6, items.length * 2.5));
   return { file, narration: 'What to check critically', duration, observation: null, proof: 'passed', severity: null };
 }
@@ -123,8 +128,9 @@ async function captureScrutiny(page: Page, items: string[], capturesDir: string)
 /**
  * Drive `demo` against `page` in still-frame mode and assemble the MP4. Screenshots the
  * steps on the app first, then the cover and scrutiny cards, so the manifest order is
- * cover → steps → scrutiny. A capture that throws keeps none of the step screenshots it
- * saved.
+ * cover → steps → scrutiny. Each frame is the whole viewport, and one that a capture at
+ * the page's scale cannot hold whole is refused (captureOf). A capture that throws keeps
+ * none of the step screenshots it saved.
  */
 export async function captureProof(opts: CaptureProofOptions): Promise<CaptureResult> {
   const log = opts.log ?? ((m: string) => console.log(m));

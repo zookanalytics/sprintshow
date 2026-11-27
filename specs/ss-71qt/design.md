@@ -119,6 +119,16 @@ the marks, the terminal page keeps three facts: how many prompts the shell has s
 whether input was submitted with an Enter key since the last one, and the status the last
 finished command reported.
 
+The marks reach xterm in the pty's stream, beside what the commands print, and output can
+carry marks of its own. A saved session of a shell that writes them does, such as a
+`script` typescript. Counted, such marks would end a `run` while its command still runs,
+and a `D;0` among them would hold an `exit == 0` proof for a command that fails. So the
+engine draws a random token for each session, and each mark the prompt writes ends with
+it: `D;<status>;ss=<token>`, `A;ss=<token>` and `B;ss=<token>`. The handler counts only
+the marks that end with the session's token. Output written before the session started
+cannot carry it, another session's included. A command in the session can read the token
+from `PS1`, so output the session's own commands write with it still counts.
+
 ### The verbs
 
 | Verb | What it does |

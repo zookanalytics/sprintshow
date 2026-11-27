@@ -3,9 +3,10 @@
 // step runner the page captures use.
 //
 // They pin what a proof reads: `run` waits for its command and reports its exit status,
-// no `exit` assertion holds while a command runs, the screen joins a row the terminal
-// wrapped, rows and the cursor count from the top or the bottom, and a regex keeps its
-// own flags beside the `m` the terminal adds. A `run` whose wait
+// no `exit` assertion holds while a command runs, marks that a command's output carries
+// neither end its `run` nor set its status, the screen joins a row the terminal wrapped,
+// rows and the cursor count from the top or the bottom, and a regex keeps its own flags
+// beside the `m` the terminal adds. A `run` whose wait
 // runs out names `press` and `waitForScreen`, which drive a program that waits for input
 // on the normal screen. They pin that xterm
 // encodes each key for the terminal's cursor-key mode, that a full-screen program's
@@ -14,8 +15,10 @@
 // terminal window with transparent corners, `--full-page` holds the whole session, or
 // its last lines, each one drawn in tiles of either size Chromium draws in, when the
 // session is more than one capture holds. A full-page still saves nothing, and says why,
-// at a scale where one capture cannot hold a line of the session, or when the page has
-// no terminal window. A terminal script refuses a server, a selector, or a directory that
+// at a scale where one capture cannot hold a line of the session, or a full-screen
+// program's window whole, or when the page has no terminal window. A still of the window
+// at a scale where one capture cannot hold it whole is refused before the first step
+// runs. A terminal script refuses a server, a selector, or a directory that
 // does not exist before a browser is spent. A video frame
 // shows every cell of a terminal at each limit of the sizes the parser accepts, clear of
 // the caption bar. The shell and every program it still runs end before the capture
@@ -235,6 +238,27 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     }
   });
 
+  test("marks that a command's output carries, a saved session's or another session's, neither end its run nor set its status", async () => {
+    const md = `# Demo: Saved session\n\n**Terminal:** 60x12\n\n## Steps\n\n1. **s**\n   \`run true\`\n`;
+    const { dir, cleanup } = scratchDir();
+    try {
+      // A finished command and the prompt after it, as a shell that writes semantic-prompt
+      // marks writes them, and as another session of the engine's writes them.
+      const marks = (end: string): string => `\x1b]133;D;0${end}\x07\x1b]133;A${end}\x07\x1b]133;B${end}\x07`;
+      writeFiles(dir, { 'saved.txt': `early\n${marks('')}${marks(';ss=0123456789abcdef')}\n` });
+      await withTerminal(md, dir, async (page) => {
+        const command = 'cat saved.txt; sleep 1; echo late; false';
+        const lines: string[] = [];
+        await terminalRun(page, command, { typeDelay: 0, promptTimeout: ACTION_TIMEOUT, commandTimeout: COMMAND_TIMEOUT, pause: 0 }, (m) => lines.push(m));
+        assert.deepEqual(lines, [`  · \`${command}\` exited 1`]);
+        assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^late$/')), true, 'the run waited for the command to finish');
+        assert.equal(await checkAssertion(page, parseAssertionFor('exit == 1')), true);
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
   test('a run whose wait runs out names press and waitForScreen, which drive a program that waits for input on the normal screen', async () => {
     const md = `# Demo: Prompt\n\n**Terminal:** 60x12\n\n## Steps\n\n1. **s**\n   \`run true\`\n`;
     const { dir, cleanup } = scratchDir();
@@ -418,6 +442,43 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
       // One capture would hold some rows of pixels, just not a whole line of the window.
       const width = await page.evaluate((win) => (document.querySelector(win) as HTMLElement).getBoundingClientRect().width, TERMINAL_WINDOW);
       assert.ok(captureHeightLimit(width, scale) >= 1);
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  // At scale 13 an 80x24 window spans more tiles than Chromium draws in one capture.
+  test('a still of the window is refused before the first step runs at a scale where one capture cannot hold the window whole, and saves nothing', async () => {
+    const scale = 13;
+    const md = `# Demo: Too fine\n\n**Terminal:** 80x24\n\n## Steps\n\n1. **A file is made**\n   \`run touch made.txt\`\n`;
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage({ deviceScaleFactor: scale });
+    try {
+      const png = path.join(dir, 'x.png');
+      await assert.rejects(captureScreenshot({ page, demo: md, cwd: dir, outputPath: png, log: quiet }), {
+        message: new RegExp(`^screenshot: scale ${scale} is too large for one capture of a window of \\d+x\\d+ CSS pixels$`),
+      });
+      assert.equal(existsSync(path.join(dir, 'made.txt')), false, 'no step ran');
+      assert.equal(existsSync(png), false);
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test("--full-page refuses a full-screen program's window, which it captures as it is, at a scale where one capture cannot hold it whole, and saves nothing", async () => {
+    const scale = 13;
+    const md = `# Demo: Held\n\n**Terminal:** 80x24\n\n## Steps\n\n1. **A program holds the alternate screen**\n   \`run node hold.mjs held screen\`\n   _Prove:_ it holds the screen — \`screen ~ "held"\`\n`;
+    const { dir, cleanup } = scratchDir();
+    writeFiles(dir, { 'hold.mjs': HOLD });
+    const page = await browser!.newPage({ deviceScaleFactor: scale });
+    try {
+      const png = path.join(dir, 'x.png');
+      await assert.rejects(captureScreenshot({ page, demo: md, cwd: dir, outputPath: png, fullPage: true, log: quiet }), {
+        message: new RegExp(`^screenshot: could not capture the whole terminal session: scale ${scale} is too large for one capture of a window of \\d+x\\d+ CSS pixels$`),
+      });
+      assert.equal(existsSync(png), false);
     } finally {
       await page.close();
       cleanup();
@@ -816,7 +877,7 @@ test('a capture whose shell cannot start fails with a reason and saves nothing',
 });
 
 test("the shell inherits the engine's environment less the Vercel bypass key and what describes another terminal, and keeps OPENAI_API_KEY", () => {
-  const env = shellEnv({ PATH: '/usr/bin:/bin', HOME: '/home/demo', OPENAI_API_KEY: 'openai-key', [VERCEL_BYPASS_VAR]: 'bypass-key', TMUX: '/tmp/tmux-1/default,1,0', COLUMNS: '200' });
+  const env = shellEnv('0123456789abcdef', { PATH: '/usr/bin:/bin', HOME: '/home/demo', OPENAI_API_KEY: 'openai-key', [VERCEL_BYPASS_VAR]: 'bypass-key', TMUX: '/tmp/tmux-1/default,1,0', COLUMNS: '200' });
   assert.equal(VERCEL_BYPASS_VAR in env, false);
   assert.equal(Object.values(env).includes('bypass-key'), false, 'no variable carries the bypass key');
   assert.equal(env.OPENAI_API_KEY, 'openai-key');
