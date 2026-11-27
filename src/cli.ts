@@ -74,9 +74,14 @@ screenshot options:
                               or a terminal script's whole session instead of its screen,
                               up to what Chromium draws in one capture: a page keeps its
                               top, and a session its last lines.
-  --selector <css>            Capture one element, its first match, once it is visible.
+  --selector <css>            Capture one element, its first match, once it is visible,
+                              up to what Chromium draws in one capture: an element keeps
+                              its top.
   --scale <n>                 Device scale factor (default: the script's device's, or 1).
                               At 2, text stays sharp in a PNG shown at half its size.
+                              Without --full-page or --selector, a scale at which one
+                              capture cannot hold the whole viewport or terminal window
+                              is refused before the steps run.
   --transparent               Leave out the page's default white background.
   Each step's proof is checked as proof mode checks it, with no caption drawn, and
   neither ffmpeg nor OPENAI_API_KEY is needed.

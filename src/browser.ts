@@ -5,8 +5,9 @@
 // checks its proof, and connectSurface and openSurface, which bring up what a script
 // drives: the app at its start path, past Vercel's sign-in when the app is behind it
 // (vercel.ts), the engine's own terminal (terminal.ts), or an iOS app on a simulator
-// (ios.ts). contextOptions and videoFrame say what page a capture drives a script in: the
-// device the script names, and the frame its video is filmed in.
+// (ios.ts). contextOptions, videoFrame and lastViewport say what page a capture drives a
+// script in: the device the script names, the frame its video is filmed in, and the
+// viewport its last step leaves.
 //
 // The pointer is a DOM element the engine moves, so a click or a keystroke reads on
 // screen in the walkthrough recording (a real Playwright click leaves no visible cursor).
@@ -78,6 +79,11 @@ export function contextOptions(demo: Demo): BrowserContextOptions {
   return { ...rest, viewport: { ...viewport } };
 }
 
+/** Each viewport `demo` shows, in order: the one it starts at, and the size each `resize` names. */
+function viewportSizes(demo: Demo): ViewportSize[] {
+  return [contextOptions(demo).viewport as ViewportSize, ...demo.steps.flatMap((s) => s.actions.flatMap((a) => (a.size ? [a.size] : [])))];
+}
+
 /**
  * The frame a video of `demo` is filmed in: as wide as the widest viewport the script
  * shows and as tall as the tallest, counting the one it starts at and each `resize`. A
@@ -85,8 +91,17 @@ export function contextOptions(demo: Demo): BrowserContextOptions {
  * gray, and the still-frame assembly lays out a smaller frame the same way.
  */
 export function videoFrame(demo: Demo): ViewportSize {
-  const sizes = [contextOptions(demo).viewport as ViewportSize, ...demo.steps.flatMap((s) => s.actions.flatMap((a) => (a.size ? [a.size] : [])))];
+  const sizes = viewportSizes(demo);
   return { width: Math.max(...sizes.map((s) => s.width)), height: Math.max(...sizes.map((s) => s.height)) };
+}
+
+/**
+ * The viewport `demo`'s last step leaves: the size its last `resize` names, or the one it
+ * starts at. A capture runs every action of every step, whatever its proof, so the last
+ * size named is the last one set.
+ */
+export function lastViewport(demo: Demo): ViewportSize {
+  return viewportSizes(demo).at(-1) as ViewportSize;
 }
 
 /**
