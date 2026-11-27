@@ -4,7 +4,8 @@
 //
 // They pin what a proof reads: `run` waits for its command and reports its exit status,
 // no `exit` assertion holds while a command runs, the screen joins a row the terminal
-// wrapped, and rows and the cursor count from the top or the bottom. A `run` whose wait
+// wrapped, rows and the cursor count from the top or the bottom, and a regex keeps its
+// own flags beside the `m` the terminal adds. A `run` whose wait
 // runs out names `press` and `waitForScreen`, which drive a program that waits for input
 // on the normal screen. They pin that xterm
 // encodes each key for the terminal's cursor-key mode, that a full-screen program's
@@ -175,6 +176,7 @@ process.stdin.on('data', (b) => {
 `;
 
 // Each test drives a page, a session or a process of its own, so they run side by side.
+// None takes a capture in this process: the tests that do run once these are done, below.
 describe('the terminal surface', { concurrency: true, skip }, () => {
   test('run waits for each command and logs its exit status, which exit assertions read', async () => {
     const md = `# Demo: Exit status
@@ -298,6 +300,37 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     }
   });
 
+  test("a regex's own flags reach the screen, its rows and a wait, with the terminal's m flag added to them", async () => {
+    const md = `# Demo: Flags
+
+**Terminal:** 60x12
+
+## Steps
+
+1. **A line in capitals**
+   \`run echo READY\`
+   _Prove:_ it is a row of its own, in any letter case — \`screen ~ /^ready$/i\`
+`;
+    const { dir, cleanup } = scratchDir();
+    try {
+      await withTerminal(md, dir, async (page, demo, lines) => {
+        assert.deepEqual(await runSteps(page, demo, lines), [{ proved: true, manual: false, reason: '' }], lines.join('\n'));
+        await terminalWaitForScreen(page, parseMatcher('/^ready$/i'), ACTION_TIMEOUT);
+        // `$ echo READY` is row 1 and its output row 2. An m of the script's own is not added twice.
+        for (const [a, holds] of [
+          ['screen ~ /^ready$/', false],
+          ['screen ~ /^ready$/im', true],
+          ['row 2 ~ /^ready$/i', true],
+          ['row 2 ~ /^ready$/', false],
+        ] as const) {
+          assert.equal(await checkAssertion(page, parseAssertionFor(a)), holds, a);
+        }
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
   test("keys reach a program encoded for the terminal's cursor-key mode", async () => {
     const md = `# Demo: Keys\n\n**Terminal:** 60x12\n\n## Steps\n\n1. **s**\n   \`run true\`\n`;
     const { dir, cleanup } = scratchDir();
@@ -319,98 +352,6 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
         await press('q');
       });
     } finally {
-      cleanup();
-    }
-  });
-
-  test("a full-screen program's alternate screen, cursor and colours are drawn as sent, and quitting restores the shell", async () => {
-    const md = `# Demo: Board
-
-**Terminal:** 100x30
-
-## Steps
-
-1. **The board opens**
-   \`run node board.mjs\`
-   _Prove:_ its frame is along the top — \`row 1 ~ /^┌─ Sprint board ─+┐$/\`
-
-2. **Down one task**
-   \`press ArrowDown\`
-   _Prove:_ the cursor is in the second checkbox — \`cursor 4 6\`
-`;
-    await withTerminal(md, SAMPLE_CLI, async (page, demo, lines) => {
-      assert.deepEqual(
-        (await runSteps(page, demo, lines)).map((r) => r.proved),
-        [true, true],
-        lines.join('\n'),
-      );
-      assert.ok(lines.includes('  · `node board.mjs` took over the screen'), 'run settles once the board holds the alternate screen');
-      assert.equal(await checkAssertion(page, parseAssertionFor('row -1 ~ /1 of 3 done$/')), true, 'the status bar is on the bottom row');
-
-      // The board paints the selected row in 24-bit colour, the status bar in colour 24 of
-      // the 256, and leaves the rest on the terminal's background.
-      const png = await page.locator(TERMINAL_WINDOW).screenshot();
-      const at = async (row: number, col: number): Promise<string> => {
-        const c = await cellCentre(page, { cols: 100, rows: 30 }, row, col);
-        return pixel(page, png, c.x, c.y);
-      };
-      assert.equal(await at(4, 40), '#263854', 'the selected row');
-      assert.equal(await at(30, 60), '#005f87', 'the status bar');
-      assert.equal(await at(3, 40), '#0f1115', 'an unlit row');
-
-      await runAction(page, '', { verb: 'press', target: 'q', keys: [{ key: 'q' }], raw: 'press q' }, false, quiet);
-      assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), ACTION_TIMEOUT), true);
-      assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ "Sprint board"')), false, 'the alternate screen is gone');
-      assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^\\$ node board\\.mjs$/')), true, 'the shell screen is back');
-      assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^1 of 3 done$/')), true);
-    });
-  });
-
-  test('--full-page holds the whole session in the window; the default holds the screen', async () => {
-    const md = `# Demo: Long\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **Fifty lines**\n   \`run seq 1 50\`\n   _Prove:_ the last is on screen — \`screen ~ /^50$/\`\n`;
-    const { dir, cleanup } = scratchDir();
-    const page = await browser!.newPage();
-    try {
-      const shot = async (fullPage: boolean): Promise<{ rows: number; first: string | null; height: number }> => {
-        const out = path.join(dir, fullPage ? 'full.png' : 'screen.png');
-        await captureScreenshot({ page, demo: md, cwd: dir, outputPath: out, fullPage, log: quiet });
-        const { rows, first } = await page.evaluate(() => {
-          const t = (window as unknown as { __ss_term: { cursor(): { rows: number }; row(n: number): string | null } }).__ss_term;
-          return { rows: t.cursor().rows, first: t.row(1) };
-        });
-        return { rows, first, height: pngSize(out).height };
-      };
-      const screen = await shot(false);
-      const full = await shot(true);
-      assert.equal(screen.rows, 10);
-      // `$ seq 1 50`, the fifty lines, and the prompt after them.
-      assert.equal(full.rows, 52);
-      assert.equal(full.first, '$ seq 1 50');
-      assert.ok(full.height > screen.height * 4, `${full.height} is not the whole session against ${screen.height}`);
-    } finally {
-      await page.close();
-      cleanup();
-    }
-  });
-
-  test('--full-page starts the window at the first line of the session when the shell cleared the screen below its scrollback', async () => {
-    // The printf homes the cursor and erases the screen but keeps the scrollback, as
-    // `tput clear` does, so the cursor is not on the bottom row when the window grows.
-    const md = `# Demo: Cleared\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **Lines, then a cleared screen**\n   \`run seq 1 30\`\n   \`run printf '\\033[H\\033[2J'\`\n   _Prove:_ the prompt is back on the top row — \`row 1 ~ /^\\$$/\`\n`;
-    const { dir, cleanup } = scratchDir();
-    const page = await browser!.newPage();
-    try {
-      const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: path.join(dir, 'cleared.png'), fullPage: true, log: quiet });
-      assert.equal(res.failures, 0);
-      const { drawn, slider } = await page.evaluate(() => ({
-        drawn: [...document.querySelectorAll('.xterm-rows > div')].map((row) => (row.textContent ?? '').trimEnd()),
-        slider: getComputedStyle(document.querySelector('.xterm .scrollbar.vertical .slider') as Element).backgroundColor,
-      }));
-      // `$ seq 1 30` and the lines the clear left in the scrollback, then the prompt it moved to the top.
-      assert.deepEqual(drawn, ['$ seq 1 30', ...Array.from({ length: 22 }, (_, i) => String(i + 1)), '$']);
-      assert.equal(slider, 'rgba(0, 0, 0, 0)', 'the scrollbar xterm shows once the window scrolls draws nothing');
-    } finally {
-      await page.close();
       cleanup();
     }
   });
@@ -483,42 +424,6 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
     }
   });
 
-  test('the shell, and every program it still runs, end before the capture returns, even one that handles SIGHUP', async () => {
-    const md = `# Demo: Hold
-
-**Terminal:** 40x10
-
-## Steps
-
-1. **A background job that handles SIGHUP**
-   \`run echo $$ > shell.pid\`
-   \`run node hold.mjs job hup & until [ -s job.pid ]; do sleep 0.1; done\`
-
-2. **A full-screen program that handles SIGHUP**
-   \`run node hold.mjs tui hup screen\`
-   _Prove:_ it holds the screen — \`screen ~ "held"\`
-`;
-    const { dir, cleanup } = scratchDir();
-    const page = await browser!.newPage();
-    const names = ['shell', 'job', 'tui'];
-    const pidOf = (name: string): number => Number(existsSync(path.join(dir, `${name}.pid`)) ? readFileSync(path.join(dir, `${name}.pid`), 'utf8') : 0);
-    try {
-      writeFiles(dir, { 'hold.mjs': HOLD });
-      const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: path.join(dir, 'held.png'), log: quiet });
-      assert.equal(res.failures, 0);
-      for (const name of names) {
-        const pid = pidOf(name);
-        assert.ok(pid > 1, `${name}.pid holds a pid`);
-        assert.equal(running(pid), false, `the ${name} (pid ${pid}) outlived the capture`);
-      }
-    } finally {
-      // Nothing the capture left running outlives the test.
-      for (const pid of names.map(pidOf)) if (pid > 1 && running(pid)) process.kill(pid, 'SIGKILL');
-      await page.close();
-      cleanup();
-    }
-  });
-
   test('a slow listing of the session delays its end and never cuts it short', { skip: process.platform === 'linux' && 'Linux lists the session from /proc, with no ps' }, async () => {
     const { dir, cleanup } = scratchDir();
     const pidOf = (name: string): number => Number(existsSync(path.join(dir, `${name}.pid`)) ? readFileSync(path.join(dir, `${name}.pid`), 'utf8') : 0);
@@ -542,43 +447,6 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
       cleanup();
     }
   });
-
-  for (const size of SIZE_LIMITS) {
-    test(`a ${size.cols}x${size.rows} terminal is drawn whole in a video frame, its corner cells clear of the caption bar`, async () => {
-      const md = `# Demo: Corners\n\n**Terminal:** ${size.cols}x${size.rows}\n\n## Steps\n\n1. **s**\n   \`run node corners.mjs\`\n`;
-      const { dir, cleanup } = scratchDir();
-      writeFiles(dir, { 'corners.mjs': PAINT_CORNERS });
-      // A video frame: the window on the backdrop, at the drivers' viewport, under the step's caption.
-      const page = await browser!.newPage({ viewport: VIEWPORT });
-      let surface: Surface | null = null;
-      try {
-        surface = await openSurface(page, parseDemoScript(md), { cwd: dir, backdrop: true, log: quiet });
-        await runAction(page, '', { verb: 'run', target: 'node corners.mjs', raw: 'run node corners.mjs' }, false, quiet);
-        await surface.settle();
-        await showCaption(page, 1, 1, 's', false);
-        const png = await page.screenshot();
-        const box = (selector: string) => page.locator(selector).evaluate((el) => el.getBoundingClientRect().toJSON() as DOMRect);
-        const [win, screen, caption] = await Promise.all([box(TERMINAL_WINDOW), box('.xterm-screen'), box('#__ss_caption__')]);
-        const where = `window ${JSON.stringify(win)}, screen ${JSON.stringify(screen)}`;
-        assert.ok(win.left >= 0 && win.top >= 0 && win.right <= VIEWPORT.width, `the window is inside the frame: ${where}`);
-        assert.ok(win.bottom <= caption.top, `the window clears the caption bar at ${caption.top}: ${where}`);
-        assert.ok(screen.left >= win.left && screen.right <= win.right && screen.top >= win.top && screen.bottom <= win.bottom, `the window holds the whole screen: ${where}`);
-        for (const { row, col, colour } of CORNERS) {
-          const corner = { row: row > 0 ? row : size.rows + row + 1, col: col > 0 ? col : size.cols + col + 1 };
-          const cell = await drawnCell(page, colour);
-          assert.ok(cell, `no cell is drawn in ${colour}`);
-          assert.deepEqual({ row: cell.row, col: cell.col }, corner, `the ${colour} cell is drawn at its corner`);
-          const [x, y] = [cell.box.left + cell.box.width / 2, cell.box.top + cell.box.height / 2];
-          assert.ok(x >= screen.left && x < screen.right && y >= screen.top && y < screen.bottom, `the cell at row ${corner.row}, column ${corner.col} is inside the screen: (${x}, ${y}), ${where}`);
-          assert.equal(await pixel(page, png, x, y), colour, `the frame shows the cell at row ${corner.row}, column ${corner.col} at (${Math.round(x)}, ${Math.round(y)})`);
-        }
-      } finally {
-        await surface?.close();
-        await page.close();
-        cleanup();
-      }
-    });
-  }
 
   test('a terminal that cannot fit its page at any font size is refused before its shell starts', async () => {
     const size = `${TERMINAL_COLS.max}x${TERMINAL_ROWS.max}`;
@@ -680,6 +548,177 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
       cleanup();
     }
   });
+});
+
+// A capture taken in this process is a chain of round trips to the browser under one time
+// limit, and on a busy host the tests above make each round trip several times slower
+// while they run. So the tests that take a capture here run once those are done, one at a
+// time. specs/ss-o4n1/capture-under-load.md records the measurements.
+describe('captures of the terminal surface', { skip }, () => {
+  test("a full-screen program's alternate screen, cursor and colours are drawn as sent, and quitting restores the shell", async () => {
+    const md = `# Demo: Board
+
+**Terminal:** 100x30
+
+## Steps
+
+1. **The board opens**
+   \`run node board.mjs\`
+   _Prove:_ its frame is along the top — \`row 1 ~ /^┌─ Sprint board ─+┐$/\`
+
+2. **Down one task**
+   \`press ArrowDown\`
+   _Prove:_ the cursor is in the second checkbox — \`cursor 4 6\`
+`;
+    await withTerminal(md, SAMPLE_CLI, async (page, demo, lines) => {
+      assert.deepEqual(
+        (await runSteps(page, demo, lines)).map((r) => r.proved),
+        [true, true],
+        lines.join('\n'),
+      );
+      assert.ok(lines.includes('  · `node board.mjs` took over the screen'), 'run settles once the board holds the alternate screen');
+      assert.equal(await checkAssertion(page, parseAssertionFor('row -1 ~ /1 of 3 done$/')), true, 'the status bar is on the bottom row');
+
+      // The board paints the selected row in 24-bit colour, the status bar in colour 24 of
+      // the 256, and leaves the rest on the terminal's background.
+      const png = await page.locator(TERMINAL_WINDOW).screenshot();
+      const at = async (row: number, col: number): Promise<string> => {
+        const c = await cellCentre(page, { cols: 100, rows: 30 }, row, col);
+        return pixel(page, png, c.x, c.y);
+      };
+      assert.equal(await at(4, 40), '#263854', 'the selected row');
+      assert.equal(await at(30, 60), '#005f87', 'the status bar');
+      assert.equal(await at(3, 40), '#0f1115', 'an unlit row');
+
+      await runAction(page, '', { verb: 'press', target: 'q', keys: [{ key: 'q' }], raw: 'press q' }, false, quiet);
+      assert.equal(await awaitAssertion(page, parseAssertionFor('exit == 0'), ACTION_TIMEOUT), true);
+      assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ "Sprint board"')), false, 'the alternate screen is gone');
+      assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^\\$ node board\\.mjs$/')), true, 'the shell screen is back');
+      assert.equal(await checkAssertion(page, parseAssertionFor('screen ~ /^1 of 3 done$/')), true);
+    });
+  });
+
+  test('--full-page holds the whole session in the window; the default holds the screen', async () => {
+    const md = `# Demo: Long\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **Fifty lines**\n   \`run seq 1 50\`\n   _Prove:_ the last is on screen — \`screen ~ /^50$/\`\n`;
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage();
+    try {
+      const shot = async (fullPage: boolean): Promise<{ rows: number; first: string | null; height: number }> => {
+        const out = path.join(dir, fullPage ? 'full.png' : 'screen.png');
+        await captureScreenshot({ page, demo: md, cwd: dir, outputPath: out, fullPage, log: quiet });
+        const { rows, first } = await page.evaluate(() => {
+          const t = (window as unknown as { __ss_term: { cursor(): { rows: number }; row(n: number): string | null } }).__ss_term;
+          return { rows: t.cursor().rows, first: t.row(1) };
+        });
+        return { rows, first, height: pngSize(out).height };
+      };
+      const screen = await shot(false);
+      const full = await shot(true);
+      assert.equal(screen.rows, 10);
+      // `$ seq 1 50`, the fifty lines, and the prompt after them.
+      assert.equal(full.rows, 52);
+      assert.equal(full.first, '$ seq 1 50');
+      assert.ok(full.height > screen.height * 4, `${full.height} is not the whole session against ${screen.height}`);
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test('--full-page starts the window at the first line of the session when the shell cleared the screen below its scrollback', async () => {
+    // The printf homes the cursor and erases the screen but keeps the scrollback, as
+    // `tput clear` does, so the cursor is not on the bottom row when the window grows.
+    const md = `# Demo: Cleared\n\n**Terminal:** 40x10\n\n## Steps\n\n1. **Lines, then a cleared screen**\n   \`run seq 1 30\`\n   \`run printf '\\033[H\\033[2J'\`\n   _Prove:_ the prompt is back on the top row — \`row 1 ~ /^\\$$/\`\n`;
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage();
+    try {
+      const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: path.join(dir, 'cleared.png'), fullPage: true, log: quiet });
+      assert.equal(res.failures, 0);
+      const { drawn, slider } = await page.evaluate(() => ({
+        drawn: [...document.querySelectorAll('.xterm-rows > div')].map((row) => (row.textContent ?? '').trimEnd()),
+        slider: getComputedStyle(document.querySelector('.xterm .scrollbar.vertical .slider') as Element).backgroundColor,
+      }));
+      // `$ seq 1 30` and the lines the clear left in the scrollback, then the prompt it moved to the top.
+      assert.deepEqual(drawn, ['$ seq 1 30', ...Array.from({ length: 22 }, (_, i) => String(i + 1)), '$']);
+      assert.equal(slider, 'rgba(0, 0, 0, 0)', 'the scrollbar xterm shows once the window scrolls draws nothing');
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test('the shell, and every program it still runs, end before the capture returns, even one that handles SIGHUP', async () => {
+    const md = `# Demo: Hold
+
+**Terminal:** 40x10
+
+## Steps
+
+1. **A background job that handles SIGHUP**
+   \`run echo $$ > shell.pid\`
+   \`run node hold.mjs job hup & until [ -s job.pid ]; do sleep 0.1; done\`
+
+2. **A full-screen program that handles SIGHUP**
+   \`run node hold.mjs tui hup screen\`
+   _Prove:_ it holds the screen — \`screen ~ "held"\`
+`;
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage();
+    const names = ['shell', 'job', 'tui'];
+    const pidOf = (name: string): number => Number(existsSync(path.join(dir, `${name}.pid`)) ? readFileSync(path.join(dir, `${name}.pid`), 'utf8') : 0);
+    try {
+      writeFiles(dir, { 'hold.mjs': HOLD });
+      const res = await captureScreenshot({ page, demo: md, cwd: dir, outputPath: path.join(dir, 'held.png'), log: quiet });
+      assert.equal(res.failures, 0);
+      for (const name of names) {
+        const pid = pidOf(name);
+        assert.ok(pid > 1, `${name}.pid holds a pid`);
+        assert.equal(running(pid), false, `the ${name} (pid ${pid}) outlived the capture`);
+      }
+    } finally {
+      // Nothing the capture left running outlives the test.
+      for (const pid of names.map(pidOf)) if (pid > 1 && running(pid)) process.kill(pid, 'SIGKILL');
+      await page.close();
+      cleanup();
+    }
+  });
+
+  for (const size of SIZE_LIMITS) {
+    test(`a ${size.cols}x${size.rows} terminal is drawn whole in a video frame, its corner cells clear of the caption bar`, async () => {
+      const md = `# Demo: Corners\n\n**Terminal:** ${size.cols}x${size.rows}\n\n## Steps\n\n1. **s**\n   \`run node corners.mjs\`\n`;
+      const { dir, cleanup } = scratchDir();
+      writeFiles(dir, { 'corners.mjs': PAINT_CORNERS });
+      // A video frame: the window on the backdrop, at the drivers' viewport, under the step's caption.
+      const page = await browser!.newPage({ viewport: VIEWPORT });
+      let surface: Surface | null = null;
+      try {
+        surface = await openSurface(page, parseDemoScript(md), { cwd: dir, backdrop: true, log: quiet });
+        await runAction(page, '', { verb: 'run', target: 'node corners.mjs', raw: 'run node corners.mjs' }, false, quiet);
+        await surface.settle();
+        await showCaption(page, 1, 1, 's', false);
+        const png = await page.screenshot();
+        const box = (selector: string) => page.locator(selector).evaluate((el) => el.getBoundingClientRect().toJSON() as DOMRect);
+        const [win, screen, caption] = await Promise.all([box(TERMINAL_WINDOW), box('.xterm-screen'), box('#__ss_caption__')]);
+        const where = `window ${JSON.stringify(win)}, screen ${JSON.stringify(screen)}`;
+        assert.ok(win.left >= 0 && win.top >= 0 && win.right <= VIEWPORT.width, `the window is inside the frame: ${where}`);
+        assert.ok(win.bottom <= caption.top, `the window clears the caption bar at ${caption.top}: ${where}`);
+        assert.ok(screen.left >= win.left && screen.right <= win.right && screen.top >= win.top && screen.bottom <= win.bottom, `the window holds the whole screen: ${where}`);
+        for (const { row, col, colour } of CORNERS) {
+          const corner = { row: row > 0 ? row : size.rows + row + 1, col: col > 0 ? col : size.cols + col + 1 };
+          const cell = await drawnCell(page, colour);
+          assert.ok(cell, `no cell is drawn in ${colour}`);
+          assert.deepEqual({ row: cell.row, col: cell.col }, corner, `the ${colour} cell is drawn at its corner`);
+          const [x, y] = [cell.box.left + cell.box.width / 2, cell.box.top + cell.box.height / 2];
+          assert.ok(x >= screen.left && x < screen.right && y >= screen.top && y < screen.bottom, `the cell at row ${corner.row}, column ${corner.col} is inside the screen: (${x}, ${y}), ${where}`);
+          assert.equal(await pixel(page, png, x, y), colour, `the frame shows the cell at row ${corner.row}, column ${corner.col} at (${Math.round(x)}, ${Math.round(y)})`);
+        }
+      } finally {
+        await surface?.close();
+        await page.close();
+        cleanup();
+      }
+    });
+  }
 });
 
 // On a busy host a capture near the most Chromium draws in one takes tens of seconds, and

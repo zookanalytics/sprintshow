@@ -23,7 +23,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { devices } from 'playwright';
 
-import { parseDemoScript, deviceName, keysIosLacks, unknownDevice, ACTION_VERBS, ASSERTION_KINDS, IOS_KEYS, TERMINAL_VERBS, TERMINAL_ASSERTION_KINDS, SURFACE_VOCABULARY, VIEWPORT_SIZE_FORM, outputSlug, surfaceOf, type Demo, type SurfaceKind } from './demo-script.ts';
+import { parseDemoScript, deviceName, keysIosLacks, unknownDevice, ACTION_VERBS, ASSERTION_KINDS, IOS_KEYS, REGEX_FLAGS, TERMINAL_VERBS, TERMINAL_ASSERTION_KINDS, SURFACE_VOCABULARY, VIEWPORT_SIZE_FORM, outputSlug, surfaceOf, type Demo, type Matcher, type SurfaceKind } from './demo-script.ts';
 
 /** Step-count window from the demo-authoring contract: under 5 is thin, over 12 spans too much. */
 const MIN_STEPS = 5;
@@ -128,6 +128,25 @@ export function looksLikeDirective(code: string): boolean {
 export function looksLikeAssertion(code: string): boolean {
   const lead = leadWord(code);
   return [...ASSERTION_KINDS, ...TERMINAL_ASSERTION_KINDS].some((k) => k === lead) || DIRECTIVE_WORDS.has(lead);
+}
+
+/**
+ * Why `m` does not match what it reads as, or null when it does: a regex that does not
+ * compile matches nothing, and a bare matcher that opens with `/` but does not read as a
+ * regex is matched as the substring it spells.
+ */
+function matcherFault(m: Matcher): string | null {
+  if (m.type === 'regex') {
+    try {
+      new RegExp(m.value, m.flags);
+      return null;
+    } catch (e) {
+      return `has a regex that does not compile (${(e as Error).message}) — it never matches.`;
+    }
+  }
+  return m.raw.startsWith('/')
+    ? `has a matcher that opens with \`/\` but is not a \`/regex/\` followed by flags among \`${REGEX_FLAGS}\` — it is matched as the substring "${m.value}". Quote a substring that opens with \`/\`.`
+    : null;
 }
 
 /** Apply every rule to a parsed script. Order: script-level findings first, then per step. */
@@ -242,6 +261,13 @@ export function lintDemo(demo: Demo, env: LintEnv): Finding[] {
           add('warn', step.index, `\`${a.raw}\` names column ${a.col}, past the terminal's ${demo.terminal.cols} columns — it never holds.`);
         }
       }
+    }
+
+    // A matcher that does not match what it reads as leaves a proof failing, a guard silent
+    // and a wait unmet.
+    for (const coded of [...step.actions, step.prove?.assertion, step.failIf?.assertion]) {
+      const fault = coded?.matcher ? matcherFault(coded.matcher) : null;
+      if (coded && fault) add('warn', step.index, `\`${coded.raw}\` ${fault}`);
     }
   }
 

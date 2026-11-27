@@ -1,10 +1,13 @@
 // Tests for the server seam (src/server.ts): the built-in static server behind
 // `--serve-dir`, and how an iOS app script's app is named or brought up.
 //
-// With no port named it listens on one the system assigns, so two captures on one host
-// each get a server of their own. A named port that is taken fails the start with an
-// error the caller can report, and a port no server can listen on, or more than one, is
-// refused before anything is served or spawned.
+// It listens on the loopback interface only, so none of the host's other addresses
+// reaches it, and its base URL names the address it listens on. With no port named it
+// listens on one the system assigns, so two captures on one host each get a server of
+// their own. A named port that something already answers on fails the start with an
+// error the caller can report, and leaves that server its connections, and a port no
+// server can listen on, or more than one, is refused before anything is served or
+// spawned.
 //
 // An iOS app's `--serve` command is a stand-in here, a node script that prints what a
 // start command prints: the app's simulator URL on a line of its standard output once the
@@ -14,8 +17,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer, type AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { ensureServer, ensureIosApp } from '../src/server.ts';
@@ -40,7 +44,7 @@ test('serve-dir with no port listens on a free port, and two side by side each g
     try {
       assert.notEqual(a.baseUrl, b.baseUrl);
       for (const s of [a, b]) {
-        assert.match(s.baseUrl, /^http:\/\/localhost:\d+$/);
+        assert.match(s.baseUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
         const res = await fetch(`${s.baseUrl}/`);
         assert.equal(res.status, 200);
         assert.equal(await res.text(), '<p>hello</p>');
@@ -48,6 +52,61 @@ test('serve-dir with no port listens on a free port, and two side by side each g
     } finally {
       await a.stop();
       await b.stop();
+    }
+  });
+});
+
+test("serve-dir listens on the loopback interface only, so none of the host's other addresses serves the directory", async (t) => {
+  // A server on every interface, over IPv6 or IPv4, answers on the host's IPv4 addresses,
+  // so they tell it from one on loopback.
+  const others = Object.values(networkInterfaces()).flatMap((list) => (list ?? []).filter((a) => a.family === 'IPv4' && !a.internal).map((a) => a.address));
+  if (!others.length) {
+    t.skip('this host has no IPv4 address but loopback');
+    return;
+  }
+  await withSite(async (dir) => {
+    const s = await ensureServer({ serveDir: dir, log: quiet });
+    try {
+      assert.equal(await (await fetch(`${s.baseUrl}/`)).text(), '<p>hello</p>');
+      const { port } = new URL(s.baseUrl);
+      // An address the server is not on refuses the connection, or leaves it unanswered on
+      // a host whose firewall hides closed ports, as macOS's stealth mode does.
+      const served = (
+        await Promise.all(
+          others.map(async (address) => {
+            try {
+              const res = await fetch(`http://${address}:${port}/`, { signal: AbortSignal.timeout(3000) });
+              return (await res.text()) === '<p>hello</p>' ? [address] : [];
+            } catch {
+              return [];
+            }
+          }),
+        )
+      ).flat();
+      assert.deepEqual(served, [], `the directory is served on ${served.join(', ')}, where other hosts can fetch it`);
+    } finally {
+      await s.stop();
+    }
+  });
+});
+
+test("serve-dir's base URL names the address it listens on, so a server on the same port of ::1, which localhost can name first, does not answer for it", async (t) => {
+  await withSite(async (dir) => {
+    const s = await ensureServer({ serveDir: dir, log: quiet });
+    const other = createHttpServer((_req, res) => res.end('another server'));
+    try {
+      const listening = await new Promise<boolean>((resolve, reject) => {
+        other.once('error', (e: NodeJS.ErrnoException) => (e.code === 'EADDRNOTAVAIL' ? resolve(false) : reject(e)));
+        other.listen(Number(new URL(s.baseUrl).port), '::1', () => resolve(true));
+      });
+      if (!listening) {
+        t.skip('this host has no IPv6 loopback address');
+        return;
+      }
+      assert.equal(await (await fetch(`${s.baseUrl}/`)).text(), '<p>hello</p>');
+    } finally {
+      if (other.listening) await new Promise<void>((resolve) => other.close(() => resolve()));
+      await s.stop();
     }
   });
 });
@@ -61,7 +120,7 @@ test('serve-dir on a named port serves on that port', async () => {
 
     const s = await ensureServer({ serveDir: dir, port, log: quiet });
     try {
-      assert.equal(s.baseUrl, `http://localhost:${port}`);
+      assert.equal(s.baseUrl, `http://127.0.0.1:${port}`);
       assert.equal(await (await fetch(`${s.baseUrl}/`)).text(), '<p>hello</p>');
     } finally {
       await s.stop();
@@ -90,7 +149,7 @@ test('a page script\'s server takes one port, named alone or as the only one of 
 
     const s = await ensureServer({ serveDir: dir, port: [port], log: quiet });
     try {
-      assert.equal(s.baseUrl, `http://localhost:${port}`);
+      assert.equal(s.baseUrl, `http://127.0.0.1:${port}`);
     } finally {
       await s.stop();
     }
@@ -102,15 +161,26 @@ test('a page script\'s server takes one port, named alone or as the only one of 
   });
 });
 
-test('serve-dir on a named port that is taken rejects the start', async () => {
+test('serve-dir on a named port that something answers on rejects the start, and leaves that server its loopback connections', async () => {
   await withSite(async (dir) => {
-    const blocker = createServer();
-    await new Promise<void>((resolve) => blocker.listen(0, resolve));
-    const port = (blocker.address() as AddressInfo).port;
-    try {
-      await assert.rejects(ensureServer({ serveDir: dir, port, log: quiet }), /server: cannot serve .*EADDRINUSE/);
-    } finally {
-      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    // On macOS a listen on the loopback address succeeds beside a server on every
+    // interface, which Node listens on when it is given no address, over IPv6 where the
+    // host has it.
+    for (const host of ['127.0.0.1', '0.0.0.0', undefined]) {
+      const other = createHttpServer((_req, res) => res.end('another server'));
+      await new Promise<void>((resolve, reject) => {
+        other.once('error', reject);
+        other.listen({ port: 0, host }, resolve);
+      });
+      const { port, address } = other.address() as AddressInfo;
+      const start = ensureServer({ serveDir: dir, port, log: quiet });
+      try {
+        await assert.rejects(start, { message: `server: cannot serve ${dir}: something already answers on port ${port}, which --port names; name a port nothing listens on` }, `a server on ${address} holds the port`);
+        assert.equal(await (await fetch(`http://127.0.0.1:${port}/`)).text(), 'another server', `the server on ${address} still answers on the loopback address`);
+      } finally {
+        await start.then((s) => s.stop(), () => {});
+        await new Promise<void>((resolve) => other.close(() => resolve()));
+      }
     }
   });
 });
