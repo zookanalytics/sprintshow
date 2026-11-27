@@ -122,8 +122,10 @@ test('the recording starts at its first frame and holds a frame every 40 ms, and
 });
 
 // The page answers DRAW_MS after it is asked for, and its image LOAD_MS after that. Once it
-// has loaded, the first two things added to it, the cover and the caption bar, each keep
-// it busy for BUSY_MS, so the browser draws each that long after the page added it.
+// has loaded, the first two things added anywhere in it, the cover and the caption bar,
+// each keep it busy for BUSY_MS, so the browser draws each that long after the page added
+// it. The engine adds both to its chrome's layer (chromeLayer in src/overlay.ts), which the
+// walkthrough's pointer has put in the page before it loads.
 const DRAW_MS = 1000;
 const LOAD_MS = 1500;
 const BUSY_MS = 1000;
@@ -133,7 +135,7 @@ const PAGE =
   "<script>addEventListener('load', () => { let busy = 2; new MutationObserver((records, observer) => {" +
   'if (!records.some((r) => r.addedNodes.length)) return; if (--busy === 0) observer.disconnect();' +
   `const end = performance.now() + ${BUSY_MS}; while (performance.now() < end);` +
-  '}).observe(document.body, { childList: true }); });</script></body></html>';
+  '}).observe(document.body, { childList: true, subtree: true }); });</script></body></html>';
 const SCRIPT = `# Demo: Narration timing
 
 **Start:** \`/\`
