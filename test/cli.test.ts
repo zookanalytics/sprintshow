@@ -5,6 +5,10 @@
 // Also, what `surface` prints and how it exits, that the help and the README name every
 // value it prints, and what `provision` takes.
 //
+// Each command takes the flags the help lists for it and refuses any other, by the name
+// typed, and a value flag refuses a missing value or a flag in its place, before the
+// command does anything.
+//
 // The tests that save an output need a headless Chromium and skip without one (see
 // browser-fixture.ts). `run` captures in proof mode over a stand-in ffmpeg, so no host
 // ffmpeg is needed.
@@ -199,6 +203,70 @@ test('provision ffmpeg finds the binary the engine uses in place, and fetches no
     const res = await runCli(['provision', 'ffmpeg'], { env: { ...process.env, FFMPEG_BIN: bin } });
     assert.equal(res.code, 0, `${res.stdout}${res.stderr}`);
     assert.equal(res.stdout, `ffmpeg: a binary is in place: ${bin}\n`);
+  } finally {
+    cleanup();
+  }
+});
+
+describe('a command refuses a flag it does not take, by the name typed, before it does anything', { concurrency: true }, () => {
+  const cases = [
+    ['a typo that would take -o as its value', ['run', SAMPLE, '--no-narate', '-o', 'out.mp4'], '--no-narate'],
+    ['a typo that would take -o as its value', ['screenshot', SAMPLE, '--fullpage', '-o', 'out.png'], '--fullpage'],
+    ['a typo that would take the script path as its value', ['lint', '--strcit', SAMPLE], '--strcit'],
+    ["screenshot's flag", ['run', SAMPLE, '--full-page'], '--full-page'],
+    ["lint's flag", ['run', SAMPLE, '--strict'], '--strict'],
+    ["run's flag", ['screenshot', SAMPLE, '--no-narrate', '-o', 'out.png'], '--no-narrate'],
+    ["run's flag", ['assemble', 'captures', '--headed'], '--headed'],
+    ["run's flag", ['lint', SAMPLE, '--mode', 'proof'], '--mode'],
+    ["the capture commands' output flag", ['lint', SAMPLE, '-o', 'out.txt'], '-o'],
+  ] as const;
+  for (const [name, args, flag] of cases) {
+    test(`${args[0]} refuses ${name}, ${flag}`, async () => {
+      const res = await runCli([...args]);
+      assert.equal(res.code, 1, `${res.stdout}${res.stderr}`);
+      assert.equal(res.stderr, `\n✖ ${args[0]}: unknown flag: ${flag}\n`);
+      assert.equal(res.stdout, '', 'the command did nothing');
+    });
+  }
+});
+
+test('a value flag refuses a missing value or a flag in its place, and a switch refuses a value', async () => {
+  const cases = [
+    [['run', SAMPLE, '--music', '-o', 'out.mp4'], '--music'],
+    [['run', SAMPLE, '--music'], '--music'],
+    [['screenshot', SAMPLE, '-o'], '-o'],
+    [['run', SAMPLE, '--keep=yes'], '--keep'],
+  ] as const;
+  const results = await Promise.all(cases.map(([args]) => runCli([...args])));
+  for (const [i, res] of results.entries()) {
+    const [args, flag] = cases[i];
+    assert.equal(res.code, 1, `${args.join(' ')}: ${res.stdout}${res.stderr}`);
+    // util.parseArgs words these refusals, after the command's name.
+    assert.ok(res.stderr.startsWith(`\n✖ ${args[0]}: `) && res.stderr.includes(`'${flag}`), `${args.join(' ')}: ${res.stderr}`);
+    assert.equal(res.stdout, '', args.join(' '));
+  }
+});
+
+test('each command takes every flag the help lists for it, so the missing script or captures directory is what stops it', async () => {
+  const { dir, cleanup } = scratchDir();
+  try {
+    const env = { ...process.env, FFMPEG_BIN: stubFfmpeg(dir) };
+    const serve = ['--base-url', 'http://127.0.0.1:9', '--serve', 'true', '--serve-dir', '.', '--port', '9', '--cwd', '.'];
+    const cases = [
+      [['run', 'missing.md', ...serve, '--mode', 'proof', '-o', 'out.mp4', '--screenshots', 'shots', '--music', 'bed.mp3', '--no-narrate', '--keep', '--headed'], /demo script not found: .*missing\.md/],
+      [['run', 'missing.md', '--no-video', '--screenshots', 'shots'], /demo script not found: .*missing\.md/],
+      [['screenshot', 'missing.md', ...serve, '--output', 'out.png', '--full-page', '--scale', '2', '--transparent'], /demo script not found: .*missing\.md/],
+      [['screenshot', 'missing.md', '-o', 'out.png', '--selector', '.card'], /demo script not found: .*missing\.md/],
+      [['assemble', 'missing', '-o', 'out.mp4', '--music', 'bed.mp3', '--no-narrate'], /missing\/manifest\.json/],
+      [['assemble', 'missing', '--output', 'out.mp4'], /missing\/manifest\.json/],
+      [['lint', 'missing.md', '--strict'], /demo script not found: .*missing\.md/],
+    ] as const;
+    const results = await Promise.all(cases.map(([args]) => runCli([...args], { cwd: dir, env })));
+    for (const [i, res] of results.entries()) {
+      const [args, reason] = cases[i];
+      assert.equal(res.code, 1, `${args.join(' ')}: ${res.stdout}${res.stderr}`);
+      assert.match(res.stderr, reason, args.join(' '));
+    }
   } finally {
     cleanup();
   }

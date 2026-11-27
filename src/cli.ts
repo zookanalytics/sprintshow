@@ -4,6 +4,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 
 import { runDemo, runScreenshot, type CaptureMode, type RunResult } from './run.ts';
 import { assembleVideo, type AssembleResult } from './assemble.ts';
@@ -127,46 +128,68 @@ base URL's origin or on its host over https, answers with Vercel's sign-in, the 
 once, to that URL alone, and the browser carries the cookie it earns. Without the key, such
 a capture stops and says it reached the sign-in.`;
 
-const BOOLEAN_FLAGS = new Set(['no-narrate', 'no-video', 'keep', 'headed', 'strict', 'full-page', 'transparent']);
+/** The flags `run` and `screenshot` share: where the pages come from, and the ports a run's servers listen on. */
+const SERVE_FLAGS = {
+  'base-url': { type: 'string' },
+  serve: { type: 'string' },
+  'serve-dir': { type: 'string' },
+  port: { type: 'string' },
+  cwd: { type: 'string' },
+} as const;
 
-interface Parsed {
-  pos: string[];
-  flags: Record<string, string | boolean>;
-}
+const OUTPUT_FLAG = { output: { type: 'string', short: 'o' } } as const;
 
-function collect(args: string[]): Parsed {
-  const flags: Record<string, string | boolean> = {};
-  const pos: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '-o') {
-      flags.output = takeValue('-o', args[++i]);
-    } else if (a.startsWith('--')) {
-      const name = a.slice(2);
-      if (BOOLEAN_FLAGS.has(name)) flags[name] = true;
-      else flags[name] = takeValue(a, args[++i]);
-    } else if (a.startsWith('-') && a !== '-') {
-      throw new Error(`unknown flag: ${a}`);
-    } else {
-      pos.push(a);
-    }
+/** The flags of each command that takes any, and the only ones it takes. */
+const FLAGS = {
+  run: {
+    ...SERVE_FLAGS,
+    ...OUTPUT_FLAG,
+    mode: { type: 'string' },
+    screenshots: { type: 'string' },
+    'no-video': { type: 'boolean' },
+    music: { type: 'string' },
+    'no-narrate': { type: 'boolean' },
+    keep: { type: 'boolean' },
+    headed: { type: 'boolean' },
+  },
+  screenshot: {
+    ...SERVE_FLAGS,
+    ...OUTPUT_FLAG,
+    'full-page': { type: 'boolean' },
+    selector: { type: 'string' },
+    scale: { type: 'string' },
+    transparent: { type: 'boolean' },
+  },
+  assemble: { ...OUTPUT_FLAG, music: { type: 'string' }, 'no-narrate': { type: 'boolean' } },
+  lint: { strict: { type: 'boolean' } },
+} as const satisfies Record<string, ParseArgsOptionsConfig>;
+
+/**
+ * A command's positionals, and the values of the flags FLAGS gives it, as util.parseArgs
+ * reads them. Its strict mode refuses any other flag, a value flag with no value or with a
+ * flag where its value goes, and a switch given a value, and each refusal names the
+ * command. An unknown flag is refused as `unknown flag: <the flag as typed>`, read from a
+ * lenient parse's tokens, because parseArgs's own refusal of one goes on to advise how to
+ * pass a positional that starts with `-`.
+ */
+function collect<C extends keyof typeof FLAGS>(command: C, args: string[]) {
+  const config = { args, options: FLAGS[command], allowPositionals: true, strict: true } as const;
+  try {
+    return parseArgs(config);
+  } catch (e) {
+    const unknown = parseArgs({ ...config, strict: false, tokens: true }).tokens.find((t) => t.kind === 'option' && !Object.hasOwn(config.options, t.name));
+    throw new Error(`${command}: ${unknown?.kind === 'option' ? `unknown flag: ${unknown.rawName}` : (e as Error).message}`);
   }
-  return { pos, flags };
-}
-
-function takeValue(flag: string, v: string | undefined): string {
-  if (v === undefined) throw new Error(`${flag} needs a value`);
-  return v;
 }
 
 /** The server options from the flags `run` and `screenshot` share. The server checks the ports. */
-function serveOptions(flags: Parsed['flags']): ServeOptions {
+function serveOptions(flags: { [F in keyof typeof SERVE_FLAGS]?: string }): ServeOptions {
   return {
-    baseUrl: (flags['base-url'] as string) ?? null,
-    serve: (flags.serve as string) ?? null,
-    serveDir: (flags['serve-dir'] as string) ?? null,
-    port: flags.port === undefined ? undefined : ports(flags.port as string),
-    cwd: flags.cwd as string | undefined,
+    baseUrl: flags['base-url'] ?? null,
+    serve: flags.serve ?? null,
+    serveDir: flags['serve-dir'] ?? null,
+    port: flags.port === undefined ? undefined : ports(flags.port),
+    cwd: flags.cwd,
   };
 }
 
@@ -203,8 +226,7 @@ function reportRun(res: RunResult): void {
 }
 
 async function runCommand(rest: string[]): Promise<number> {
-  const { pos, flags } = collect(rest);
-  const script = pos[0];
+  const { positionals: [script], values: flags } = collect('run', rest);
   if (!script) {
     console.error('run: a demo-script path is required.\n');
     console.log(HELP);
@@ -219,12 +241,12 @@ async function runCommand(rest: string[]): Promise<number> {
     script,
     mode,
     ...serveOptions(flags),
-    outputPath: flags.output as string | undefined,
-    musicPath: (flags.music as string) ?? null,
+    outputPath: flags.output,
+    musicPath: flags.music ?? null,
     noNarrate: Boolean(flags['no-narrate']),
     keep: Boolean(flags.keep),
     headed: Boolean(flags.headed),
-    screenshotDir: flags.screenshots === undefined ? undefined : path.resolve(flags.screenshots as string),
+    screenshotDir: flags.screenshots === undefined ? undefined : path.resolve(flags.screenshots),
     noVideo: Boolean(flags['no-video']),
   });
   reportRun(res);
@@ -232,9 +254,8 @@ async function runCommand(rest: string[]): Promise<number> {
 }
 
 async function screenshotCommand(rest: string[]): Promise<number> {
-  const { pos, flags } = collect(rest);
-  const script = pos[0];
-  const output = flags.output as string | undefined;
+  const { positionals: [script], values: flags } = collect('screenshot', rest);
+  const output = flags.output;
   if (!script || !output) {
     console.error(`screenshot: ${script ? 'an output path (-o <file.png>)' : 'a demo-script path'} is required.\n`);
     console.log(HELP);
@@ -245,7 +266,7 @@ async function screenshotCommand(rest: string[]): Promise<number> {
     outputPath: path.resolve(output),
     ...serveOptions(flags),
     fullPage: Boolean(flags['full-page']),
-    selector: (flags.selector as string) ?? null,
+    selector: flags.selector ?? null,
     scale: flags.scale === undefined ? undefined : Number(flags.scale),
     transparent: Boolean(flags.transparent),
   });
@@ -256,8 +277,7 @@ async function screenshotCommand(rest: string[]): Promise<number> {
 }
 
 async function assembleCommand(rest: string[]): Promise<number> {
-  const { pos, flags } = collect(rest);
-  const dir = pos[0];
+  const { positionals: [dir], values: flags } = collect('assemble', rest);
   if (!dir) {
     console.error('assemble: a captures directory is required.\n');
     console.log(HELP);
@@ -265,12 +285,12 @@ async function assembleCommand(rest: string[]): Promise<number> {
   }
   // Default output name drops the run's `-<timestamp>` suffix from the dir basename.
   const slug = outputSlug(path.basename(path.resolve(dir)).replace(/-\d{6,}$/, ''));
-  const outputPath = (flags.output as string) ?? path.join(process.cwd(), 'demos', `${slug}.mp4`);
+  const outputPath = flags.output ?? path.join(process.cwd(), 'demos', `${slug}.mp4`);
   const res: AssembleResult = await assembleVideo({
     capturesDir: path.resolve(dir),
     outputPath,
     noNarrate: Boolean(flags['no-narrate']),
-    musicPath: (flags.music as string) ?? null,
+    musicPath: flags.music ?? null,
   });
   console.log('');
   console.log(`✅ ${res.narrated ? 'narrated' : 'silent'}${res.music ? ' + music bed' : ''} demo → ${path.relative(process.cwd(), res.outputPath)}`);
@@ -307,8 +327,7 @@ const PROVISIONED = new Map<string, () => Promise<unknown>>([
 ]);
 
 async function provisionCommand(rest: string[]): Promise<number> {
-  const { pos, flags } = collect(rest);
-  const install = pos.length === 1 && !Object.keys(flags).length ? PROVISIONED.get(pos[0]) : undefined;
+  const install = rest.length === 1 ? PROVISIONED.get(rest[0]) : undefined;
   if (!install) {
     console.error(`provision: name what to install (${[...PROVISIONED.keys()].join(', ')}), and no option${rest.length ? ` (got "${rest.join(' ')}")` : ''}\n`);
     console.log(HELP);
@@ -344,8 +363,8 @@ async function main(): Promise<number> {
     case 'assemble':
       return assembleCommand(rest);
     case 'lint': {
-      const { pos, flags } = collect(rest);
-      return lintCli(pos[0], Boolean(flags.strict));
+      const { positionals: [script], values: flags } = collect('lint', rest);
+      return lintCli(script, Boolean(flags.strict));
     }
     case 'surface':
       return surfaceCommand(rest);
