@@ -19,8 +19,8 @@ import { parseDemoScript, outputSlug, surfaceOf, type Demo } from './demo-script
 import { ensureServer, ensureIosApp, type ServeOptions, type ServerHandle } from './server.ts';
 import { captureProof, capturesRoot, type CaptureResult } from './capture.ts';
 import { captureWalkthrough } from './walkthrough.ts';
-import { captureScreenshot, captureScreenshots, checkScreenshotDir, AREA_CONFLICT, IOS_AREA, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
-import { chromiumLaunchArgs, contextOptions } from './browser.ts';
+import { captureScreenshot, captureScreenshots, checkScreenshotDir, checkViewportScale, AREA_CONFLICT, IOS_AREA, TERMINAL_SELECTOR, type CaptureScreenshotOptions, type ScreenshotResult } from './screenshot.ts';
+import { chromiumLaunchArgs, contextOptions, lastViewport } from './browser.ts';
 import { shellDir } from './terminal.ts';
 
 export type CaptureMode = 'proof' | 'walkthrough';
@@ -204,11 +204,16 @@ export async function runScreenshot(opts: RunScreenshotOptions): Promise<Screens
   if (demo.terminal && opts.selector) throw new Error(TERMINAL_SELECTOR);
   if (surfaceOf(demo) === 'ios' && (opts.fullPage || opts.selector || opts.transparent || scale !== undefined)) throw new Error(IOS_AREA);
   const device = contextOptions(demo);
+  const deviceScale = scale ?? device.deviceScaleFactor ?? 1;
+  // A page script's screenshot takes the viewport the last step leaves by default, so a
+  // scale at which one capture cannot hold it whole is refused before a server starts. A
+  // terminal's window is checked once the terminal is laid out (captureScreenshot).
+  if (surfaceOf(demo) === 'page' && !opts.fullPage && !opts.selector) checkViewportScale(lastViewport(demo), deviceScale);
   log(`demo: "${demo.title}" — ${demo.steps.length} steps · screenshot`);
 
   const server = await serverFor(demo, opts);
   try {
-    return await withHeadlessPage({ ...device, deviceScaleFactor: scale ?? device.deviceScaleFactor ?? 1 }, (page) =>
+    return await withHeadlessPage({ ...device, deviceScaleFactor: deviceScale }, (page) =>
       captureScreenshot({
         page,
         baseUrl: server.baseUrl,

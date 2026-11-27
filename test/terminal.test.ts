@@ -14,8 +14,10 @@
 // terminal window with transparent corners, `--full-page` holds the whole session, or
 // its last lines, each one drawn in tiles of either size Chromium draws in, when the
 // session is more than one capture holds. A full-page still saves nothing, and says why,
-// at a scale where one capture cannot hold a line of the session, or when the page has
-// no terminal window. A terminal script refuses a server, a selector, or a directory that
+// at a scale where one capture cannot hold a line of the session, or a full-screen
+// program's window whole, or when the page has no terminal window. A still of the window
+// at a scale where one capture cannot hold it whole is refused before the first step
+// runs. A terminal script refuses a server, a selector, or a directory that
 // does not exist before a browser is spent. A video frame
 // shows every cell of a terminal at each limit of the sizes the parser accepts, clear of
 // the caption bar. The shell and every program it still runs end before the capture
@@ -418,6 +420,43 @@ describe('the terminal surface', { concurrency: true, skip }, () => {
       // One capture would hold some rows of pixels, just not a whole line of the window.
       const width = await page.evaluate((win) => (document.querySelector(win) as HTMLElement).getBoundingClientRect().width, TERMINAL_WINDOW);
       assert.ok(captureHeightLimit(width, scale) >= 1);
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  // At scale 13 an 80x24 window spans more tiles than Chromium draws in one capture.
+  test('a still of the window is refused before the first step runs at a scale where one capture cannot hold the window whole, and saves nothing', async () => {
+    const scale = 13;
+    const md = `# Demo: Too fine\n\n**Terminal:** 80x24\n\n## Steps\n\n1. **A file is made**\n   \`run touch made.txt\`\n`;
+    const { dir, cleanup } = scratchDir();
+    const page = await browser!.newPage({ deviceScaleFactor: scale });
+    try {
+      const png = path.join(dir, 'x.png');
+      await assert.rejects(captureScreenshot({ page, demo: md, cwd: dir, outputPath: png, log: quiet }), {
+        message: new RegExp(`^screenshot: scale ${scale} is too large for one capture of a window of \\d+x\\d+ CSS pixels$`),
+      });
+      assert.equal(existsSync(path.join(dir, 'made.txt')), false, 'no step ran');
+      assert.equal(existsSync(png), false);
+    } finally {
+      await page.close();
+      cleanup();
+    }
+  });
+
+  test("--full-page refuses a full-screen program's window, which it captures as it is, at a scale where one capture cannot hold it whole, and saves nothing", async () => {
+    const scale = 13;
+    const md = `# Demo: Held\n\n**Terminal:** 80x24\n\n## Steps\n\n1. **A program holds the alternate screen**\n   \`run node hold.mjs held screen\`\n   _Prove:_ it holds the screen — \`screen ~ "held"\`\n`;
+    const { dir, cleanup } = scratchDir();
+    writeFiles(dir, { 'hold.mjs': HOLD });
+    const page = await browser!.newPage({ deviceScaleFactor: scale });
+    try {
+      const png = path.join(dir, 'x.png');
+      await assert.rejects(captureScreenshot({ page, demo: md, cwd: dir, outputPath: png, fullPage: true, log: quiet }), {
+        message: new RegExp(`^screenshot: could not capture the whole terminal session: scale ${scale} is too large for one capture of a window of \\d+x\\d+ CSS pixels$`),
+      });
+      assert.equal(existsSync(png), false);
     } finally {
       await page.close();
       cleanup();

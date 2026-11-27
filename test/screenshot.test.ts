@@ -5,11 +5,15 @@
 // the last step leaves as one PNG, with nothing of the engine's drawn into it. The
 // command exits 0 when every proof held, 3 when the PNG is saved but a proof failed, and
 // 1 when no PNG is saved, and it runs with no ffmpeg reachable. A capture that fails once
-// the steps have run says how many of their proofs failed. A full-page capture of a page
-// larger than one capture holds keeps its top, each row of it drawn in tiles of either
-// size Chromium draws in, and says so, and the limit it stops at ends inside what
-// Chromium drew of captures that asked for more. One of a page too wide at its scale for
-// one capture to hold a row of it saves nothing, and says the scale is too large.
+// the steps have run says how many of their proofs failed. A full-page capture of a page,
+// or a capture of an element, larger than one capture holds keeps its top, each row of it
+// drawn in tiles of either size Chromium draws in, and says so, and the limit it stops at
+// ends inside what Chromium drew of captures that asked for more, wherever on the page
+// they start. Such an element in a box that scrolls is scrolled to its top there, and its
+// capture stops where the page ends. One of a page too wide at its scale for one capture
+// to hold a row of it saves nothing, and says the scale is too large. So does a viewport
+// one capture cannot hold whole, before the page is driven, while an element at that
+// scale is captured whole.
 //
 // The tests that drive a page need a headless Chromium and skip without one (see
 // browser-fixture.ts).
@@ -20,7 +24,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 
-import { captureHeightLimit, captureScreenshot, AREA_CONFLICT } from '../src/screenshot.ts';
+import { captureHeightLimit, captureScreenshot, checkViewportScale, AREA_CONFLICT } from '../src/screenshot.ts';
 import { ensureServer } from '../src/server.ts';
 import { launchBrowser, serveSite, scratchDir, writeFiles, runCli, stepLines, pngSize, pngPixels, pixelsApart, alphaAt, HIGH_DPI_ARGS, REPO } from './browser-fixture.ts';
 
@@ -64,7 +68,59 @@ const TALL = `# Demo: Tall page
 `;
 
 /** Three hundred bands, 100 px tall, each a colour that encodes its index: n % 256 red, n / 256 green, blue 200. */
-const BANDS_HTML = `<!doctype html><body style="margin:0">${Array.from({ length: 300 }, (_, n) => `<div${n === 299 ? ' id="end"' : ''} style="height:100px;background:rgb(${n % 256},${Math.floor(n / 256)},200)"></div>`).join('')}</body>`;
+const BAND_ROWS = Array.from({ length: 300 }, (_, n) => `<div${n === 299 ? ' id="end"' : ''} style="height:100px;background:rgb(${n % 256},${Math.floor(n / 256)},200)"></div>`).join('');
+const BANDS_HTML = `<!doctype html><body style="margin:0">${BAND_ROWS}</body>`;
+
+/**
+ * The bands again, in an element 5000 px down its page and 100 px in from its left edge.
+ * Its tiles are laid from the page's top-left corner, so at scale 2 it spans a column of
+ * them more than an element as wide at the page's corner would.
+ */
+const FEED_HTML = `<!doctype html><body style="margin:0"><div style="height:5000px"></div><div id="feed" style="margin-left:100px">${BAND_ROWS}</div></body>`;
+
+const FEED = `# Demo: A feed of bands
+
+**Start:** \`/feed.html\`
+
+## Steps
+
+1. **An element of bands, 30000 px tall, 5000 px down the page**
+   \`waitFor #end\`
+   _Prove:_ the last band is on the page — \`count #end == 1\`
+`;
+
+/**
+ * The bands again, 1000 px down the content of a box 800 px tall that scrolls, on a page
+ * as tall as the viewport. Until the box scrolls, the page shows none of them.
+ */
+const PANE_HTML = `<!doctype html><body style="margin:0"><div style="height:800px;overflow:auto"><div style="height:1000px"></div><div id="feed">${BAND_ROWS}</div></div></body>`;
+
+const PANE = `# Demo: A feed of bands in a box that scrolls
+
+**Start:** \`/pane.html\`
+
+## Steps
+
+1. **An element of bands, 30000 px tall, 1000 px down a box that scrolls**
+   \`waitFor #end\`
+   _Prove:_ the last band is on the page — \`count #end == 1\`
+`;
+
+/**
+ * The bands that `png`, a capture of the bands from their top at scale 2, `height` CSS
+ * pixels tall, does not show in their colour at its device-pixel column `x`: a row in each
+ * band it holds whole, and its last row, which shows the band it cuts through.
+ */
+async function bandsMissing(png: string, height: number, x: number): Promise<string[]> {
+  const ys = [...Array.from({ length: Math.floor(height / 100) }, (_, n) => (n * 100 + 50) * 2), height * 2 - 1];
+  const drawn = await pngPixels(png, ys.map((y) => ({ x, y })));
+  const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
+  return ys.flatMap((y, i) => {
+    const n = Math.floor(y / 200);
+    const [red, green, blue] = drawn[i];
+    return near(red, n % 256) && near(green, Math.floor(n / 256)) && near(blue, 200) ? [] : [`band ${n} at y ${y}: rgba(${drawn[i].join(', ')})`];
+  });
+}
 
 const BANDS = `# Demo: Banded page
 
@@ -124,26 +180,32 @@ function noFfmpegEnv(dir: string): NodeJS.ProcessEnv {
 }
 
 test('the capture height limit ends inside what Chromium drew of captures past its tile budget, in tiles of either size, and keeps those it drew whole', () => {
-  // Captures Chromium was asked for whole, each its width in CSS pixels, its scale and the
-  // size of the tiles it drew in, with the lowest device-pixel row seen drawn, and whether
-  // it left the rows below unpainted. A browser started at scale 2 on macOS drew the
-  // captures in 512-pixel tiles.
+  // Captures Chromium was asked for whole, each its width in CSS pixels, its scale, how far
+  // down the page it starts, and the size of the tiles it drew in, with the lowest
+  // device-pixel row of the capture seen drawn, and whether it left the rows below
+  // unpainted. A browser started at scale 2 on macOS drew the captures in 512-pixel tiles.
+  // No tile of any of them was one solid colour, so each cost tile memory.
   const seen = [
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 2, tile: 256, drawn: 51804, cut: true },
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 3, tile: 256, drawn: 37050, cut: true },
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 4, tile: 256, drawn: 27112, cut: true },
-    { what: 'a page 30000 px tall', width: 1280, scale: 2, tile: 256, drawn: 47100, cut: true },
-    { what: 'a 40x24 terminal of 1002 lines', width: 606, scale: 2, tile: 256, drawn: 56224, cut: false },
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 1, tile: 256, drawn: 28112, cut: false },
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 2, tile: 512, drawn: 52020, cut: true },
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 3, tile: 512, drawn: 37230, cut: true },
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 4, tile: 512, drawn: 26010, cut: true },
-    { what: 'a page 30000 px tall', width: 1280, scale: 2, tile: 512, drawn: 43350, cut: true },
-    { what: 'a 40x24 terminal of 1002 lines', width: 606, scale: 2, tile: 512, drawn: 56224, cut: false },
-    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 1, tile: 512, drawn: 28112, cut: false },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 2, top: 0, tile: 256, drawn: 51804, cut: true },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 3, top: 0, tile: 256, drawn: 37050, cut: true },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 4, top: 0, tile: 256, drawn: 27112, cut: true },
+    { what: 'a page 30000 px tall', width: 1280, scale: 2, top: 0, tile: 256, drawn: 47100, cut: true },
+    { what: 'a 1280x900 viewport', width: 1280, scale: 11, top: 0, tile: 256, drawn: 9144, cut: true },
+    { what: 'an element 30000 px tall, 5000 px down its page', width: 1280, scale: 2, top: 5000, tile: 256, drawn: 47150, cut: true },
+    { what: 'a clip 20000 px tall, 20000 px down its page', width: 1280, scale: 2, top: 20000, tile: 256, drawn: 40000, cut: false },
+    { what: 'a 40x24 terminal of 1002 lines', width: 606, scale: 2, top: 0, tile: 256, drawn: 56224, cut: false },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 1, top: 0, tile: 256, drawn: 28112, cut: false },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 2, top: 0, tile: 512, drawn: 52020, cut: true },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 3, top: 0, tile: 512, drawn: 37230, cut: true },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 4, top: 0, tile: 512, drawn: 26010, cut: true },
+    { what: 'a page 30000 px tall', width: 1280, scale: 2, top: 0, tile: 512, drawn: 43350, cut: true },
+    { what: 'an element 30000 px tall, 5000 px down its page', width: 1280, scale: 2, top: 5000, tile: 512, drawn: 43040, cut: true },
+    { what: 'a clip 20000 px tall, 20000 px down its page', width: 1280, scale: 2, top: 20000, tile: 512, drawn: 40000, cut: false },
+    { what: 'a 40x24 terminal of 1002 lines', width: 606, scale: 2, top: 0, tile: 512, drawn: 56224, cut: false },
+    { what: 'an 80x24 terminal of 1002 lines', width: 1184, scale: 1, top: 0, tile: 512, drawn: 28112, cut: false },
   ];
   for (const c of seen) {
-    const bottom = captureHeightLimit(c.width, c.scale) * c.scale;
+    const bottom = captureHeightLimit(c.width, c.scale, { x: 0, y: c.top }) * c.scale;
     const where = `${c.what} at scale ${c.scale} in ${c.tile}-pixel tiles: the limit ends at device row ${bottom}`;
     if (!c.cut) {
       assert.ok(bottom >= c.drawn, where);
@@ -152,9 +214,16 @@ test('the capture height limit ends inside what Chromium drew of captures past i
     // Inside what was drawn. And short of the least that tiles of either size drew of that
     // capture by no more than the sixteenth of the budget a capture leaves unspent, and the
     // tile row the limit rounds down to.
-    const least = seen.filter((s) => s.cut && s.width === c.width && s.scale === c.scale).reduce((a, b) => (b.drawn < a.drawn ? b : a));
+    const least = seen.filter((s) => s.cut && s.width === c.width && s.scale === c.scale && s.top === c.top).reduce((a, b) => (b.drawn < a.drawn ? b : a));
     assert.ok(bottom <= c.drawn && bottom >= (least.drawn * 15) / 16 - (least.tile - 2), where);
   }
+});
+
+test('a viewport is refused at a scale where one capture cannot hold it whole, and held at one where it can', () => {
+  assert.doesNotThrow(() => checkViewportScale({ width: 1280, height: 900 }, 10));
+  assert.throws(() => checkViewportScale({ width: 1280, height: 900 }, 11), { message: 'screenshot: scale 11 is too large for one capture of a viewport of 1280x900 CSS pixels' });
+  // A phone's viewport is a fraction of the desktop's area, so one capture holds it at that scale.
+  assert.doesNotThrow(() => checkViewportScale({ width: 393, height: 659 }, 11));
 });
 
 // Each test drives a page, a server or a process of its own, so they run side by side.
@@ -213,6 +282,48 @@ describe('the screenshot capture', { concurrency: true, skip }, () => {
         message: 'screenshot: could not capture the full page: scale 1 is too large for one capture of a page 250000 CSS pixels wide',
       });
       assert.equal(existsSync(png), false);
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
+
+  test("the viewport is refused before the page is driven at a scale where one capture cannot hold it whole, and an element at that scale is captured whole", async () => {
+    const site = await serveSite({ 'card.html': CARD_HTML });
+    const page = await browser!.newPage({ deviceScaleFactor: 11 });
+    try {
+      const view = path.join(site.dir, 'view.png');
+      await assert.rejects(captureScreenshot({ page, baseUrl: site.baseUrl, demo: CARD, outputPath: view, log: quiet }), {
+        message: 'screenshot: scale 11 is too large for one capture of a viewport of 1280x900 CSS pixels',
+      });
+      assert.equal(page.url(), 'about:blank');
+      assert.equal(existsSync(view), false);
+      // A capture spends tiles only on its own area, so the card, a fraction of the viewport, is held whole.
+      const card = path.join(site.dir, 'card.png');
+      const lines: string[] = [];
+      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: CARD, outputPath: card, selector: '.card', log: (m) => lines.push(m) });
+      assert.equal(lines.at(-1), 'screenshot: capturing `.card` → card.png');
+      assert.deepEqual(pngSize(card), { width: 160 * 11, height: 80 * 11 });
+      const [[red, green, blue, alpha]] = await pngPixels(card, [{ x: 80 * 11, y: 80 * 11 - 1 }]);
+      const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
+      assert.ok(near(red, 31) && near(green, 111) && near(blue, 235) && alpha === 255, `the card's bottom row is drawn, not rgba(${red}, ${green}, ${blue}, ${alpha})`);
+    } finally {
+      await page.close();
+      await site.close();
+    }
+  });
+
+  test('--selector scrolls the top of an element taller than one capture holds into the box it scrolls in, and keeps it down to where the page ends', async () => {
+    const site = await serveSite({ 'pane.html': PANE_HTML });
+    const page = await browser!.newPage({ deviceScaleFactor: 2 });
+    try {
+      const out = path.join(site.dir, 'pane.png');
+      const lines: string[] = [];
+      await captureScreenshot({ page, baseUrl: site.baseUrl, demo: PANE, outputPath: out, selector: '#feed', log: (m) => lines.push(m) });
+      assert.equal(lines.at(-1), "screenshot: capturing `#feed`'s top 900 of its 30000 CSS pixels, where the page ends → pane.png");
+      assert.deepEqual(pngSize(out), { width: 2560, height: 1800 });
+      // The box, the page's top 800 px, shows the bands from their top.
+      assert.deepEqual(await bandsMissing(out, 800, 2550), []);
     } finally {
       await page.close();
       await site.close();
@@ -370,15 +481,29 @@ for (const tiles of [256, 512]) {
         assert.equal(lines.at(-1), `screenshot: capturing the page's top ${limit} of its 30000 CSS pixels, the most one capture holds at scale 2 → bands.png`);
         assert.deepEqual(pngSize(out), { width: 2560, height: limit * 2 });
         // Chromium drew every band down to the capture's last row, where the band it cuts through shows.
-        const ys = [...Array.from({ length: Math.floor(limit / 100) }, (_, n) => (n * 100 + 50) * 2), limit * 2 - 1];
-        const drawn = await pngPixels(out, ys.map((y) => ({ x: 2550, y })));
-        const near = (got: number, want: number): boolean => Math.abs(got - want) <= 2;
-        const wrong = ys.flatMap((y, i) => {
-          const n = Math.floor(y / 200);
-          const [red, green, blue] = drawn[i];
-          return near(red, n % 256) && near(green, Math.floor(n / 256)) && near(blue, 200) ? [] : [`band ${n} at y ${y}: rgba(${drawn[i].join(', ')})`];
-        });
-        assert.deepEqual(wrong, []);
+        assert.deepEqual(await bandsMissing(out, limit, 2550), []);
+      } finally {
+        await page.close();
+        await site.close();
+      }
+    } finally {
+      await own?.close();
+    }
+  });
+
+  test(`--selector keeps the top of an element taller than Chromium draws in one capture, and says so, in a browser that draws in ${tiles}-pixel tiles`, { skip }, async () => {
+    const own = tiles === 512 ? (await launchBrowser(HIGH_DPI_ARGS)).browser : null;
+    try {
+      const site = await serveSite({ 'feed.html': FEED_HTML });
+      const page = await (own ?? browser!).newPage({ deviceScaleFactor: 2 });
+      try {
+        const out = path.join(site.dir, 'feed.png');
+        const lines: string[] = [];
+        await captureScreenshot({ page, baseUrl: site.baseUrl, demo: FEED, outputPath: out, selector: '#feed', log: (m) => lines.push(m) });
+        const limit = captureHeightLimit(1180, 2, { x: 100, y: 5000 });
+        assert.equal(lines.at(-1), `screenshot: capturing \`#feed\`'s top ${limit} of its 30000 CSS pixels, the most one capture holds at scale 2 → feed.png`);
+        assert.deepEqual(pngSize(out), { width: 2360, height: limit * 2 });
+        assert.deepEqual(await bandsMissing(out, limit, 2350), []);
       } finally {
         await page.close();
         await site.close();
