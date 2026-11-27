@@ -13,7 +13,8 @@
 // phone, with the phone's viewport at the frame's top-left corner on gray. A viewport one
 // capture cannot hold whole at its scale is refused: a screenshot's, at the size the last
 // step leaves it, before a server starts, and a run's screenshot or proof frame at the
-// device's own scale, saving none.
+// device's own scale, saving none. A phone's viewport on a page that sets no viewport,
+// which the phone draws smaller to fit, is measured at the phone's own size.
 //
 // The browser-backed tests need a headless Chromium, and the videos a real ffmpeg; they
 // skip without them (see browser-fixture.ts and assemble.test.ts).
@@ -92,6 +93,12 @@ const WIDE_STEP = `1. **Widened to a 4K screen's size, the page shows its sideba
 
 /** A script on the fixture page at `device`, with `steps`. */
 const navScript = (device: string, steps: string): string => `# Demo: Navigation at a phone's width\n\n**Start:** \`/nav.html\`\n**Device:** ${device}\n\n## Steps\n\n${steps}`;
+
+/** A page with no viewport tag, which a phone lays out 980 CSS pixels wide and draws smaller to fit its screen. */
+const UNTAGGED_HTML = `<!doctype html><html><head><style>html,body{margin:0;background:rgb(${BODY})}</style></head><body><p id="note">No viewport tag</p></body></html>`;
+
+/** A script on UNTAGGED_HTML as a Galaxy S9+, whose screen is 320x658, so it draws the page at 320/980 of its size. */
+const UNTAGGED = `# Demo: A page with no viewport tag\n\n**Start:** \`/plain.html\`\n**Device:** Galaxy S9+\n\n## Steps\n\n1. **The page shows its note**\n   \`waitFor #note\`\n   _Prove:_ the note shows — \`visible #note\`\n`;
 
 /** At phone width, then resized to a desktop's. */
 const NAV = navScript('375x812', `${PHONE_STEPS}\n${DESKTOP_STEP}`);
@@ -266,6 +273,32 @@ describe('a page script captured at a device size', { concurrency: true, skip },
       assert.equal(existsSync(shots), false, 'the run keeps no screenshot, nor the directory it made for them');
       const video = path.join(dir, 'wide.mp4');
       await assert.rejects(captureProof({ page: await context.newPage(), baseUrl: server.baseUrl, demo: wide, outputPath: video, noNarrate: true, captureRoot: dir, log: quiet }), { message: refused });
+      assert.equal(existsSync(video), false);
+    } finally {
+      await context.close();
+      await server.stop();
+      cleanup();
+    }
+  });
+
+  test('a page a phone draws smaller to fit its screen is captured whole or refused at the size of the screen, not of the page it lays out', async () => {
+    const { dir, cleanup } = scratchDir();
+    const phone = parseDemoScript(UNTAGGED);
+    writeFiles(dir, { 'site/plain.html': UNTAGGED_HTML });
+    const site = path.join(dir, 'site');
+    const server = await ensureServer({ serveDir: site, log: quiet });
+    const context = await browser!.newContext({ ...contextOptions(phone), deviceScaleFactor: 24 });
+    try {
+      // At scale 8 one capture holds the 320x658 screen, though not the 980x2016 CSS pixels of the page it shows.
+      const lines: string[] = [];
+      const shot = await runScreenshot({ script: phone, serveDir: site, scale: 8, outputPath: path.join(dir, 'phone.png'), log: (m) => lines.push(m) });
+      assert.equal(shot.failures, 0, lines.join('\n'));
+      assert.equal(pngSize(shot.outputPath).width, 320 * 8);
+      // At scale 24 it holds no 320x658 screen, so a run's frame of it is refused.
+      const video = path.join(dir, 'phone.mp4');
+      await assert.rejects(captureProof({ page: await context.newPage(), baseUrl: server.baseUrl, demo: phone, outputPath: video, noNarrate: true, captureRoot: dir, log: quiet }), {
+        message: 'scale 24 is too large for one capture of a viewport of 320x658 CSS pixels',
+      });
       assert.equal(existsSync(video), false);
     } finally {
       await context.close();

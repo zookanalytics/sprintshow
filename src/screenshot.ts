@@ -92,7 +92,11 @@ export function captureHeightLimit(width: number, scale: number, at = { x: 0, y:
   return Math.min(...limits);
 }
 
-/** A capture's place on the page and its size, in CSS pixels, and the device pixels per CSS pixel it is drawn at. */
+/**
+ * A capture's place on the page and its size, in CSS pixels, and the device pixels per CSS
+ * pixel it is drawn at. A viewport's are in its own pixels instead, which are CSS pixels
+ * only where the page is drawn at a visual viewport scale of 1 (areaExtent).
+ */
 interface Extent {
   x: number;
   y: number;
@@ -152,17 +156,26 @@ export interface Capture {
   save(shot: CaptureShot): Promise<void>;
 }
 
-/** Where `area` lies on the page now, its size, and the device pixels per CSS pixel it is drawn at. */
+/** The extent of `area` where it lies on the page now, an element's in the whole pixels it touches, as Playwright captures one. */
 async function areaExtent(page: Page, area: CaptureArea): Promise<Extent> {
   if (area === 'page') return pageExtent(page);
   if (area === 'viewport') {
-    return page.evaluate(() => ({ x: visualViewport?.pageLeft ?? scrollX, y: visualViewport?.pageTop ?? scrollY, width: innerWidth, height: innerHeight, scale: devicePixelRatio }));
+    // Playwright captures the viewport as the visual viewport shows the page, at its scale,
+    // and Chromium lays the tiles on the page as drawn at that scale. A phone draws a page
+    // laid out wider than its screen, as one with no viewport tag is, at a scale below 1.
+    // So the viewport is measured in its own pixels, CSS pixels times that scale, its size
+    // rounded to the whole pixels the viewport is set in, and the device's scale turns them
+    // into device pixels.
+    return page.evaluate(() => {
+      const { pageLeft, pageTop, width, height, scale } = visualViewport as VisualViewport;
+      return { x: pageLeft * scale, y: pageTop * scale, width: Math.round(width * scale), height: Math.round(height * scale), scale: devicePixelRatio };
+    });
   }
   // An element's box is measured from the viewport, and the page's tiles from the page's corner.
   const box = await area.boundingBox({ timeout: ACTION_TIMEOUT });
   if (!box) throw new Error('the element has no box');
   const at = await page.evaluate(() => ({ x: scrollX, y: scrollY, scale: devicePixelRatio }));
-  return { x: box.x + at.x, y: box.y + at.y, width: box.width, height: box.height, scale: at.scale };
+  return inPixels({ x: box.x + at.x, y: box.y + at.y, width: box.width, height: box.height, scale: at.scale });
 }
 
 /** Why one capture at `extent`'s scale holds none of `what`: all of it, for an area captured whole, or one row of it. */
@@ -179,24 +192,23 @@ function inPixels(box: Extent): Extent {
 }
 
 /**
- * The capture of `area` as it lies on `page` now, in the whole pixels it touches, as
- * Playwright captures an element. It holds the whole area, or, given `keepTop`, as much of
- * its top as Chromium draws whole (captureHeightLimit). Throws, saying the scale is too
- * large for one capture of `what`, such as "a viewport", when one capture cannot hold the
- * whole area, or, given `keepTop`, one row of it.
+ * The capture of `area` as it lies on `page` now (areaExtent). It holds the whole area, or,
+ * given `keepTop`, as much of its top as Chromium draws whole (captureHeightLimit). Throws,
+ * saying the scale is too large for one capture of `what`, such as "a viewport", when one
+ * capture cannot hold the whole area, or, given `keepTop`, one row of it.
  *
  * The top of an element taller than one capture holds is scrolled to the top of each box it
  * scrolls in, so that each shows it, and measured there. A capture of the page reaches no
  * further than the page's end, so that capture stops there at the latest.
  */
 export async function captureOf(page: Page, area: CaptureArea, what: string, { keepTop = false } = {}): Promise<Capture> {
-  let extent = inPixels(await areaExtent(page, area));
+  let extent = await areaExtent(page, area);
   let height = Math.min(extent.height, captureHeightLimit(extent.width, extent.scale, extent));
   if (height < (keepTop ? 1 : extent.height)) throw new Error(tooLarge(what, extent, !keepTop));
   let pageEnds = false;
   if (typeof area === 'object' && height < extent.height) {
     await area.evaluate((el) => el.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' }));
-    extent = inPixels(await areaExtent(page, area));
+    extent = await areaExtent(page, area);
     const most = Math.min(extent.height, captureHeightLimit(extent.width, extent.scale, extent));
     const above = (await pageExtent(page)).height - extent.y;
     pageEnds = above < most;

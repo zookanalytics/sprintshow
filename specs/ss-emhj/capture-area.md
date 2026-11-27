@@ -64,14 +64,46 @@ the capture to, in device pixels.
 - **So the viewport is what passes the budget at a large scale, not every capture.** An
   element or a clip is held to its own area, at any scale.
 
+### A page a phone draws smaller to fit its screen
+
+A phone lays out a page with no viewport tag 980 CSS pixels wide, and draws it at the
+scale that fits its screen, which the page's visual viewport reports. Playwright captures
+the viewport at that scale (`takeScreenshot` in the installed `playwright-core`), so the
+PNG is the screen's size at the device's scale. A second probe drew such a page as an
+iPhone 13, whose screen is 390x664, so at a scale of 390/980. The page was a vertical
+gradient on a green background, which showed where tiles were left unpainted. This probe
+is not kept either. `test/device.test.ts` captures such a page at a scale at which its
+980 CSS pixels would not fit, and refuses it at one at which its screen does not.
+
+| Capture | Scale | Tile | PNG | Last row drawn | Bound |
+|---|---|---|---|---|---|
+| The 390x664 viewport at the page's top | 11 | 256 | 4290 x 7302 | whole | whole |
+| The same | 11 | 512 | 4290 x 7302 | whole | whole |
+| The same | 24 | 256 | 9360 x 15931 | 13970 | refused |
+| The same | 24 | 512 | 9360 x 15931 | 13260 | refused |
+| The viewport 1000 CSS px down the page | 24 | 256 | 9360 x 15931 | 13817 | refused |
+| The same | 24 | 512 | 9360 x 15931 | 12889 | refused |
+
+- **The page is drawn, and its tiles laid, at the visual viewport's scale.** Counted in
+  the page's 980x1669 CSS pixels at scale 11, the viewport would span about 3,100 tiles of
+  256, more than the budget, yet it came out whole. At scale 24 its 9360 device pixels
+  span 37 tiles of 256 across. It was drawn for 55 whole rows of them, and the next row
+  only at its left, which is where the 2048th tile ends. In tiles of 512 it was drawn for
+  26 whole rows of 19, and the next row but at its right end.
+- **The grid is laid from the page's corner on the page as drawn.** 1000 CSS px down the
+  page, the viewport starts 1000 x 390/980 x 24 device pixels, or 9551, down the grid.
+  Counted from the row of tiles that holds that row, 55 rows of 256 end at its row 13817,
+  and 26 rows of 512 at its row 12889, where it was cut.
+
 ## What the screenshot driver does with it
 
 - Every capture goes through `captureOf` in `src/screenshot.ts`: the screenshot command's
   viewport, full page, element, and terminal window or session, a run's screenshot of each
   step, and proof mode's frames. It measures the area where it lies on the page, and
   `captureHeightLimit` counts the tiles it spans from the area's top-left corner on the
-  grid laid from the page's. Each capture is given `captureTimeout`'s time for those
-  tiles.
+  grid laid from the page's. It measures a viewport in its own pixels, the CSS pixels of
+  the visual viewport times its scale, so a phone's is the size of its screen. Each
+  capture is given `captureTimeout`'s time for those tiles.
 - A full page and an element keep their top, and the log says what was left out. An
   element held whole is captured as Playwright captures it. The top of a taller one is a
   full-page clip of the part of its box one capture holds, the capture Playwright takes of
