@@ -7,7 +7,10 @@
 // The first test does what a caller does with an app already running: it builds the
 // sample, creates and boots a device of its own, installs and launches the app, and hands
 // sprintshow the app's simulator URL as --base-url. The device is set dark first, so the
-// run's light appearance and its putting the device back both show. The second hands
+// run's light appearance and its putting the device back both show. sprintshow runs there
+// with a copy of the active Xcode's folder whose Simulator UI app no process runs from, as
+// on a host where nobody opened the UI, which is where Appium's driver restarts a device
+// it is told to show in a window (simulatorUiRuns). The second hands
 // sprintshow the sample's start command as --serve, which brings the app up on a device of
 // its own and deletes the device once sprintshow stops it. The third connects to the app
 // as a run does, and reads the addresses the runner app's servers listen on. The fourth
@@ -22,7 +25,7 @@
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import path from 'node:path';
 
@@ -31,7 +34,7 @@ import { parseDemoScript } from '../src/demo-script.ts';
 import { connectIosApp } from '../src/ios.ts';
 import { stepFileName } from '../src/screenshot.ts';
 import { ffmpegBin, probeDuration } from '../src/ffmpeg.ts';
-import { simulatorUrl, statusBarOverrides, toolEnv, userApps } from '../src/simulator.ts';
+import { simulatorUiRuns, simulatorUrl, statusBarOverrides, toolEnv, userApps } from '../src/simulator.ts';
 import { runnerApp, RUNNER_BUNDLE_NAME } from '../src/webdriveragent.ts';
 import { launchBrowser, scratchDir, runCli, pngSize, pngPixels, REPO } from './browser-fixture.ts';
 
@@ -133,6 +136,29 @@ async function checkOutputs(video: string, shots: string): Promise<void> {
   assert.ok(r > 200 && g > 200 && b > 200, `the run's appearance is light: rgb(${r},${g},${b})`);
 }
 
+/**
+ * The environment of a run, made under `dir`, on a host whose Simulator UI does not run.
+ * DEVELOPER_DIR names a copy of the active Xcode's folder whose parts and apps link to the
+ * active Xcode's, so no process runs from its UI app's path. PATH leads with an `open`
+ * that opens nothing, because a driver that restarts the device to show it opens the UI
+ * first, and a run that did would otherwise open a window on the host.
+ */
+function withoutSimulatorUi(dir: string): Record<string, string> {
+  const contents = path.dirname(process.env.DEVELOPER_DIR || tool('xcode-select', ['-p']).trim());
+  const copy = path.join(dir, 'Xcode.app', 'Contents');
+  mkdirSync(path.join(copy, 'Applications'), { recursive: true });
+  for (const entry of readdirSync(contents)) {
+    if (entry !== 'Applications') symlinkSync(path.join(contents, entry), path.join(copy, entry));
+  }
+  const apps = path.join(contents, 'Applications');
+  for (const entry of existsSync(apps) ? readdirSync(apps) : []) symlinkSync(path.join(apps, entry), path.join(copy, 'Applications', entry));
+  const bin = path.join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, 'open'), '#!/bin/sh\nexit 0\n');
+  chmodSync(path.join(bin, 'open'), 0o755);
+  return { DEVELOPER_DIR: path.join(copy, 'Developer'), PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` };
+}
+
 describe('an iOS app on a simulator, through Appium', { skip }, () => {
   const { dir, cleanup } = scratchDir();
   const app = path.join(dir, 'derived', 'Build', 'Products', 'Debug-iphonesimulator', 'SprintBoard.app');
@@ -167,11 +193,13 @@ describe('an iOS app on a simulator, through Appium', { skip }, () => {
     cleanup();
   });
 
-  test('--base-url: an app already running is filmed with a PNG of each step, and the device is left as it was given', async () => {
+  test('--base-url: an app already running is filmed with a PNG of each step, and the device is left as it was given, on a host whose Simulator UI does not run', async () => {
     const before = { appearance: simctl('ui', udid, 'appearance').trim(), overrides: statusBarOverrides(simctl('status_bar', udid, 'list')) };
     assert.deepEqual(before, { appearance: 'dark', overrides: [] });
+    const noUi = withoutSimulatorUi(path.join(dir, 'no-ui'));
+    assert.equal(await simulatorUiRuns(noUi), false, "no process runs from the copy of Xcode's Simulator UI");
     const out = path.join(dir, 'base-url');
-    const run = await runCli(['run', DEMO, '--base-url', simulatorUrl({ udid, bundleId: BUNDLE_ID }), '--no-narrate', '--screenshots', path.join(out, 'shots'), '-o', path.join(out, 'ios.mp4')], { cwd: dir, env: { ...process.env, OPENAI_API_KEY: '' } });
+    const run = await runCli(['run', DEMO, '--base-url', simulatorUrl({ udid, bundleId: BUNDLE_ID }), '--no-narrate', '--screenshots', path.join(out, 'shots'), '-o', path.join(out, 'ios.mp4')], { cwd: dir, env: { ...process.env, ...noUi, OPENAI_API_KEY: '' } });
     assert.equal(run.code, 0, run.stdout + run.stderr);
     assert.equal((run.stdout.match(/✓ proof held/g) ?? []).length, STEPS.length, run.stdout);
     await checkOutputs(path.join(out, 'ios.mp4'), path.join(out, 'shots'));
