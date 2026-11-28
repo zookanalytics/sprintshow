@@ -29,8 +29,9 @@ script, sprintshow drives an app in a browser page, a shell in a terminal or an 
 a simulator. It checks the script's assertions, and makes a captioned video, a picture of
 each step, or both. It does not yet show an app before and after a change, set apart what
 turned up unplanned, or read a setup file that tells it what to start and where to look. A
-demo script cannot yet show a screenshot that a repository's tests already take, and
-beyond this README and its examples, the package ships no know-how for an agent.
+page script can `goto` a screenshot that a repository's tests already take, when the app's
+server or `--serve-dir` serves it, but no action yet reads an image file into a demo.
+Beyond this README and its examples, the package ships no know-how for an agent.
 
 Over [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp), which drives a
 browser, `sprintshow` adds the produced-video layer: a demo-script DSL and linter,
