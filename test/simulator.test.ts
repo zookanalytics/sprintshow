@@ -1,12 +1,17 @@
 // Tests for the parts of src/simulator.ts that need no simulator: how a simulator URL
 // names an app, alone or among other text, the environment every tool the engine starts
-// for an iOS app gets, and how the status bar's overrides are read from simctl's
-// listing. test/ios-live.test.ts drives a real device.
+// for an iOS app gets, how the status bar's overrides are read from simctl's listing, and
+// how the host's Simulator UI is found running, from an Xcode's apps, on macOS.
+// test/ios-live.test.ts drives a real device.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
-import { findSimulatorUrl, isSimulatorUrl, parseSimulatorUrl, simulatorUrl, statusBarOverrides, toolEnv } from '../src/simulator.ts';
+import { findSimulatorUrl, isSimulatorUrl, parseSimulatorUrl, simulatorUiRuns, simulatorUrl, statusBarOverrides, toolEnv } from '../src/simulator.ts';
 
 const UDID = '265F099F-E558-4E32-82BE-F70A75EC0716';
 
@@ -68,4 +73,57 @@ test('a tool the engine starts for an iOS app gets the engine environment less t
 test("the status bar's overrides are the lines simctl lists under its heading's rule", () => {
   assert.deepEqual(statusBarOverrides('Current Status Bar Overrides:\n=============================\n'), []);
   assert.deepEqual(statusBarOverrides('Current Status Bar Overrides:\n=============================\nTime: 9:41 \nWiFi Mode: 3, WiFi Bars: 3\n'), ['Time: 9:41', 'WiFi Mode: 3, WiFi Bars: 3']);
+});
+
+/** Write an XML property list of `values` to `file`, making its directory. */
+function writePlist(file: string, values: Record<string, string>): void {
+  mkdirSync(path.dirname(file), { recursive: true });
+  const entries = Object.entries(values).map(([key, value]) => `<key>${key}</key><string>${value}</string>`);
+  writeFileSync(file, `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>${entries.join('')}</dict></plist>\n`);
+}
+
+/** A process whose command line holds `file`, as an app's process holds its executable's path. Resolves once it runs. */
+function runFrom(file: string): Promise<ChildProcess> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', file], { stdio: 'ignore' });
+    child.once('spawn', () => resolve(child)).once('error', reject);
+  });
+}
+
+/** End `child`, and resolve once it has exited. */
+function end(child: ChildProcess): Promise<void> {
+  return new Promise((resolve) => {
+    child.once('exit', () => resolve());
+    child.kill();
+  });
+}
+
+test("the host's Simulator UI runs when a process runs from the active Xcode's UI app: DeviceHub beside its developer directory from Xcode 27 on, and Simulator inside it before", { skip: process.platform !== 'darwin' && "needs macOS, whose plutil reads an app's property list" }, async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'sprintshow-xcode-'));
+  try {
+    // An Xcode 27, an Xcode 26, and an Xcode 27 whose app where DeviceHub would be is another.
+    const xcodes = [
+      { name: 'Xcode-27.app', version: '27.0', folder: 'Applications', app: 'DeviceHub', bundleId: 'com.apple.dt.Devices', ui: true },
+      { name: 'Xcode-26.app', version: '26.4', folder: path.join('Developer', 'Applications'), app: 'Simulator', bundleId: 'com.apple.iphonesimulator', ui: true },
+      { name: 'Xcode-27.1.app', version: '27.1', folder: 'Applications', app: 'Instruments', bundleId: 'com.apple.dt.Instruments', ui: false },
+    ];
+    const appOf = (x: (typeof xcodes)[number]): string => path.join(dir, x.name, 'Contents', x.folder, `${x.app}.app`);
+    for (const x of xcodes) {
+      writePlist(path.join(dir, x.name, 'Contents', 'Info.plist'), { CFBundleShortVersionString: x.version });
+      writePlist(path.join(appOf(x), 'Contents', 'Info.plist'), { CFBundleIdentifier: x.bundleId });
+    }
+    const runs = (): Promise<boolean[]> => Promise.all(xcodes.map((x) => simulatorUiRuns({ DEVELOPER_DIR: path.join(dir, x.name, 'Contents', 'Developer') })));
+
+    assert.deepEqual(await runs(), [false, false, false], 'no app runs');
+    for (const [i, x] of xcodes.entries()) {
+      const running = await runFrom(path.join(appOf(x), 'Contents', 'MacOS', x.app));
+      try {
+        assert.deepEqual(await runs(), xcodes.map((_, j) => j === i && x.ui), `${x.app} runs, from ${x.name}`);
+      } finally {
+        await end(running);
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

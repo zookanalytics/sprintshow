@@ -7,7 +7,9 @@
 // device is booted and has the app, and refuses a device that holds a WebDriverAgent
 // runner app another tool installed, which Appium would remove. It dresses the device
 // (simulator.ts), starts Appium, and starts a session, which installs the engine's runner
-// app (webdriveragent.ts) on the device and launches it. Appium and the runner app listen
+// app (webdriveragent.ts) on the device and launches it. The session is told whether the
+// host's Simulator UI runs, so it leaves the device booted as it was given and the UI as
+// it is (connectIosApp). Appium and the runner app listen
 // on the loopback interface only, so no other host can watch the screen or drive the
 // device. Their servers, Appium's, WebDriverAgent's and its stream of the screen's frames,
 // listen on free ports the system assigns, or on the ports the caller names, one for each
@@ -50,7 +52,7 @@ import type { Page } from 'playwright';
 
 import { compareCount, keysIosLacks, matchText, IOS_KEYS, type Assertion, type DemoAction, type IosKey } from './demo-script.ts';
 import { AppiumSession, freePorts, portAnswers, readMjpeg, startAppium, type AppiumServer, type FrameStream } from './appium.ts';
-import { checkApp, dressDevice, parseSimulatorUrl, simctl, userApps, SIMULATOR_URL_FORM, type SimulatorApp } from './simulator.ts';
+import { checkApp, dressDevice, parseSimulatorUrl, simctl, simulatorUiRuns, userApps, SIMULATOR_URL_FORM, type SimulatorApp } from './simulator.ts';
 import { runnerApp, RUNNER_APP_ID, RUNNER_BUNDLE_NAME } from './webdriveragent.ts';
 import type { Surface } from './browser.ts';
 
@@ -211,11 +213,20 @@ export async function connectIosApp(baseUrl: string | undefined, log: (m: string
     // another process can still take one first: the XCUITest driver checks no port on a
     // simulator.
     const [wdaPort, framesPort] = named ? [named.agent, named.frames] : await freePorts(2);
+    const uiRuns = await simulatorUiRuns();
     const capabilities = {
       platformName: 'iOS',
       'appium:automationName': 'XCUITest',
       'appium:udid': app.udid,
       'appium:bundleId': app.bundleId,
+      // The host's Simulator UI as it stands. The driver makes a booted device match the UI
+      // it is told of. Told to show the device in a window while the UI does not run, it
+      // shuts the device down, opens the UI and boots the device again, which ends the app.
+      // Told to run the device without one while the UI runs, it quits the UI. Told what
+      // runs, it does neither. It reads the UI again as the session starts, so a UI that
+      // opens or quits in the seconds between still meets one of those. No capability has
+      // the driver leave a booted device as it stands.
+      'appium:isHeadless': !uiRuns,
       // The app as it stands: not launched, relaunched, reset or ended by the session.
       'appium:autoLaunch': false,
       'appium:forceAppLaunch': false,

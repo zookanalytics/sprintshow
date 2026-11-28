@@ -12,12 +12,19 @@
 // full signal and a charged battery. When the run ends it puts back what it changed
 // (dressDevice).
 //
+// The host's Simulator UI is the app of the active Xcode that shows a booted device in a
+// window: DeviceHub from Xcode 27 on, and Simulator before it. The engine never opens or
+// quits it, and reads whether it runs as Appium's XCUITest driver reads it
+// (simulatorUiRuns).
+//
 // Every simctl the engine runs gets the engine's environment less the keys the engine
 // holds (toolEnv), and so does Appium, with everything it starts (appium.ts), and a
 // `--serve` command for an iOS app. So no key reaches xcrun, xcodebuild, Appium or
 // WebDriverAgent, nor a log they write.
 
 import { execFile } from 'node:child_process';
+import { readdir } from 'node:fs/promises';
+import path from 'node:path';
 
 import { VERCEL_BYPASS_VAR } from './vercel.ts';
 
@@ -143,6 +150,59 @@ export async function userApps(udid: string): Promise<{ bundleId: string; name: 
   return Object.entries(apps)
     .filter(([, a]) => a.ApplicationType === 'User')
     .map(([bundleId, a]) => ({ bundleId, name: a.CFBundleName ?? '' }));
+}
+
+/** The value `key` holds in the property list `file`, or null when the file or the key is missing. */
+async function plistValue(file: string, key: string): Promise<string | null> {
+  try {
+    return (await runTool('plutil', ['-extract', key, 'raw', '-o', '-', file])).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The app of the host's Simulator UI, as Appium's XCUITest driver finds it in the active
+ * Xcode, or null when that Xcode has none. The driver reads Xcode's version from the
+ * Info.plist beside the developer directory: from Xcode 27 on, the UI is the app with
+ * DeviceHub's bundle identifier among the apps beside the developer directory, and before
+ * it, the one with Simulator's among the apps inside it.
+ */
+async function simulatorUiApp(developerDir: string): Promise<string | null> {
+  const version = await plistValue(path.resolve(developerDir, '..', 'Info.plist'), 'CFBundleShortVersionString');
+  const [dir, bundleId] =
+    Number.parseInt(version ?? '', 10) >= 27
+      ? [path.resolve(developerDir, '..', 'Applications'), 'com.apple.dt.Devices']
+      : [path.resolve(developerDir, 'Applications'), 'com.apple.iphonesimulator'];
+  let apps: string[];
+  try {
+    apps = (await readdir(dir)).filter((entry) => entry.endsWith('.app'));
+  } catch {
+    return null;
+  }
+  for (const app of apps) {
+    if ((await plistValue(path.join(dir, app, 'Contents', 'Info.plist'), 'CFBundleIdentifier')) === bundleId) return path.join(dir, app);
+  }
+  return null;
+}
+
+/**
+ * Whether the host's Simulator UI runs, by the test Appium's XCUITest driver applies:
+ * `pgrep -f` finds a process whose command line holds the path of the UI's app
+ * (simulatorUiApp). The active Xcode is the one `env`'s DEVELOPER_DIR names, as the
+ * driver reads the environment the engine gives Appium (toolEnv), or the one xcode-select
+ * names when it names none.
+ */
+export async function simulatorUiRuns(env: Record<string, string | undefined> = toolEnv()): Promise<boolean> {
+  const developerDir = env.DEVELOPER_DIR || (await runTool('xcode-select', ['-p'])).trim();
+  const app = await simulatorUiApp(developerDir);
+  if (!app) return false;
+  try {
+    await runTool('pgrep', ['-f', app]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** The status bar of a product shot: 9:41, full Wi-Fi and cellular signal, and a charged battery. */
