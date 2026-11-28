@@ -1,10 +1,36 @@
 # sprintshow
 
-Give an AI agent a way to *show* the work it just did. At the end of a unit of work,
-`sprintshow` turns a short markdown script into a quick, **unpolished** demo video, a
-screenshot of each step, or both — the agent equivalent of a sprint demo or demo day, not
-glossy marketing or a social clip. It is the automated user: told what to do and what each
-step must show, it drives the app and sends back a record of the work.
+**SprintShow shows you what changed, in a showcase anyone can follow**
+
+When work lands, start with "show me". Your agent finishes a change, and a showcase is
+waiting with it: the app on screen, before and after, each step captioned. You see what
+was done before you open the diff, with nothing to check out and nothing to start up.
+
+SprintShow gives your agents the know-how and the engine, so a showcase comes with every
+piece of work without your asking. When you want something larger, a major release or a
+recap of the week's changes, tell an agent what to look for and it builds that too.
+
+A showcase is more than a recording. Its steps carry checks of what the work was meant to
+do, so SprintShow catches the place where what was built parts from what was intended, and
+puts a picture of it in front of you. Anything that turned up unplanned is set apart.
+SprintShow gives no verdict. It shows you where to look, and the call is yours.
+
+It works with what you already run. If your work shows in a browser, a terminal or an iOS
+simulator, SprintShow can show it: running on your laptop, at a preview URL, or straight
+from the screenshots your tests already take. Setup is one small file in your repository,
+written once with your agent. From then on SprintShow knows what to start and where to
+look, every time.
+
+What comes back is yours to pass on: the video, and a picture of every step and every
+failed check, ready for a reviewer or for the next agent.
+
+The text above is where sprintshow is going, and part of it is built. Today, from a demo
+script, sprintshow drives an app in a browser page, a shell in a terminal or an iOS app on
+a simulator. It checks the script's assertions, and makes a captioned video, a picture of
+each step, or both. It does not yet show an app before and after a change, set apart what
+turned up unplanned, or read a setup file that tells it what to start and where to look. A
+demo script cannot yet show a screenshot that a repository's tests already take, and
+beyond this README and its examples, the package ships no know-how for an agent.
 
 Over [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp), which drives a
 browser, `sprintshow` adds the produced-video layer: a demo-script DSL and linter,
